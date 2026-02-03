@@ -1,6 +1,9 @@
 # Itachi Memory - PostToolUse Hook (Write|Edit)
 # Sends file change notifications to memory API
 # Must never block Claude Code - all errors silently caught
+# Only runs when launched via `itachi` (ITACHI_ENABLED=1)
+
+if (-not $env:ITACHI_ENABLED) { exit 0 }
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -24,6 +27,14 @@ try {
     $fileName = Split-Path $filePath -Leaf
     $project = Split-Path -Leaf (Get-Location)
 
+    # Detect git branch
+    $branchName = "main"
+    try { $branchName = (git rev-parse --abbrev-ref HEAD 2>$null) } catch {}
+    if (-not $branchName) { $branchName = "main" }
+
+    # Task ID from orchestrator (null for manual sessions)
+    $taskId = $env:ITACHI_TASK_ID
+
     # Auto-categorize based on file
     $category = "code_change"
     if ($fileName -match '\.(test|spec)\.' -or $fileName -match '^test[_-]') {
@@ -38,12 +49,16 @@ try {
 
     $summary = "Updated $fileName"
 
-    $body = @{
+    $bodyObj = @{
         files    = @($fileName)
         summary  = $summary
         category = $category
         project  = $project
-    } | ConvertTo-Json -Compress
+        branch   = $branchName
+    }
+    if ($taskId) { $bodyObj.task_id = $taskId }
+
+    $body = $bodyObj | ConvertTo-Json -Compress
 
     Invoke-RestMethod -Uri "$MEMORY_API/code-change" `
         -Method Post `

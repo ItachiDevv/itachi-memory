@@ -51,6 +51,19 @@ if (anthropicKey) {
     console.log('No Anthropic key - using OpenAI for chat');
 }
 
+// Allowed Telegram user IDs (security whitelist for task commands)
+const allowedUsers = (process.env.ITACHI_ALLOWED_USERS || '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean)
+    .map(Number);
+
+function isAllowedUser(userId) {
+    // If no whitelist configured, allow all (backwards compat)
+    if (allowedUsers.length === 0) return true;
+    return allowedUsers.includes(userId);
+}
+
 // Telegram Bot
 const bot = new TelegramBot(telegramToken, { polling: true });
 console.log('Telegram bot started');
@@ -67,27 +80,30 @@ async function getEmbedding(text) {
     return response.data[0].embedding;
 }
 
-// Search memories
-async function searchMemories(query, project = null, limit = 5) {
+// Search memories (branch-aware)
+async function searchMemories(query, project = null, limit = 5, branch = null) {
     const queryEmbedding = await getEmbedding(query);
-    const { data, error } = await supabase.rpc('match_memories', {
+    const params = {
         query_embedding: queryEmbedding,
         match_project: project,
         match_category: null,
         match_limit: limit
-    });
+    };
+    if (branch) params.match_branch = branch;
+    const { data, error } = await supabase.rpc('match_memories', params);
     if (error) throw error;
     return data;
 }
 
-// Get recent memories
-async function getRecentMemories(project = null, limit = 5) {
+// Get recent memories (branch-aware)
+async function getRecentMemories(project = null, limit = 5, branch = null) {
     let query = supabase
         .from('memories')
-        .select('id, project, category, content, summary, files, created_at')
+        .select('id, project, category, content, summary, files, branch, task_id, created_at')
         .order('created_at', { ascending: false })
         .limit(limit);
     if (project) query = query.eq('project', project);
+    if (branch) query = query.eq('branch', branch);
     const { data, error } = await query;
     if (error) throw error;
     return data;
@@ -95,36 +111,27 @@ async function getRecentMemories(project = null, limit = 5) {
 
 // Chat with Claude/OpenAI
 async function chat(userMessage, userId, memories = []) {
-    // Get or create conversation history
     if (!conversationHistory.has(userId)) {
         conversationHistory.set(userId, []);
     }
     const history = conversationHistory.get(userId);
 
-    // Build context from memories
     let memoryContext = '';
     if (memories.length > 0) {
         memoryContext = '\n\nRelevant memories from your coding sessions:\n' +
             memories.map(m => `- [${m.category}] ${m.summary} (Files: ${m.files?.join(', ') || 'none'})`).join('\n');
     }
 
-    const systemPrompt = `You are ElizaClaude, a helpful AI assistant with access to the user's coding project memories. 
+    const systemPrompt = `You are Itachi, a helpful AI assistant with access to the user's coding project memories.
 You can recall what they've been working on and help them with their projects.
 Be concise but helpful. You're chatting via Telegram so keep responses reasonably short.
 ${memoryContext}`;
 
-    // Add user message to history
     history.push({ role: 'user', content: userMessage });
-
-    // Keep only last 10 messages
-    while (history.length > 10) {
-        history.shift();
-    }
+    while (history.length > 10) { history.shift(); }
 
     let response;
-
     if (anthropic) {
-        // Use Claude
         const result = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 1024,
@@ -133,7 +140,6 @@ ${memoryContext}`;
         });
         response = result.content[0].text;
     } else {
-        // Use OpenAI
         const result = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             max_tokens: 1024,
@@ -145,22 +151,27 @@ ${memoryContext}`;
         response = result.choices[0].message.content;
     }
 
-    // Add assistant response to history
     history.push({ role: 'assistant', content: response });
-
     return response;
 }
 
-// Telegram command handlers
+// ============ Telegram Command Handlers ============
+
 bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id, 
-        `👋 Hi! I'm ElizaClaude.\n\n` +
-        `I have access to your coding project memories and can help you with your work.\n\n` +
-        `Commands:\n` +
+    bot.sendMessage(msg.chat.id,
+        `Hi! I'm Itachi.\n\n` +
+        `I have access to your coding project memories and can dispatch tasks to Claude Code.\n\n` +
+        `Memory Commands:\n` +
         `/recall <query> - Search your memories\n` +
         `/recent - Show recent changes\n` +
         `/projects - List your projects\n` +
         `/clear - Clear chat history\n\n` +
+        `Task Commands:\n` +
+        `/task <project> <description> - Queue a coding task\n` +
+        `/status [task_id] - Check task status\n` +
+        `/cancel <task_id> - Cancel a queued/running task\n` +
+        `/queue - Show queued/running tasks\n` +
+        `/repos - List configured projects\n\n` +
         `Or just chat with me!`
     );
 });
@@ -169,7 +180,7 @@ bot.onText(/\/recall (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
     const query = match[1];
 
-    bot.sendMessage(chatId, `🔍 Searching for "${query}"...`);
+    bot.sendMessage(chatId, `Searching for "${query}"...`);
 
     try {
         const memories = await searchMemories(query, null, 5);
@@ -178,7 +189,7 @@ bot.onText(/\/recall (.+)/, async (msg, match) => {
             return;
         }
 
-        let response = `📚 Found ${memories.length} memories:\n\n`;
+        let response = `Found ${memories.length} memories:\n\n`;
         memories.forEach((m, i) => {
             response += `${i + 1}. [${m.category}] ${m.summary}\n`;
             response += `   Files: ${m.files?.join(', ') || 'none'}\n`;
@@ -187,7 +198,7 @@ bot.onText(/\/recall (.+)/, async (msg, match) => {
 
         bot.sendMessage(chatId, response);
     } catch (error) {
-        bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+        bot.sendMessage(chatId, `Error: ${error.message}`);
     }
 });
 
@@ -201,7 +212,7 @@ bot.onText(/\/recent/, async (msg) => {
             return;
         }
 
-        let response = `📜 Recent changes:\n\n`;
+        let response = `Recent changes:\n\n`;
         memories.forEach((m, i) => {
             response += `${i + 1}. [${m.category}] ${m.summary}\n`;
             response += `   Project: ${m.project}\n\n`;
@@ -209,7 +220,7 @@ bot.onText(/\/recent/, async (msg) => {
 
         bot.sendMessage(chatId, response);
     } catch (error) {
-        bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+        bot.sendMessage(chatId, `Error: ${error.message}`);
     }
 });
 
@@ -231,20 +242,245 @@ bot.onText(/\/projects/, async (msg) => {
             return;
         }
 
-        bot.sendMessage(chatId, `📁 Your projects:\n\n• ${projects.join('\n• ')}`);
+        bot.sendMessage(chatId, `Your projects:\n\n${projects.map(p => `- ${p}`).join('\n')}`);
     } catch (error) {
-        bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+        bot.sendMessage(chatId, `Error: ${error.message}`);
     }
 });
 
 bot.onText(/\/clear/, (msg) => {
     conversationHistory.delete(msg.from.id);
-    bot.sendMessage(msg.chat.id, `🗑️ Chat history cleared.`);
+    bot.sendMessage(msg.chat.id, `Chat history cleared.`);
+});
+
+// ============ Task Commands ============
+
+// /task <project> <description>
+bot.onText(/\/task\s+(\S+)\s+(.+)/s, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    if (!isAllowedUser(userId)) {
+        bot.sendMessage(chatId, 'Not authorized for task commands.');
+        return;
+    }
+
+    const project = match[1];
+    const description = match[2].trim();
+
+    try {
+        const { data, error } = await supabase.from('tasks').insert({
+            description,
+            project,
+            telegram_chat_id: chatId,
+            telegram_user_id: userId,
+            status: 'queued'
+        }).select().single();
+
+        if (error) throw error;
+
+        // Get queue position
+        const { count } = await supabase
+            .from('tasks')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'queued');
+
+        const shortId = data.id.substring(0, 8);
+        bot.sendMessage(chatId,
+            `Task queued!\n\n` +
+            `ID: ${shortId}\n` +
+            `Project: ${project}\n` +
+            `Description: ${description}\n` +
+            `Queue position: ${count || 1}\n\n` +
+            `I'll notify you when it completes.`
+        );
+    } catch (error) {
+        bot.sendMessage(chatId, `Error creating task: ${error.message}`);
+    }
+});
+
+// /status [task_id]
+bot.onText(/\/status\s*(.*)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    if (!isAllowedUser(userId)) {
+        bot.sendMessage(chatId, 'Not authorized for task commands.');
+        return;
+    }
+
+    const taskIdPrefix = match[1]?.trim();
+
+    try {
+        if (taskIdPrefix) {
+            // Find task by ID prefix
+            const { data, error } = await supabase
+                .from('tasks')
+                .select('*')
+                .eq('telegram_user_id', userId)
+                .ilike('id', `${taskIdPrefix}%`)
+                .limit(1)
+                .single();
+
+            if (error || !data) {
+                bot.sendMessage(chatId, `Task not found: ${taskIdPrefix}`);
+                return;
+            }
+
+            let msg_text = `Task ${data.id.substring(0, 8)}:\n\n` +
+                `Status: ${data.status}\n` +
+                `Project: ${data.project}\n` +
+                `Description: ${data.description}\n`;
+
+            if (data.orchestrator_id) msg_text += `Runner: ${data.orchestrator_id}\n`;
+            if (data.started_at) msg_text += `Started: ${new Date(data.started_at).toLocaleString()}\n`;
+            if (data.completed_at) msg_text += `Completed: ${new Date(data.completed_at).toLocaleString()}\n`;
+            if (data.result_summary) msg_text += `\nResult: ${data.result_summary}\n`;
+            if (data.error_message) msg_text += `\nError: ${data.error_message}\n`;
+            if (data.pr_url) msg_text += `\nPR: ${data.pr_url}\n`;
+            if (data.files_changed?.length > 0) msg_text += `\nFiles: ${data.files_changed.join(', ')}\n`;
+
+            bot.sendMessage(chatId, msg_text);
+        } else {
+            // Show recent tasks
+            const { data, error } = await supabase
+                .from('tasks')
+                .select('id, project, description, status, created_at')
+                .eq('telegram_user_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(5);
+
+            if (error) throw error;
+
+            if (!data?.length) {
+                bot.sendMessage(chatId, 'No tasks found.');
+                return;
+            }
+
+            const statusIcon = { queued: '[]', claimed: '..', running: '>>', completed: 'OK', failed: '!!', cancelled: '--', timeout: 'TO' };
+            let response = 'Recent tasks:\n\n';
+            data.forEach(t => {
+                const icon = statusIcon[t.status] || '??';
+                response += `[${icon}] ${t.id.substring(0, 8)} | ${t.project} | ${t.description.substring(0, 40)}\n`;
+            });
+
+            bot.sendMessage(chatId, response);
+        }
+    } catch (error) {
+        bot.sendMessage(chatId, `Error: ${error.message}`);
+    }
+});
+
+// /cancel <task_id>
+bot.onText(/\/cancel\s+(\S+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    if (!isAllowedUser(userId)) {
+        bot.sendMessage(chatId, 'Not authorized for task commands.');
+        return;
+    }
+
+    const taskIdPrefix = match[1].trim();
+
+    try {
+        // Find the task first
+        const { data: task, error: findErr } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('telegram_user_id', userId)
+            .ilike('id', `${taskIdPrefix}%`)
+            .limit(1)
+            .single();
+
+        if (findErr || !task) {
+            bot.sendMessage(chatId, `Task not found: ${taskIdPrefix}`);
+            return;
+        }
+
+        if (!['queued', 'claimed', 'running'].includes(task.status)) {
+            bot.sendMessage(chatId, `Task ${taskIdPrefix} is already ${task.status}, cannot cancel.`);
+            return;
+        }
+
+        const { error } = await supabase
+            .from('tasks')
+            .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+            .eq('id', task.id);
+
+        if (error) throw error;
+
+        bot.sendMessage(chatId, `Task ${taskIdPrefix} cancelled.`);
+    } catch (error) {
+        bot.sendMessage(chatId, `Error: ${error.message}`);
+    }
+});
+
+// /queue
+bot.onText(/\/queue/, async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    if (!isAllowedUser(userId)) {
+        bot.sendMessage(chatId, 'Not authorized for task commands.');
+        return;
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('id, project, description, status, orchestrator_id, created_at')
+            .in('status', ['queued', 'claimed', 'running'])
+            .order('priority', { ascending: false })
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+
+        if (!data?.length) {
+            bot.sendMessage(chatId, 'Queue is empty.');
+            return;
+        }
+
+        let response = `Active queue (${data.length} tasks):\n\n`;
+        data.forEach((t, i) => {
+            const runner = t.orchestrator_id ? ` [${t.orchestrator_id}]` : '';
+            response += `${i + 1}. [${t.status}]${runner} ${t.project}: ${t.description.substring(0, 50)}\n`;
+        });
+
+        bot.sendMessage(chatId, response);
+    } catch (error) {
+        bot.sendMessage(chatId, `Error: ${error.message}`);
+    }
+});
+
+// /repos - list configured project names
+bot.onText(/\/repos/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    try {
+        // Get unique projects from both memories and tasks
+        const [memResult, taskResult] = await Promise.all([
+            supabase.from('memories').select('project').limit(1000),
+            supabase.from('tasks').select('project').limit(1000)
+        ]);
+
+        const projects = new Set();
+        (memResult.data || []).forEach(m => projects.add(m.project));
+        (taskResult.data || []).forEach(t => projects.add(t.project));
+
+        if (projects.size === 0) {
+            bot.sendMessage(chatId, 'No projects found.');
+            return;
+        }
+
+        bot.sendMessage(chatId, `Known projects:\n\n${[...projects].sort().map(p => `- ${p}`).join('\n')}`);
+    } catch (error) {
+        bot.sendMessage(chatId, `Error: ${error.message}`);
+    }
 });
 
 // Handle regular messages (chat with AI)
 bot.on('message', async (msg) => {
-    // Skip commands
     if (msg.text?.startsWith('/')) return;
 
     const chatId = msg.chat.id;
@@ -254,29 +490,86 @@ bot.on('message', async (msg) => {
     if (!userMessage) return;
 
     try {
-        // Search for relevant memories
         const memories = await searchMemories(userMessage, null, 3);
-
-        // Get AI response
         const response = await chat(userMessage, userId, memories);
-
         bot.sendMessage(chatId, response);
     } catch (error) {
         console.error('Chat error:', error);
-        bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+        bot.sendMessage(chatId, `Error: ${error.message}`);
     }
 });
 
-// ============ Express API (for Claude Code) ============
+// ============ Task Completion Notifier ============
+// Polls for recently completed/failed tasks and sends Telegram notifications
+
+const notifiedTasks = new Set();
+
+async function pollTaskCompletions() {
+    try {
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .in('status', ['completed', 'failed', 'timeout'])
+            .order('completed_at', { ascending: false })
+            .limit(10);
+
+        if (error || !data) return;
+
+        for (const task of data) {
+            if (notifiedTasks.has(task.id)) continue;
+
+            // Only notify tasks completed in the last 5 minutes
+            const completedAt = new Date(task.completed_at);
+            if (Date.now() - completedAt.getTime() > 5 * 60 * 1000) {
+                notifiedTasks.add(task.id);
+                continue;
+            }
+
+            notifiedTasks.add(task.id);
+
+            const shortId = task.id.substring(0, 8);
+            let msg;
+
+            if (task.status === 'completed') {
+                msg = `Task ${shortId} completed!\n\n` +
+                    `Project: ${task.project}\n` +
+                    `Description: ${task.description.substring(0, 100)}\n`;
+                if (task.result_summary) msg += `\nResult: ${task.result_summary}\n`;
+                if (task.pr_url) msg += `\nPR: ${task.pr_url}\n`;
+                if (task.files_changed?.length > 0) msg += `\nFiles changed: ${task.files_changed.join(', ')}\n`;
+            } else {
+                msg = `Task ${shortId} ${task.status}!\n\n` +
+                    `Project: ${task.project}\n` +
+                    `Description: ${task.description.substring(0, 100)}\n`;
+                if (task.error_message) msg += `\nError: ${task.error_message}\n`;
+            }
+
+            try {
+                await bot.sendMessage(task.telegram_chat_id, msg);
+            } catch (sendErr) {
+                console.error(`Failed to notify chat ${task.telegram_chat_id}:`, sendErr.message);
+            }
+        }
+    } catch (err) {
+        // Silent - don't crash the poller
+    }
+}
+
+// Poll every 10 seconds
+setInterval(pollTaskCompletions, 10000);
+
+// ============ Express API (for Claude Code hooks) ============
 
 app.get('/health', async (req, res) => {
-    const { count } = await supabase.from('memories').select('*', { count: 'exact', head: true });
-    res.json({ status: 'ok', memories: count || 0, telegram: 'active' });
+    const { count: memCount } = await supabase.from('memories').select('*', { count: 'exact', head: true });
+    const { count: taskCount } = await supabase.from('tasks').select('*', { count: 'exact', head: true }).in('status', ['queued', 'claimed', 'running']);
+    res.json({ status: 'ok', memories: memCount || 0, active_tasks: taskCount || 0, telegram: 'active' });
 });
 
+// Store memory (branch + task_id aware)
 app.post('/api/memory/code-change', async (req, res) => {
     try {
-        const { files = [], summary, diff = '', category, project } = req.body;
+        const { files = [], summary, diff = '', category, project, branch, task_id } = req.body;
         if (!summary) return res.status(400).json({ error: 'Summary required' });
 
         const contextText = [
@@ -288,18 +581,22 @@ app.post('/api/memory/code-change', async (req, res) => {
 
         const embedding = await getEmbedding(contextText);
 
-        const { data, error } = await supabase.from('memories').insert({
+        const insertObj = {
             project: project || 'default',
             category: category || 'code_change',
             content: contextText,
             summary,
             files,
             embedding
-        }).select().single();
+        };
+        if (branch) insertObj.branch = branch;
+        if (task_id) insertObj.task_id = task_id;
+
+        const { data, error } = await supabase.from('memories').insert(insertObj).select().single();
 
         if (error) throw error;
 
-        console.log(`Stored: [${category}] ${files.length} files`);
+        console.log(`Stored: [${category}] ${files.length} files (branch: ${branch || 'main'})`);
         res.json({ success: true, memoryId: data.id, files: files.length });
     } catch (error) {
         console.error('Error:', error.message);
@@ -307,12 +604,13 @@ app.post('/api/memory/code-change', async (req, res) => {
     }
 });
 
+// Semantic search (branch-aware)
 app.get('/api/memory/search', async (req, res) => {
     try {
-        const { query, limit = 5, project, category } = req.query;
+        const { query, limit = 5, project, category, branch } = req.query;
         if (!query) return res.status(400).json({ error: 'Query required' });
 
-        const memories = await searchMemories(query, project, parseInt(limit));
+        const memories = await searchMemories(query, project, parseInt(limit), branch);
         res.json({ query, count: memories.length, results: memories });
     } catch (error) {
         console.error('Error:', error.message);
@@ -320,10 +618,11 @@ app.get('/api/memory/search', async (req, res) => {
     }
 });
 
+// Recent memories (branch-aware)
 app.get('/api/memory/recent', async (req, res) => {
     try {
-        const { limit = 10, project } = req.query;
-        const memories = await getRecentMemories(project, parseInt(limit));
+        const { limit = 10, project, branch } = req.query;
+        const memories = await getRecentMemories(project, parseInt(limit), branch);
         res.json({ count: memories.length, recent: memories });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -365,14 +664,192 @@ app.get('/api/memory/stats', async (req, res) => {
     }
 });
 
+// ============ Task Queue API (for Orchestrator) ============
+
+// Create task
+app.post('/api/tasks', async (req, res) => {
+    try {
+        const { description, project, repo_url, branch, priority, model, max_budget_usd, telegram_chat_id, telegram_user_id } = req.body;
+        if (!description || !project) {
+            return res.status(400).json({ error: 'description and project required' });
+        }
+        if (!telegram_chat_id || !telegram_user_id) {
+            return res.status(400).json({ error: 'telegram_chat_id and telegram_user_id required' });
+        }
+
+        const insertObj = {
+            description,
+            project,
+            telegram_chat_id,
+            telegram_user_id,
+            status: 'queued'
+        };
+        if (repo_url) insertObj.repo_url = repo_url;
+        if (branch) insertObj.branch = branch;
+        if (priority != null) insertObj.priority = priority;
+        if (model) insertObj.model = model;
+        if (max_budget_usd != null) insertObj.max_budget_usd = max_budget_usd;
+
+        const { data, error } = await supabase.from('tasks').insert(insertObj).select().single();
+        if (error) throw error;
+
+        res.json({ success: true, task: data });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Claim next queued task (atomic - for orchestrator)
+app.get('/api/tasks/next', async (req, res) => {
+    try {
+        const { orchestrator_id } = req.query;
+        if (!orchestrator_id) {
+            return res.status(400).json({ error: 'orchestrator_id required' });
+        }
+
+        const { data, error } = await supabase.rpc('claim_next_task', {
+            p_orchestrator_id: orchestrator_id
+        });
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+            return res.json({ task: null });
+        }
+
+        res.json({ task: data[0] });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update task (for orchestrator to report progress/results)
+app.patch('/api/tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = {};
+
+        const allowedFields = [
+            'status', 'target_branch', 'session_id', 'result_summary',
+            'result_json', 'error_message', 'files_changed', 'pr_url',
+            'workspace_path', 'started_at', 'completed_at'
+        ];
+
+        for (const field of allowedFields) {
+            if (req.body[field] !== undefined) {
+                updates[field] = req.body[field];
+            }
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: 'No valid fields to update' });
+        }
+
+        const { data, error } = await supabase
+            .from('tasks')
+            .update(updates)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, task: data });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get task details
+app.get('/api/tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error) throw error;
+
+        res.json({ task: data });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// List tasks (for a user)
+app.get('/api/tasks', async (req, res) => {
+    try {
+        const { user_id, status, limit = 10 } = req.query;
+
+        let query = supabase
+            .from('tasks')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(parseInt(limit));
+
+        if (user_id) query = query.eq('telegram_user_id', parseInt(user_id));
+        if (status) query = query.eq('status', status);
+
+        const { data, error } = await query;
+        if (error) throw error;
+
+        res.json({ count: data.length, tasks: data });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Notify endpoint (orchestrator can trigger immediate Telegram notification)
+app.post('/api/tasks/:id/notify', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { data: task, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error) throw error;
+
+        const shortId = task.id.substring(0, 8);
+        let msg;
+
+        if (task.status === 'completed') {
+            msg = `Task ${shortId} completed!\n\n` +
+                `Project: ${task.project}\n` +
+                `Description: ${task.description.substring(0, 100)}\n`;
+            if (task.result_summary) msg += `\nResult: ${task.result_summary}\n`;
+            if (task.pr_url) msg += `\nPR: ${task.pr_url}\n`;
+            if (task.files_changed?.length > 0) msg += `\nFiles changed: ${task.files_changed.join(', ')}\n`;
+        } else if (['failed', 'timeout'].includes(task.status)) {
+            msg = `Task ${shortId} ${task.status}!\n\n` +
+                `Project: ${task.project}\n`;
+            if (task.error_message) msg += `Error: ${task.error_message}\n`;
+        } else {
+            msg = `Task ${shortId} status: ${task.status}\n` +
+                `Project: ${task.project}\n`;
+        }
+
+        await bot.sendMessage(task.telegram_chat_id, msg);
+        notifiedTasks.add(task.id);
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log('');
     console.log('===========================================');
-    console.log('  ElizaClaude Server Running!');
+    console.log('  Itachi Memory Server Running!');
     console.log('===========================================');
     console.log(`  API: http://localhost:${PORT}`);
     console.log(`  Telegram: Active`);
     console.log(`  AI: ${anthropic ? 'Claude' : 'OpenAI'}`);
+    console.log(`  Allowed users: ${allowedUsers.length > 0 ? allowedUsers.join(', ') : 'all'}`);
     console.log('===========================================');
     console.log('');
 });
