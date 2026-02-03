@@ -71,6 +71,13 @@ console.log('Telegram bot started');
 // Store conversation history per user
 const conversationHistory = new Map();
 
+// Pending task creation state: chatId -> { project, userId }
+const pendingTaskDescriptions = new Map();
+
+// Known repos from env var (decoupled from orchestrator project paths)
+const knownRepos = (process.env.ITACHI_REPOS || '')
+    .split(',').map(r => r.trim()).filter(Boolean).sort();
+
 // Generate embedding
 async function getEmbedding(text) {
     const response = await openai.embeddings.create({
@@ -167,7 +174,8 @@ bot.onText(/\/start/, (msg) => {
         `/projects - List your projects\n` +
         `/clear - Clear chat history\n\n` +
         `Task Commands:\n` +
-        `/task <project> <description> - Queue a coding task\n` +
+        `/task - Pick a repo and queue a coding task\n` +
+        `/task <project> <description> - Quick task shortcut\n` +
         `/status [task_id] - Check task status\n` +
         `/cancel <task_id> - Cancel a queued/running task\n` +
         `/queue - Show queued/running tasks\n` +
@@ -255,7 +263,7 @@ bot.onText(/\/clear/, (msg) => {
 
 // ============ Task Commands ============
 
-// /task <project> <description>
+// /task <project> <description> — shortcut (backward compat)
 bot.onText(/\/task\s+(\S+)\s+(.+)/s, async (msg, match) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -279,7 +287,6 @@ bot.onText(/\/task\s+(\S+)\s+(.+)/s, async (msg, match) => {
 
         if (error) throw error;
 
-        // Get queue position
         const { count } = await supabase
             .from('tasks')
             .select('*', { count: 'exact', head: true })
@@ -297,6 +304,65 @@ bot.onText(/\/task\s+(\S+)\s+(.+)/s, async (msg, match) => {
     } catch (error) {
         bot.sendMessage(chatId, `Error creating task: ${error.message}`);
     }
+});
+
+// /task (no args) — interactive repo picker
+bot.onText(/\/task$/, async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    if (!isAllowedUser(userId)) {
+        bot.sendMessage(chatId, 'Not authorized for task commands.');
+        return;
+    }
+
+    if (knownRepos.length === 0) {
+        bot.sendMessage(chatId, 'No repos configured. Set ITACHI_REPOS env var.');
+        return;
+    }
+
+    // Build inline keyboard grid (2 columns)
+    const buttons = knownRepos.map(repo => ({
+        text: repo,
+        callback_data: `task_repo:${repo}`
+    }));
+
+    const keyboard = [];
+    for (let i = 0; i < buttons.length; i += 2) {
+        const row = [buttons[i]];
+        if (buttons[i + 1]) row.push(buttons[i + 1]);
+        keyboard.push(row);
+    }
+
+    bot.sendMessage(chatId, 'Pick a repo for the task:', {
+        reply_markup: { inline_keyboard: keyboard }
+    });
+});
+
+// Callback query handler for repo selection
+bot.on('callback_query', async (query) => {
+    const data = query.data;
+    if (!data?.startsWith('task_repo:')) return;
+
+    const repo = data.replace('task_repo:', '');
+    const chatId = query.message.chat.id;
+    const userId = query.from.id;
+
+    // Store pending state
+    pendingTaskDescriptions.set(chatId, { project: repo, userId });
+
+    // Acknowledge the button press
+    await bot.answerCallbackQuery(query.id);
+
+    // Edit the original message to show selection & prompt for description
+    await bot.editMessageText(
+        `Selected: *${repo}*\n\nNow describe the task:`,
+        {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            parse_mode: 'Markdown'
+        }
+    );
 });
 
 // /status [task_id]
@@ -453,12 +519,17 @@ bot.onText(/\/queue/, async (msg) => {
     }
 });
 
-// /repos - list configured project names
+// /repos - list configured project names (env var first, DB fallback)
 bot.onText(/\/repos/, async (msg) => {
     const chatId = msg.chat.id;
 
+    if (knownRepos.length > 0) {
+        bot.sendMessage(chatId, `Configured repos (${knownRepos.length}):\n\n${knownRepos.map(p => `- ${p}`).join('\n')}`);
+        return;
+    }
+
+    // Fallback: query DB for unique projects
     try {
-        // Get unique projects from both memories and tasks
         const [memResult, taskResult] = await Promise.all([
             supabase.from('memories').select('project').limit(1000),
             supabase.from('tasks').select('project').limit(1000)
@@ -469,7 +540,7 @@ bot.onText(/\/repos/, async (msg) => {
         (taskResult.data || []).forEach(t => projects.add(t.project));
 
         if (projects.size === 0) {
-            bot.sendMessage(chatId, 'No projects found.');
+            bot.sendMessage(chatId, 'No projects found. Set ITACHI_REPOS env var.');
             return;
         }
 
@@ -479,7 +550,7 @@ bot.onText(/\/repos/, async (msg) => {
     }
 });
 
-// Handle regular messages (chat with AI)
+// Handle regular messages (chat with AI, or pending task description)
 bot.on('message', async (msg) => {
     if (msg.text?.startsWith('/')) return;
 
@@ -488,6 +559,48 @@ bot.on('message', async (msg) => {
     const userMessage = msg.text;
 
     if (!userMessage) return;
+
+    // Check if user is mid-flow for interactive /task
+    const pending = pendingTaskDescriptions.get(chatId);
+    if (pending) {
+        pendingTaskDescriptions.delete(chatId);
+
+        if (!isAllowedUser(userId)) {
+            bot.sendMessage(chatId, 'Not authorized for task commands.');
+            return;
+        }
+
+        const description = userMessage.trim();
+        try {
+            const { data, error } = await supabase.from('tasks').insert({
+                description,
+                project: pending.project,
+                telegram_chat_id: chatId,
+                telegram_user_id: userId,
+                status: 'queued'
+            }).select().single();
+
+            if (error) throw error;
+
+            const { count } = await supabase
+                .from('tasks')
+                .select('*', { count: 'exact', head: true })
+                .eq('status', 'queued');
+
+            const shortId = data.id.substring(0, 8);
+            bot.sendMessage(chatId,
+                `Task queued!\n\n` +
+                `ID: ${shortId}\n` +
+                `Project: ${pending.project}\n` +
+                `Description: ${description}\n` +
+                `Queue position: ${count || 1}\n\n` +
+                `I'll notify you when it completes.`
+            );
+        } catch (error) {
+            bot.sendMessage(chatId, `Error creating task: ${error.message}`);
+        }
+        return;
+    }
 
     try {
         const memories = await searchMemories(userMessage, null, 3);
