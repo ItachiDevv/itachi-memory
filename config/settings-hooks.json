@@ -1,0 +1,41 @@
+{
+  "_comment": "Itachi Memory System - Hook Configuration Template",
+  "_instructions": "Merge these hooks into your ~/.claude/settings.json",
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"C:\\Users\\newma\\.claude\\hooks\\session-start.ps1\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"C:\\Users\\newma\\.claude\\hooks\\after-edit.ps1\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"C:\\Users\\newma\\.claude\\hooks\\session-end.ps1\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
