@@ -88,12 +88,12 @@ async function getEmbedding(text) {
 }
 
 // Search memories (branch-aware)
-async function searchMemories(query, project = null, limit = 5, branch = null) {
+async function searchMemories(query, project = null, limit = 5, branch = null, category = null) {
     const queryEmbedding = await getEmbedding(query);
     const params = {
         query_embedding: queryEmbedding,
         match_project: project,
-        match_category: null,
+        match_category: category,
         match_limit: limit
     };
     if (branch) params.match_branch = branch;
@@ -116,8 +116,90 @@ async function getRecentMemories(project = null, limit = 5, branch = null) {
     return data;
 }
 
+// Extract facts/preferences from conversation and store as memories
+async function extractAndStoreFacts(userMessage, assistantResponse, userId) {
+    const prompt = `Extract any factual statements, user preferences, decisions, or project details from this conversation exchange. Return a JSON array of objects with "fact" (the fact statement) and "project" (project name if mentioned, otherwise "general"). Only include concrete, reusable facts — not greetings or filler. If there are no facts worth storing, return an empty array.
+
+User: ${userMessage}
+Assistant: ${assistantResponse}
+
+Respond ONLY with a valid JSON array, no markdown fences.`;
+
+    const result = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        max_tokens: 512,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }]
+    });
+
+    const raw = result.choices[0].message.content.trim();
+    let facts;
+    try {
+        facts = JSON.parse(raw);
+    } catch {
+        return; // unparseable response, skip silently
+    }
+    if (!Array.isArray(facts) || facts.length === 0) return;
+
+    for (const { fact, project } of facts) {
+        if (!fact) continue;
+        try {
+            const embedding = await getEmbedding(fact);
+
+            // Dedup: skip if a very similar fact already exists
+            const { data: existing } = await supabase.rpc('match_memories', {
+                query_embedding: embedding,
+                match_project: null,
+                match_category: 'fact',
+                match_limit: 1
+            });
+            if (existing?.length > 0 && existing[0].similarity > 0.92) continue;
+
+            await supabase.from('memories').insert({
+                project: project || 'general',
+                category: 'fact',
+                content: fact,
+                summary: fact,
+                files: [],
+                embedding
+            });
+        } catch {
+            // silent per-fact errors
+        }
+    }
+}
+
+// Summarize evicted conversation messages and store as a memory
+async function summarizeAndStoreConversation(evictedMessages, userId) {
+    const transcript = evictedMessages
+        .map(m => `${m.role}: ${m.content}`)
+        .join('\n');
+
+    const result = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        max_tokens: 300,
+        temperature: 0,
+        messages: [{
+            role: 'user',
+            content: `Summarize this conversation in 2-3 sentences. Focus on key topics, decisions, and projects discussed:\n\n${transcript}`
+        }]
+    });
+
+    const summary = result.choices[0].message.content.trim();
+    const embedding = await getEmbedding(summary);
+
+    await supabase.from('memories').insert({
+        project: 'general',
+        category: 'conversation',
+        content: transcript.substring(0, 2000),
+        summary,
+        files: [],
+        embedding
+    });
+}
+
 // Chat with Claude/OpenAI
-async function chat(userMessage, userId, memories = []) {
+async function chat(userMessage, userId, memories = [], facts = [], conversations = []) {
     if (!conversationHistory.has(userId)) {
         conversationHistory.set(userId, []);
     }
@@ -129,13 +211,31 @@ async function chat(userMessage, userId, memories = []) {
             memories.map(m => `- [${m.category}] ${m.summary} (Files: ${m.files?.join(', ') || 'none'})`).join('\n');
     }
 
+    let factsContext = '';
+    if (facts.length > 0) {
+        factsContext = '\n\nKnown facts and preferences:\n' +
+            facts.map(f => `- ${f.summary}`).join('\n');
+    }
+
+    let conversationContext = '';
+    if (conversations.length > 0) {
+        conversationContext = '\n\nPrevious conversation summaries:\n' +
+            conversations.map(c => `- ${c.summary}`).join('\n');
+    }
+
     const systemPrompt = `You are Itachi, a helpful AI assistant with access to the user's coding project memories.
 You can recall what they've been working on and help them with their projects.
 Be concise but helpful. You're chatting via Telegram so keep responses reasonably short.
-${memoryContext}`;
+${memoryContext}${factsContext}${conversationContext}`;
 
     history.push({ role: 'user', content: userMessage });
-    while (history.length > 10) { history.shift(); }
+
+    // Capture evicted messages before trimming
+    const evicted = [];
+    while (history.length > 10) { evicted.push(history.shift()); }
+    if (evicted.length > 0) {
+        summarizeAndStoreConversation(evicted, userId).catch(() => {});
+    }
 
     let response;
     if (anthropic) {
@@ -163,6 +263,16 @@ ${memoryContext}`;
 }
 
 // ============ Telegram Command Handlers ============
+
+bot.onText(/\/leave/, async (msg) => {
+    if (!isAllowedUser(msg.from.id)) return;
+    try {
+        await bot.sendMessage(msg.chat.id, 'Goodbye!');
+        await bot.leaveChat(msg.chat.id);
+    } catch (error) {
+        bot.sendMessage(msg.chat.id, `Error: ${error.message}`);
+    }
+});
 
 bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id,
@@ -603,9 +713,39 @@ bot.on('message', async (msg) => {
     }
 
     try {
-        const memories = await searchMemories(userMessage, null, 3);
-        const response = await chat(userMessage, userId, memories);
+        // Generate embedding once, run 3 parallel searches
+        const queryEmbedding = await getEmbedding(userMessage);
+
+        const [codeResults, factResults, conversationResults] = await Promise.all([
+            supabase.rpc('match_memories', {
+                query_embedding: queryEmbedding,
+                match_project: null,
+                match_category: null,
+                match_limit: 3
+            }),
+            supabase.rpc('match_memories', {
+                query_embedding: queryEmbedding,
+                match_project: null,
+                match_category: 'fact',
+                match_limit: 3
+            }),
+            supabase.rpc('match_memories', {
+                query_embedding: queryEmbedding,
+                match_project: null,
+                match_category: 'conversation',
+                match_limit: 2
+            })
+        ]);
+
+        const memories = codeResults.data || [];
+        const facts = factResults.data || [];
+        const conversations = conversationResults.data || [];
+
+        const response = await chat(userMessage, userId, memories, facts, conversations);
         bot.sendMessage(chatId, response);
+
+        // Fire-and-forget: extract facts from this exchange
+        extractAndStoreFacts(userMessage, response, userId).catch(() => {});
     } catch (error) {
         console.error('Chat error:', error);
         bot.sendMessage(chatId, `Error: ${error.message}`);
