@@ -94,9 +94,9 @@ async function searchMemories(query, project = null, limit = 5, branch = null, c
         query_embedding: queryEmbedding,
         match_project: project,
         match_category: category,
+        match_branch: branch,
         match_limit: limit
     };
-    if (branch) params.match_branch = branch;
     const { data, error } = await supabase.rpc('match_memories', params);
     if (error) throw error;
     return data;
@@ -151,6 +151,7 @@ Respond ONLY with a valid JSON array, no markdown fences.`;
                 query_embedding: embedding,
                 match_project: null,
                 match_category: 'fact',
+                match_branch: null,
                 match_limit: 1
             });
             if (existing?.length > 0 && existing[0].similarity > 0.92) continue;
@@ -721,18 +722,21 @@ bot.on('message', async (msg) => {
                 query_embedding: queryEmbedding,
                 match_project: null,
                 match_category: null,
+                match_branch: null,
                 match_limit: 3
             }),
             supabase.rpc('match_memories', {
                 query_embedding: queryEmbedding,
                 match_project: null,
                 match_category: 'fact',
+                match_branch: null,
                 match_limit: 3
             }),
             supabase.rpc('match_memories', {
                 query_embedding: queryEmbedding,
                 match_project: null,
                 match_category: 'conversation',
+                match_branch: null,
                 match_limit: 2
             })
         ]);
