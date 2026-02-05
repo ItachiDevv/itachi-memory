@@ -78,6 +78,25 @@ const pendingTaskDescriptions = new Map();
 const knownRepos = (process.env.ITACHI_REPOS || '')
     .split(',').map(r => r.trim()).filter(Boolean).sort();
 
+// Merge env var repos with DB repos table (deduped, sorted)
+async function getMergedRepos() {
+    const { data } = await supabase.from('repos').select('name, repo_url');
+    const dbRepos = data || [];
+    // Build map: name -> repo_url (DB entries take precedence)
+    const repoMap = new Map();
+    knownRepos.forEach(name => repoMap.set(name, null));
+    dbRepos.forEach(r => repoMap.set(r.name, r.repo_url || null));
+    return [...repoMap.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, repo_url]) => ({ name, repo_url }));
+}
+
+// Get just repo names (for display / keyboards)
+async function getMergedRepoNames() {
+    const repos = await getMergedRepos();
+    return repos.map(r => r.name);
+}
+
 // Generate embedding
 async function getEmbedding(text) {
     const response = await openai.embeddings.create({
@@ -427,13 +446,20 @@ bot.onText(/\/task$/, async (msg) => {
         return;
     }
 
-    if (knownRepos.length === 0) {
-        bot.sendMessage(chatId, 'No repos configured. Set ITACHI_REPOS env var.');
+    let repoNames;
+    try {
+        repoNames = await getMergedRepoNames();
+    } catch {
+        repoNames = knownRepos;
+    }
+
+    if (repoNames.length === 0) {
+        bot.sendMessage(chatId, 'No repos configured. Run /itachi-init in a project or set ITACHI_REPOS env var.');
         return;
     }
 
     // Build inline keyboard grid (2 columns)
-    const buttons = knownRepos.map(repo => ({
+    const buttons = repoNames.map(repo => ({
         text: repo,
         callback_data: `task_repo:${repo}`
     }));
@@ -630,17 +656,19 @@ bot.onText(/\/queue/, async (msg) => {
     }
 });
 
-// /repos - list configured project names (env var first, DB fallback)
+// /repos - list configured project names (env + DB merged)
 bot.onText(/\/repos/, async (msg) => {
     const chatId = msg.chat.id;
 
-    if (knownRepos.length > 0) {
-        bot.sendMessage(chatId, `Configured repos (${knownRepos.length}):\n\n${knownRepos.map(p => `- ${p}`).join('\n')}`);
-        return;
-    }
-
-    // Fallback: query DB for unique projects
     try {
+        const repos = await getMergedRepoNames();
+
+        if (repos.length > 0) {
+            bot.sendMessage(chatId, `Configured repos (${repos.length}):\n\n${repos.map(p => `- ${p}`).join('\n')}`);
+            return;
+        }
+
+        // Fallback: query DB for unique projects from memories/tasks
         const [memResult, taskResult] = await Promise.all([
             supabase.from('memories').select('project').limit(1000),
             supabase.from('tasks').select('project').limit(1000)
@@ -651,7 +679,7 @@ bot.onText(/\/repos/, async (msg) => {
         (taskResult.data || []).forEach(t => projects.add(t.project));
 
         if (projects.size === 0) {
-            bot.sendMessage(chatId, 'No projects found. Set ITACHI_REPOS env var.');
+            bot.sendMessage(chatId, 'No repos configured. Run /itachi-init in a project or set ITACHI_REPOS env var.');
             return;
         }
 
@@ -921,6 +949,49 @@ app.get('/api/memory/stats', async (req, res) => {
     }
 });
 
+// ============ Repo Registration API ============
+
+// Register a repo (upsert with optional repo_url)
+app.post('/api/repos/register', async (req, res) => {
+    try {
+        const { name, repo_url } = req.body;
+        if (!name) return res.status(400).json({ error: 'name required' });
+        const row = { name };
+        if (repo_url) row.repo_url = repo_url;
+        const { error } = await supabase.from('repos').upsert(row, { onConflict: 'name' });
+        if (error) throw error;
+        res.json({ success: true, repo: name, repo_url: repo_url || null });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// List all repos (env + DB merged)
+app.get('/api/repos', async (req, res) => {
+    try {
+        const repos = await getMergedRepos();
+        res.json({ count: repos.length, repos });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get a single repo by name (for orchestrator repo_url lookup)
+app.get('/api/repos/:name', async (req, res) => {
+    try {
+        const { name } = req.params;
+        const { data, error } = await supabase
+            .from('repos')
+            .select('name, repo_url, created_at')
+            .eq('name', name)
+            .single();
+        if (error || !data) return res.status(404).json({ error: 'repo not found' });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ============ Task Queue API (for Orchestrator) ============
 
 // Create task
@@ -1093,6 +1164,85 @@ app.post('/api/tasks/:id/notify', async (req, res) => {
         notifiedTasks.add(task.id);
 
         res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============ Bootstrap & Encrypted File Sync ============
+
+// GET /api/bootstrap — return encrypted Supabase creds for new machines
+app.get('/api/bootstrap', (req, res) => {
+    const config = process.env.ITACHI_BOOTSTRAP_CONFIG;
+    const salt = process.env.ITACHI_BOOTSTRAP_SALT;
+    if (!config || !salt) return res.status(503).json({ error: 'Bootstrap not configured' });
+    res.json({ encrypted_config: config, salt });
+});
+
+// POST /api/sync/push — encrypt + push a file to Supabase
+app.post('/api/sync/push', async (req, res) => {
+    try {
+        const { repo_name, file_path, encrypted_data, salt, content_hash, updated_by } = req.body;
+        if (!repo_name || !file_path || !encrypted_data || !salt || !content_hash || !updated_by) {
+            return res.status(400).json({ error: 'Missing required fields: repo_name, file_path, encrypted_data, salt, content_hash, updated_by' });
+        }
+
+        const { data, error } = await supabase.rpc('upsert_sync_file', {
+            p_repo_name: repo_name,
+            p_file_path: file_path,
+            p_encrypted_data: encrypted_data,
+            p_salt: salt,
+            p_content_hash: content_hash,
+            p_updated_by: updated_by
+        });
+
+        if (error) throw error;
+
+        console.log(`[sync] Pushed ${repo_name}/${file_path} v${data.version} by ${updated_by}`);
+        res.json({ success: true, version: data.version, file_path: data.file_path });
+    } catch (error) {
+        console.error('[sync] Push error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// GET /api/sync/pull/:repo/* — pull encrypted file data
+app.get('/api/sync/pull/:repo/*', async (req, res) => {
+    try {
+        const repo = req.params.repo;
+        const filePath = req.params[0]; // wildcard captures everything after /repo/
+
+        const { data, error } = await supabase
+            .from('sync_files')
+            .select('*')
+            .eq('repo_name', repo)
+            .eq('file_path', filePath)
+            .single();
+
+        if (error || !data) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// GET /api/sync/list/:repo — list synced files for a repo
+app.get('/api/sync/list/:repo', async (req, res) => {
+    try {
+        const repo = req.params.repo;
+
+        const { data, error } = await supabase
+            .from('sync_files')
+            .select('file_path, content_hash, version, updated_by, updated_at')
+            .eq('repo_name', repo)
+            .order('file_path');
+
+        if (error) throw error;
+
+        res.json({ repo_name: repo, files: data || [] });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

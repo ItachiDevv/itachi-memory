@@ -1,19 +1,148 @@
 #!/bin/bash
 # Itachi Memory - SessionStart Hook
-# Fixed: uses node instead of jq for JSON parsing
+# 1) Pulls + decrypts synced .env/.md files from remote
+# 2) Fetches recent memories for context
 
 MEMORY_API="https://eliza-claude-production.up.railway.app/api/memory"
+SYNC_API="https://eliza-claude-production.up.railway.app/api/sync"
 PROJECT_NAME=$(basename "$PWD")
 
 # Detect git branch
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 [ -z "$BRANCH" ] && BRANCH="main"
 
-# Fetch recent memories (branch-aware)
+# ============ Encrypted File Sync (Pull) ============
+ITACHI_KEY_FILE="$HOME/.itachi-key"
+
+if [ -f "$ITACHI_KEY_FILE" ]; then
+    SYNC_OUTPUT=$(node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+
+const project = process.argv[1];
+const keyFile = process.argv[2];
+const syncApi = process.argv[3];
+const cwd = process.argv[4];
+
+const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
+
+function httpGet(url) {
+    return new Promise((resolve, reject) => {
+        const u = new URL(url);
+        const mod = u.protocol === 'https:' ? https : http;
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+            let d = '';
+            res.on('data', c => d += c);
+            res.on('end', () => {
+                if (res.statusCode >= 400) reject(new Error(d));
+                else resolve(JSON.parse(d));
+            });
+        }).on('error', reject);
+    });
+}
+
+function decrypt(encB64, saltB64, passphrase) {
+    const packed = Buffer.from(encB64, 'base64');
+    const salt = Buffer.from(saltB64, 'base64');
+    const iv = packed.subarray(0, 12);
+    const tag = packed.subarray(12, 28);
+    const ct = packed.subarray(28);
+    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(ct, null, 'utf8') + decipher.final('utf8');
+}
+
+function stripMachineKeys(content) {
+    return content.replace(new RegExp('^(' + machineKeys.join('|') + ')=.*$', 'gm'), '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+
+function mergeEnv(localContent, remoteContent) {
+    const localKV = {};
+    const localLines = localContent.split('\n');
+    for (const line of localLines) {
+        const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+        if (m) localKV[m[1]] = m[2];
+    }
+    const remoteKV = {};
+    for (const line of remoteContent.split('\n')) {
+        const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+        if (m) remoteKV[m[1]] = m[2];
+    }
+    // Remote wins for shared keys, local-only preserved
+    Object.assign(localKV, remoteKV);
+    // Preserve machine-specific keys from local (not in remote)
+    for (const line of localLines) {
+        const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+        if (m && machineKeys.includes(m[1])) {
+            localKV[m[1]] = m[2];
+        }
+    }
+    return Object.entries(localKV).map(([k, v]) => k + '=' + v).join('\n') + '\n';
+}
+
+(async () => {
+    try {
+        const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
+        const list = await httpGet(syncApi + '/list/' + encodeURIComponent(project));
+        if (!list.files || list.files.length === 0) return;
+
+        const output = [];
+        for (const f of list.files) {
+            const localPath = path.join(cwd, f.file_path);
+            let localHash = null;
+
+            if (fs.existsSync(localPath)) {
+                let localContent = fs.readFileSync(localPath, 'utf8');
+                const fn = path.basename(localPath);
+                if (fn === '.env' || fn.startsWith('.env.')) {
+                    localContent = stripMachineKeys(localContent);
+                }
+                localHash = crypto.createHash('sha256').update(localContent).digest('hex');
+            }
+
+            // Skip if content hash matches (no changes)
+            if (localHash === f.content_hash) continue;
+
+            // Pull and decrypt
+            const fileData = await httpGet(syncApi + '/pull/' + encodeURIComponent(project) + '/' + f.file_path);
+            const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+
+            const fn = path.basename(f.file_path);
+            if (fn === '.env' || fn.startsWith('.env.')) {
+                // .env: additive key-level merge
+                if (fs.existsSync(localPath)) {
+                    const localContent = fs.readFileSync(localPath, 'utf8');
+                    const merged = mergeEnv(localContent, remoteContent);
+                    fs.writeFileSync(localPath, merged);
+                } else {
+                    fs.mkdirSync(path.dirname(localPath), { recursive: true });
+                    fs.writeFileSync(localPath, remoteContent);
+                }
+            } else {
+                // .md: whole-file replacement
+                fs.mkdirSync(path.dirname(localPath), { recursive: true });
+                fs.writeFileSync(localPath, remoteContent);
+            }
+            output.push('[sync] Updated ' + f.file_path + ' (v' + f.version + ' by ' + f.updated_by + ')');
+        }
+        if (output.length > 0) console.log(output.join('\n'));
+    } catch(e) {}
+})();
+" "$PROJECT_NAME" "$ITACHI_KEY_FILE" "$SYNC_API" "$PWD" 2>/dev/null)
+
+    if [ -n "$SYNC_OUTPUT" ]; then
+        echo "$SYNC_OUTPUT"
+    fi
+fi
+
+# ============ Memory Context ============
 RECENT=$(curl -s -k "${MEMORY_API}/recent?project=${PROJECT_NAME}&limit=5&branch=${BRANCH}" --max-time 10 2>/dev/null)
 
 if [ -n "$RECENT" ]; then
-    # Use node to parse and format (no jq dependency)
     OUTPUT=$(node -e "
 try {
     const d = JSON.parse(process.argv[1]);

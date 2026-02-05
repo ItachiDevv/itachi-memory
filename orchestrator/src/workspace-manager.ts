@@ -4,6 +4,18 @@ import * as path from 'path';
 import { config } from './config';
 import type { Task } from './types';
 
+// Fetch repo_url from the Itachi API when not available locally
+async function fetchRepoUrl(project: string): Promise<string | null> {
+    try {
+        const res = await fetch(`${config.apiUrl}/api/repos/${encodeURIComponent(project)}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.repo_url || null;
+    } catch {
+        return null;
+    }
+}
+
 function exec(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string; code: number }> {
     return new Promise((resolve) => {
         const proc = spawn(cmd, args, { cwd, shell: true });
@@ -55,29 +67,31 @@ export async function setupWorkspace(task: Task): Promise<string> {
         }
 
         console.log(`[workspace] Created worktree at ${workspacePath} (branch: ${branchName})`);
-    } else if (task.repo_url) {
-        // Clone mode: shallow clone from remote
-        const result = await exec(
-            'git',
-            ['clone', '--depth', '1', '--branch', task.branch, task.repo_url, workspacePath]
-        );
-
-        if (result.code !== 0) {
-            throw new Error(`Failed to clone: ${result.stderr}`);
-        }
-
-        // Create feature branch
-        const branchName = `task/${shortId}`;
-        await exec('git', ['checkout', '-b', branchName], workspacePath);
-
-        console.log(`[workspace] Cloned ${task.repo_url} to ${workspacePath} (branch: ${branchName})`);
     } else {
-        // No repo_url and no local path - just create the directory
-        // This is for tasks that operate on the project path directly
-        if (localPath) {
+        // Clone mode: use task repo_url, or look it up from the API
+        const repoUrl = task.repo_url || await fetchRepoUrl(task.project);
+
+        if (repoUrl) {
+            const result = await exec(
+                'git',
+                ['clone', '--depth', '1', '--branch', task.branch, repoUrl, workspacePath]
+            );
+
+            if (result.code !== 0) {
+                throw new Error(`Failed to clone: ${result.stderr}`);
+            }
+
+            // Create feature branch
+            const branchName = `task/${shortId}`;
+            await exec('git', ['checkout', '-b', branchName], workspacePath);
+
+            console.log(`[workspace] Cloned ${repoUrl} to ${workspacePath} (branch: ${branchName})`);
+        } else if (localPath) {
+            // No repo_url at all but local path exists (shouldn't normally hit this)
             return localPath;
+        } else {
+            throw new Error(`No repo_url or local path configured for project "${task.project}". Run /itachi-init in the project to register it.`);
         }
-        throw new Error(`No repo_url or local path configured for project "${task.project}"`);
     }
 
     return workspacePath;

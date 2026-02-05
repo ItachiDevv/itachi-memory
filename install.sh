@@ -19,7 +19,7 @@ echo ""
 
 # Step 1: Create directories
 echo "[1/6] Creating directories..."
-mkdir -p "$HOOKS_DIR" "$COMMANDS_DIR" "$SKILLS_DIR/itachi-init"
+mkdir -p "$HOOKS_DIR" "$COMMANDS_DIR" "$SKILLS_DIR/itachi-init" "$SKILLS_DIR/itachi-env"
 
 # Step 2: Copy hook scripts
 echo "[2/6] Installing hook scripts..."
@@ -40,6 +40,8 @@ done
 echo "[4/6] Installing skills..."
 cp "$SCRIPT_DIR/skills/itachi-init/SKILL.md" "$SKILLS_DIR/itachi-init/SKILL.md"
 echo "  Installed: $SKILLS_DIR/itachi-init/SKILL.md"
+cp "$SCRIPT_DIR/skills/itachi-env/SKILL.md" "$SKILLS_DIR/itachi-env/SKILL.md"
+echo "  Installed: $SKILLS_DIR/itachi-env/SKILL.md"
 
 # Step 5: Update settings.json
 echo "[5/6] Updating settings.json..."

@@ -1,8 +1,10 @@
 #!/bin/bash
 # Itachi Memory - PostToolUse Hook (Write|Edit)
-# Fixed: regex handles space after colon, no jq dependency
+# 1) Sends file change to memory API
+# 2) If .env or .md file AND ~/.itachi-key exists, encrypts + pushes to sync API
 
 MEMORY_API="https://eliza-claude-production.up.railway.app/api/memory"
+SYNC_API="https://eliza-claude-production.up.railway.app/api/sync"
 PROJECT_NAME=$(basename "$PWD")
 
 # Detect git branch
@@ -47,5 +49,78 @@ curl -s -k -X POST "${MEMORY_API}/code-change" \
   -H "Content-Type: application/json" \
   -d "{\"files\":[\"${FILENAME}\"],\"summary\":\"${SUMMARY}\",\"category\":\"${CATEGORY}\",\"project\":\"${PROJECT_NAME}\",\"branch\":\"${BRANCH}\"${TASK_FIELD}}" \
   --max-time 10 > /dev/null 2>&1
+
+# ============ Encrypted File Sync ============
+# Push .env and .md files to encrypted sync storage
+
+ITACHI_KEY_FILE="$HOME/.itachi-key"
+
+# Only sync if passphrase exists
+if [ -f "$ITACHI_KEY_FILE" ] && [ -f "$FILE_PATH" ]; then
+    # Check if file is .env or .md
+    case "$FILENAME" in
+        .env|.env.*|*.md)
+            # Machine-specific keys to strip from .env before syncing
+            MACHINE_KEYS="ITACHI_ORCHESTRATOR_ID|ITACHI_WORKSPACE_DIR|ITACHI_PROJECT_PATHS"
+
+            node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const https = require('https');
+const http = require('http');
+
+const filePath = process.argv[1];
+const project = process.argv[2];
+const keyFile = process.argv[3];
+const syncApi = process.argv[4];
+const machineKeys = process.argv[5];
+
+try {
+    const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
+    let content = fs.readFileSync(filePath, 'utf8');
+    const fileName = require('path').basename(filePath);
+
+    // For .env files, strip machine-specific keys before hashing/encrypting
+    if (fileName === '.env' || fileName.startsWith('.env.')) {
+        const re = new RegExp('^(' + machineKeys + ')=.*$', 'gm');
+        content = content.replace(re, '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+    }
+
+    // Content hash (SHA-256 of stripped plaintext)
+    const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+
+    // Encrypt (AES-256-GCM + PBKDF2)
+    const salt = crypto.randomBytes(16);
+    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()]);
+    const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);
+
+    const body = JSON.stringify({
+        repo_name: project,
+        file_path: fileName,
+        encrypted_data: packed.toString('base64'),
+        salt: salt.toString('base64'),
+        content_hash: contentHash,
+        updated_by: require('os').hostname()
+    });
+
+    const url = new URL(syncApi + '/push');
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        timeout: 10000,
+        rejectUnauthorized: false
+    }, (res) => { res.resume(); });
+    req.on('error', () => {});
+    req.write(body);
+    req.end();
+} catch(e) {}
+" "$FILE_PATH" "$PROJECT_NAME" "$ITACHI_KEY_FILE" "$SYNC_API" "$MACHINE_KEYS" 2>/dev/null &
+            ;;
+    esac
+fi
 
 exit 0

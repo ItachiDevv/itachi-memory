@@ -20,7 +20,7 @@ Write-Host ""
 
 # Step 1: Create directories
 Write-Host "[1/6] Creating directories..." -ForegroundColor Yellow
-@($HooksDir, $CommandsDir, (Join-Path $SkillsDir "itachi-init")) | ForEach-Object {
+@($HooksDir, $CommandsDir, (Join-Path $SkillsDir "itachi-init"), (Join-Path $SkillsDir "itachi-env")) | ForEach-Object {
     if (-not (Test-Path $_)) {
         New-Item -ItemType Directory -Path $_ -Force | Out-Null
         Write-Host "  Created: $_" -ForegroundColor Gray
@@ -53,6 +53,11 @@ $skillSrc = Join-Path $ScriptDir "skills\itachi-init\SKILL.md"
 $skillDst = Join-Path $SkillsDir "itachi-init\SKILL.md"
 Copy-Item $skillSrc $skillDst -Force
 Write-Host "  Installed: $skillDst" -ForegroundColor Gray
+
+$skillSrc2 = Join-Path $ScriptDir "skills\itachi-env\SKILL.md"
+$skillDst2 = Join-Path $SkillsDir "itachi-env\SKILL.md"
+Copy-Item $skillSrc2 $skillDst2 -Force
+Write-Host "  Installed: $skillDst2" -ForegroundColor Gray
 
 # Step 5: Update settings.json - replace hooks with PowerShell versions
 Write-Host "[5/6] Updating settings.json..." -ForegroundColor Yellow

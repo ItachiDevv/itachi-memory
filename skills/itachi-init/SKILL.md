@@ -48,4 +48,34 @@ Changes are auto-categorized:
 
 To disable memory for this project, create a file called .no-memory in the project root.
 
-6. After appending, confirm to the user: "Memory system section added to CLAUDE.md"
+6. After appending, register the project with the Itachi server so it appears in `/repos` and `/task`. Use Bash to run:
+
+```bash
+REPO_NAME="$(basename "$(pwd)")"
+REPO_URL="$(git remote get-url origin 2>/dev/null || echo "")"
+if [ -n "$REPO_URL" ]; then
+  curl -s -X POST https://eliza-claude-production.up.railway.app/api/repos/register \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"$REPO_NAME\", \"repo_url\": \"$REPO_URL\"}"
+else
+  curl -s -X POST https://eliza-claude-production.up.railway.app/api/repos/register \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"$REPO_NAME\"}"
+fi
+```
+
+On Windows (PowerShell), use the equivalent:
+
+```powershell
+$repoName = Split-Path -Leaf (Get-Location)
+$repoUrl = git remote get-url origin 2>$null
+if ($repoUrl) {
+  Invoke-RestMethod -Uri "https://eliza-claude-production.up.railway.app/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`",`"repo_url`":`"$repoUrl`"}"
+} else {
+  Invoke-RestMethod -Uri "https://eliza-claude-production.up.railway.app/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`"}"
+}
+```
+
+If the request fails (e.g. offline), continue — the registration is not blocking.
+
+7. After registering, confirm to the user: "Memory system section added to CLAUDE.md and project registered with Itachi."
