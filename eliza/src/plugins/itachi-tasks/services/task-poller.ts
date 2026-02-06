@@ -12,6 +12,7 @@ export class TaskPollerService extends Service {
   private runtime: IAgentRuntime;
   private interval: ReturnType<typeof setInterval> | null = null;
   private notifiedTasks = new Set<string>();
+  private static readonly MAX_NOTIFIED_CACHE = 500;
 
   constructor(runtime: IAgentRuntime) {
     super();
@@ -56,6 +57,12 @@ export class TaskPollerService extends Service {
       .limit(10);
 
     if (error || !data) return;
+
+    // Prune cache if too large (keep most recent half)
+    if (this.notifiedTasks.size > TaskPollerService.MAX_NOTIFIED_CACHE) {
+      const arr = [...this.notifiedTasks];
+      this.notifiedTasks = new Set(arr.slice(arr.length / 2));
+    }
 
     for (const task of data) {
       if (this.notifiedTasks.has(task.id)) continue;

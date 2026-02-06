@@ -1,5 +1,6 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { TaskService } from '../../itachi-tasks/services/task-service.js';
+import { checkAuth, sanitizeError, truncate, MAX_LENGTHS } from '../utils.js';
 
 export const repoRoutes: Route[] = [
   // Register a repo
@@ -9,23 +10,26 @@ export const repoRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
         const { name, repo_url } = req.body;
         if (!name) {
           res.status(400).json({ error: 'name required' });
           return;
         }
 
-        const taskService = (runtime as IAgentRuntime).getService<TaskService>('itachi-tasks');
+        const taskService = rt.getService<TaskService>('itachi-tasks');
         if (!taskService) {
           res.status(503).json({ error: 'Task service not available' });
           return;
         }
 
-        await taskService.registerRepo(name, repo_url);
-        res.json({ success: true, repo: name, repo_url: repo_url || null });
+        const safeName = truncate(name, MAX_LENGTHS.project);
+        await taskService.registerRepo(safeName, repo_url);
+        res.json({ success: true, repo: safeName, repo_url: repo_url || null });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
@@ -37,7 +41,10 @@ export const repoRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
-        const taskService = (runtime as IAgentRuntime).getService<TaskService>('itachi-tasks');
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
+        const taskService = rt.getService<TaskService>('itachi-tasks');
         if (!taskService) {
           res.status(503).json({ error: 'Task service not available' });
           return;
@@ -46,8 +53,7 @@ export const repoRoutes: Route[] = [
         const repos = await taskService.getMergedRepos();
         res.json({ count: repos.length, repos });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
@@ -59,9 +65,12 @@ export const repoRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
         const { name } = req.params;
 
-        const taskService = (runtime as IAgentRuntime).getService<TaskService>('itachi-tasks');
+        const taskService = rt.getService<TaskService>('itachi-tasks');
         if (!taskService) {
           res.status(503).json({ error: 'Task service not available' });
           return;
@@ -75,8 +84,7 @@ export const repoRoutes: Route[] = [
 
         res.json(repo);
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },

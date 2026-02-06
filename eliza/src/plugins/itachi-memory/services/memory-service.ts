@@ -143,7 +143,8 @@ export class MemoryService extends Service {
   async getStats(project?: string): Promise<MemoryStats> {
     let query = this.supabase
       .from('itachi_memories')
-      .select('category, files, created_at');
+      .select('category, files, created_at')
+      .limit(10000); // hard cap to prevent OOM
     if (project) query = query.eq('project', project);
 
     const { data, error } = await query;

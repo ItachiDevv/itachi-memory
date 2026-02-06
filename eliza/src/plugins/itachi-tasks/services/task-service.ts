@@ -115,6 +115,8 @@ export class TaskService extends Service {
   }
 
   async getTaskByPrefix(prefix: string, userId?: number): Promise<ItachiTask | null> {
+    if (!prefix || prefix.length < 4) return null; // min 4 chars to avoid broad scans
+
     let query = this.supabase
       .from('itachi_tasks')
       .select('*')

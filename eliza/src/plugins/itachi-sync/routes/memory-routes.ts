@@ -1,5 +1,6 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
+import { checkAuth, clampLimit, sanitizeError, truncate, MAX_LENGTHS } from '../utils.js';
 
 export const memoryRoutes: Route[] = [
   {
@@ -8,45 +9,54 @@ export const memoryRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
         const { files = [], summary, diff = '', category, project, branch, task_id } = req.body;
         if (!summary) {
           res.status(400).json({ error: 'Summary required' });
           return;
         }
 
-        const memoryService = (runtime as IAgentRuntime).getService<MemoryService>('itachi-memory');
+        const memoryService = rt.getService<MemoryService>('itachi-memory');
         if (!memoryService) {
           res.status(503).json({ error: 'Memory service not available' });
           return;
         }
 
+        const safeSummary = truncate(summary, MAX_LENGTHS.summary);
+        const safeDiff = truncate(diff, MAX_LENGTHS.diff);
+        const safeProject = truncate(project, MAX_LENGTHS.project) || 'default';
+        const safeCategory = truncate(category, MAX_LENGTHS.category) || 'code_change';
+        const safeFiles = Array.isArray(files) ? files.slice(0, 50) : [];
+
         const contextText = [
-          `Category: ${category}`,
-          `Summary: ${summary}`,
-          files.length > 0 ? `Files: ${files.join(', ')}` : '',
-          diff ? `Changes:\n${diff.substring(0, 500)}` : '',
+          `Category: ${safeCategory}`,
+          `Summary: ${safeSummary}`,
+          safeFiles.length > 0 ? `Files: ${safeFiles.join(', ')}` : '',
+          safeDiff ? `Changes:\n${safeDiff.substring(0, 500)}` : '',
         ]
           .filter(Boolean)
           .join('\n');
 
         const data = await memoryService.storeMemory({
-          project: project || 'default',
-          category: category || 'code_change',
+          project: safeProject,
+          category: safeCategory,
           content: contextText,
-          summary,
-          files,
-          branch,
+          summary: safeSummary,
+          files: safeFiles,
+          branch: branch ? truncate(branch, MAX_LENGTHS.branch) : undefined,
           task_id,
         });
 
-        (runtime as IAgentRuntime).logger.info(
-          `Stored: [${category}] ${files.length} files (branch: ${branch || 'main'})`
+        rt.logger.info(
+          `Stored: [${safeCategory}] ${safeFiles.length} files (branch: ${branch || 'main'})`
         );
-        res.json({ success: true, memoryId: data.id, files: files.length });
+        res.json({ success: true, memoryId: data.id, files: safeFiles.length });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        (runtime as IAgentRuntime).logger.error('Memory store error:', msg);
-        res.status(500).json({ error: msg });
+        const rt = runtime as IAgentRuntime;
+        rt.logger.error('Memory store error:', error instanceof Error ? error.message : String(error));
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
@@ -56,29 +66,34 @@ export const memoryRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
-        const { query, limit = '5', project, category, branch } = req.query as Record<string, string>;
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
+        const { query, limit, project, category, branch } = req.query as Record<string, string>;
         if (!query) {
           res.status(400).json({ error: 'Query required' });
           return;
         }
 
-        const memoryService = (runtime as IAgentRuntime).getService<MemoryService>('itachi-memory');
+        const memoryService = rt.getService<MemoryService>('itachi-memory');
         if (!memoryService) {
           res.status(503).json({ error: 'Memory service not available' });
           return;
         }
 
+        const safeQuery = truncate(query, MAX_LENGTHS.query);
+        const safeLimit = clampLimit(limit, 5, 50);
+
         const memories = await memoryService.searchMemories(
-          query,
-          project,
-          parseInt(limit),
-          branch,
-          category
+          safeQuery,
+          project ? truncate(project, MAX_LENGTHS.project) : undefined,
+          safeLimit,
+          branch ? truncate(branch, MAX_LENGTHS.branch) : undefined,
+          category ? truncate(category, MAX_LENGTHS.category) : undefined
         );
-        res.json({ query, count: memories.length, results: memories });
+        res.json({ count: memories.length, results: memories });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
@@ -88,23 +103,25 @@ export const memoryRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
-        const { limit = '10', project, branch } = req.query as Record<string, string>;
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
 
-        const memoryService = (runtime as IAgentRuntime).getService<MemoryService>('itachi-memory');
+        const { limit, project, branch } = req.query as Record<string, string>;
+
+        const memoryService = rt.getService<MemoryService>('itachi-memory');
         if (!memoryService) {
           res.status(503).json({ error: 'Memory service not available' });
           return;
         }
 
         const memories = await memoryService.getRecentMemories(
-          project,
-          parseInt(limit),
-          branch
+          project ? truncate(project, MAX_LENGTHS.project) : undefined,
+          clampLimit(limit, 10, 100),
+          branch ? truncate(branch, MAX_LENGTHS.branch) : undefined
         );
         res.json({ count: memories.length, recent: memories });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
@@ -114,19 +131,23 @@ export const memoryRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
         const { project } = req.query as Record<string, string>;
 
-        const memoryService = (runtime as IAgentRuntime).getService<MemoryService>('itachi-memory');
+        const memoryService = rt.getService<MemoryService>('itachi-memory');
         if (!memoryService) {
           res.status(503).json({ error: 'Memory service not available' });
           return;
         }
 
-        const stats = await memoryService.getStats(project);
+        const stats = await memoryService.getStats(
+          project ? truncate(project, MAX_LENGTHS.project) : undefined
+        );
         res.json(stats);
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },

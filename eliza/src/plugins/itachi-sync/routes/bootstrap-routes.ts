@@ -1,9 +1,10 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { TaskService } from '../../itachi-tasks/services/task-service.js';
+import { checkAuth } from '../utils.js';
 
 export const bootstrapRoutes: Route[] = [
-  // Health check
+  // Health check — no auth (Railway healthcheck needs it)
   {
     type: 'GET',
     path: '/health',
@@ -18,13 +19,21 @@ export const bootstrapRoutes: Route[] = [
         let taskCount = 0;
 
         if (memoryService) {
-          const stats = await memoryService.getStats();
-          memCount = stats.total;
+          try {
+            const stats = await memoryService.getStats();
+            memCount = stats.total;
+          } catch {
+            // stats query failed — report degraded but don't crash
+          }
         }
 
         if (taskService) {
-          const tasks = await taskService.getActiveTasks();
-          taskCount = tasks.length;
+          try {
+            const tasks = await taskService.getActiveTasks();
+            taskCount = tasks.length;
+          } catch {
+            // task query failed
+          }
         }
 
         res.json({
@@ -33,22 +42,21 @@ export const bootstrapRoutes: Route[] = [
           active_tasks: taskCount,
           telegram: 'active',
         });
-      } catch (error) {
-        res.json({
-          status: 'degraded',
-          error: error instanceof Error ? error.message : String(error),
-        });
+      } catch {
+        res.json({ status: 'degraded' });
       }
     },
   },
 
-  // Bootstrap endpoint — encrypted config for new machines
+  // Bootstrap endpoint — encrypted config for new machines (REQUIRES AUTH)
   {
     type: 'GET',
     path: '/api/bootstrap',
     public: true,
     handler: async (req, res, runtime) => {
       const rt = runtime as IAgentRuntime;
+      if (!checkAuth(req, res, rt)) return;
+
       const config = rt.getSetting('ITACHI_BOOTSTRAP_CONFIG');
       const salt = rt.getSetting('ITACHI_BOOTSTRAP_SALT');
 

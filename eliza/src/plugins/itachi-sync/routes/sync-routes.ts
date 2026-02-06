@@ -1,5 +1,6 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { SyncService } from '../services/sync-service.js';
+import { checkAuth, sanitizeError, truncate, MAX_LENGTHS } from '../utils.js';
 
 export const syncRoutes: Route[] = [
   // Push encrypted file
@@ -9,6 +10,9 @@ export const syncRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
         const { repo_name, file_path, encrypted_data, salt, content_hash, updated_by } = req.body;
 
         if (!repo_name || !file_path || !encrypted_data || !salt || !content_hash || !updated_by) {
@@ -18,29 +22,34 @@ export const syncRoutes: Route[] = [
           return;
         }
 
-        const syncService = (runtime as IAgentRuntime).getService<SyncService>('itachi-sync');
+        // Validate encrypted_data size
+        if (typeof encrypted_data === 'string' && encrypted_data.length > MAX_LENGTHS.encrypted_data) {
+          res.status(413).json({ error: 'Payload too large' });
+          return;
+        }
+
+        const syncService = rt.getService<SyncService>('itachi-sync');
         if (!syncService) {
           res.status(503).json({ error: 'Sync service not available' });
           return;
         }
 
         const result = await syncService.pushFile({
-          repo_name,
-          file_path,
+          repo_name: truncate(repo_name, MAX_LENGTHS.project),
+          file_path: truncate(file_path, MAX_LENGTHS.file_path),
           encrypted_data,
           salt,
           content_hash,
-          updated_by,
+          updated_by: truncate(updated_by, 200),
         });
 
-        (runtime as IAgentRuntime).logger.info(
+        rt.logger.info(
           `[sync] Pushed ${repo_name}/${file_path} v${result.version} by ${updated_by}`
         );
         res.json({ success: true, version: result.version, file_path: result.file_path });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        (runtime as IAgentRuntime).logger.error('[sync] Push error:', msg);
-        res.status(500).json({ error: msg });
+        (runtime as IAgentRuntime).logger.error('[sync] Push error:', error instanceof Error ? error.message : String(error));
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
@@ -52,11 +61,18 @@ export const syncRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
         const repo = req.params.repo;
-        // Express wildcard capture for the file path
         const filePath = req.params[0];
 
-        const syncService = (runtime as IAgentRuntime).getService<SyncService>('itachi-sync');
+        if (!repo || !filePath) {
+          res.status(400).json({ error: 'repo and file path required' });
+          return;
+        }
+
+        const syncService = rt.getService<SyncService>('itachi-sync');
         if (!syncService) {
           res.status(503).json({ error: 'Sync service not available' });
           return;
@@ -70,8 +86,7 @@ export const syncRoutes: Route[] = [
 
         res.json(file);
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
@@ -83,9 +98,12 @@ export const syncRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
         const repo = req.params.repo;
 
-        const syncService = (runtime as IAgentRuntime).getService<SyncService>('itachi-sync');
+        const syncService = rt.getService<SyncService>('itachi-sync');
         if (!syncService) {
           res.status(503).json({ error: 'Sync service not available' });
           return;
@@ -94,8 +112,7 @@ export const syncRoutes: Route[] = [
         const files = await syncService.listFiles(repo);
         res.json({ repo_name: repo, files });
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        res.status(500).json({ error: msg });
+        res.status(500).json({ error: sanitizeError(error) });
       }
     },
   },
