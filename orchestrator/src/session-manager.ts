@@ -1,7 +1,32 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as readline from 'readline';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { config } from './config';
 import type { Task, ClaudeStreamEvent } from './types';
+
+function loadApiKeys(): Record<string, string> {
+    const keys: Record<string, string> = {};
+    // Check both locations: primary (~/.itachi-api-keys) and
+    // sync-pulled fallback (~/.claude/api-keys)
+    const locations = [
+        path.join(os.homedir(), '.claude', 'api-keys'),
+        path.join(os.homedir(), '.itachi-api-keys'),  // Higher priority — loaded second to override
+    ];
+    for (const keysFile of locations) {
+        try {
+            const content = fs.readFileSync(keysFile, 'utf8');
+            for (const line of content.split('\n')) {
+                const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.+)$/);
+                if (match) keys[match[1]] = match[2];
+            }
+        } catch {
+            // File doesn't exist or can't be read — not an error
+        }
+    }
+    return keys;
+}
 
 export interface SessionResult {
     sessionId: string | null;
@@ -45,10 +70,13 @@ export function spawnClaudeSession(task: Task, workspacePath: string): {
 
     console.log(`[session] Spawning claude in ${workspacePath} (model: ${model}, budget: $${budget})`);
 
+    const apiKeys = loadApiKeys();
+
     const proc = spawn('claude', args, {
         cwd: workspacePath,
         env: {
             ...process.env,
+            ...apiKeys,
             ITACHI_ENABLED: '1',
             ITACHI_TASK_ID: task.id,
         },

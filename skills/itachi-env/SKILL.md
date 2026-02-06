@@ -1,6 +1,15 @@
 # /itachi-env — Encrypted File Sync
 
-Manual push/pull/status/diff for `.env` and `.md` files synced across machines via encrypted Supabase storage.
+Manual push/pull/status/diff for `.env`, `.md`, skills, and commands synced across machines via encrypted Supabase storage.
+
+## Synced Categories
+
+| Category | Local Path | Repo | Sync file_path |
+|----------|-----------|------|----------------|
+| Project .env/.md | `<cwd>/.env`, `<cwd>/*.md` | `<project>` | `<filename>` |
+| Project skills | `<cwd>/.claude/skills/foo/SKILL.md` | `<project>` | `.claude/skills/foo/SKILL.md` |
+| User skills | `~/.claude/skills/foo/SKILL.md` | `_global` | `skills/foo/SKILL.md` |
+| User commands | `~/.claude/commands/recall.md` | `_global` | `commands/recall.md` |
 
 ## Prerequisites
 - `~/.itachi-key` must exist (passphrase file)
@@ -29,7 +38,7 @@ For ALL subcommands, use `node -e` inline with the crypto pattern below. The pro
 
 ### status
 
-List all synced files for this project. Run:
+List all synced files for this project AND global (`_global`) repo. Run:
 
 ```bash
 node -e "
@@ -38,21 +47,46 @@ const http = require('http');
 const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
 const project = require('path').basename(process.cwd());
 
-const u = new URL(syncApi + '/list/' + encodeURIComponent(project));
-const mod = u.protocol === 'https:' ? https : http;
-mod.get(u, { rejectUnauthorized: false }, (res) => {
-    let d = '';
-    res.on('data', c => d += c);
-    res.on('end', () => {
-        const r = JSON.parse(d);
-        if (!r.files || r.files.length === 0) { console.log('No synced files for ' + project); return; }
-        console.log('Synced files for ' + project + ':');
+function httpGet(url) {
+    return new Promise((resolve, reject) => {
+        const u = new URL(url);
+        const mod = u.protocol === 'https:' ? https : http;
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+            let d = '';
+            res.on('data', c => d += c);
+            res.on('end', () => {
+                if (res.statusCode >= 400) reject(new Error(d));
+                else resolve(JSON.parse(d));
+            });
+        }).on('error', reject);
+    });
+}
+
+(async () => {
+    // Project files
+    const projList = await httpGet(syncApi + '/list/' + encodeURIComponent(project));
+    if (projList.files && projList.files.length > 0) {
+        console.log('Project synced files (' + project + '):');
         console.log('');
-        r.files.forEach(f => {
+        projList.files.forEach(f => {
             console.log('  ' + f.file_path + '  v' + f.version + '  by ' + f.updated_by + '  ' + f.updated_at);
         });
-    });
-}).on('error', e => console.error('Error:', e.message));
+    } else {
+        console.log('No synced files for project ' + project);
+    }
+    console.log('');
+    // Global files (skills + commands)
+    const globalList = await httpGet(syncApi + '/list/_global');
+    if (globalList.files && globalList.files.length > 0) {
+        console.log('Global synced files (_global):');
+        console.log('');
+        globalList.files.forEach(f => {
+            console.log('  ' + f.file_path + '  v' + f.version + '  by ' + f.updated_by + '  ' + f.updated_at);
+        });
+    } else {
+        console.log('No global synced files');
+    }
+})().catch(e => console.error('Error:', e.message));
 "
 ```
 
@@ -60,9 +94,11 @@ Display the output to the user in a formatted table.
 
 ### push
 
-Encrypt and push a file (or all .env/.md files) to the sync API.
+Encrypt and push a file (or all syncable files) to the sync API.
 
-If `[file]` is specified, push just that file. Otherwise, find all `.env` and `*.md` files in the current directory (non-recursive) and push each.
+If `[file]` is specified, push just that file. Otherwise, discover and push all syncable files:
+- Project: `.env`, `.env.*`, `*.md` in cwd (non-recursive) + `.claude/skills/**` in cwd (recursive)
+- Global: `~/.claude/skills/**` and `~/.claude/commands/**` (recursive)
 
 For each file:
 1. Read `~/.itachi-key` for passphrase
@@ -81,20 +117,77 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const os = require('os');
 
 const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
 const project = path.basename(process.cwd());
-const keyFile = path.join(require('os').homedir(), '.itachi-key');
+const keyFile = path.join(os.homedir(), '.itachi-key');
 const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
 const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
 const targetFile = process.argv[1] || null;
 
-const files = targetFile ? [targetFile] : fs.readdirSync('.').filter(f => f === '.env' || f.startsWith('.env.') || f.endsWith('.md'));
+function findFiles(dir, prefix) {
+    const results = [];
+    if (!fs.existsSync(dir)) return results;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? prefix + '/' + entry.name : entry.name;
+        if (entry.isDirectory()) results.push(...findFiles(path.join(dir, entry.name), rel));
+        else results.push(rel);
+    }
+    return results;
+}
 
-for (const fileName of files) {
-    if (!fs.existsSync(fileName)) { console.log('  SKIP ' + fileName + ' (not found)'); continue; }
-    let content = fs.readFileSync(fileName, 'utf8');
-    if (fileName === '.env' || fileName.startsWith('.env.')) {
+// Build list of { absPath, repoName, syncPath }
+const items = [];
+
+if (targetFile) {
+    // Single file — determine repo and sync path
+    const abs = path.resolve(targetFile);
+    const cwd = process.cwd();
+    const home = os.homedir();
+    const projSkills = path.join(cwd, '.claude', 'skills') + path.sep;
+    const userSkills = path.join(home, '.claude', 'skills') + path.sep;
+    const userCmds = path.join(home, '.claude', 'commands') + path.sep;
+
+    if (abs.startsWith(projSkills)) {
+        items.push({ absPath: abs, repoName: project, syncPath: path.relative(cwd, abs).replace(/\\\\/g, '/') });
+    } else if (abs.startsWith(userSkills)) {
+        items.push({ absPath: abs, repoName: '_global', syncPath: 'skills/' + path.relative(path.join(home, '.claude', 'skills'), abs).replace(/\\\\/g, '/') });
+    } else if (abs.startsWith(userCmds)) {
+        items.push({ absPath: abs, repoName: '_global', syncPath: 'commands/' + path.relative(path.join(home, '.claude', 'commands'), abs).replace(/\\\\/g, '/') });
+    } else {
+        items.push({ absPath: abs, repoName: project, syncPath: path.basename(abs) });
+    }
+} else {
+    // Discover all syncable files
+    // 1. Project root .env and .md
+    for (const f of fs.readdirSync('.')) {
+        if (f === '.env' || f.startsWith('.env.') || f.endsWith('.md')) {
+            items.push({ absPath: path.resolve(f), repoName: project, syncPath: f });
+        }
+    }
+    // 2. Project skills
+    const projSkillsDir = path.join(process.cwd(), '.claude', 'skills');
+    for (const rel of findFiles(projSkillsDir, '')) {
+        items.push({ absPath: path.join(projSkillsDir, rel), repoName: project, syncPath: '.claude/skills/' + rel });
+    }
+    // 3. Global skills
+    const userSkillsDir = path.join(os.homedir(), '.claude', 'skills');
+    for (const rel of findFiles(userSkillsDir, '')) {
+        items.push({ absPath: path.join(userSkillsDir, rel), repoName: '_global', syncPath: 'skills/' + rel });
+    }
+    // 4. Global commands
+    const userCmdsDir = path.join(os.homedir(), '.claude', 'commands');
+    for (const rel of findFiles(userCmdsDir, '')) {
+        items.push({ absPath: path.join(userCmdsDir, rel), repoName: '_global', syncPath: 'commands/' + rel });
+    }
+}
+
+for (const item of items) {
+    if (!fs.existsSync(item.absPath)) { console.log('  SKIP ' + item.syncPath + ' (not found)'); continue; }
+    let content = fs.readFileSync(item.absPath, 'utf8');
+    const fn = path.basename(item.absPath);
+    if (fn === '.env' || fn.startsWith('.env.')) {
         const re = new RegExp('^(' + machineKeys.join('|') + ')=.*$', 'gm');
         content = content.replace(re, '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
     }
@@ -106,14 +199,14 @@ for (const fileName of files) {
     const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()]);
     const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);
 
-    const body = JSON.stringify({ repo_name: project, file_path: fileName, encrypted_data: packed.toString('base64'), salt: salt.toString('base64'), content_hash: contentHash, updated_by: require('os').hostname() });
+    const body = JSON.stringify({ repo_name: item.repoName, file_path: item.syncPath, encrypted_data: packed.toString('base64'), salt: salt.toString('base64'), content_hash: contentHash, updated_by: os.hostname() });
     const url = new URL(syncApi + '/push');
     const mod = url.protocol === 'https:' ? https : http;
     const req = mod.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, rejectUnauthorized: false }, (res) => {
         let d = ''; res.on('data', c => d += c);
-        res.on('end', () => { const r = JSON.parse(d); console.log('  PUSH ' + fileName + ' -> v' + (r.version || '?')); });
+        res.on('end', () => { const r = JSON.parse(d); console.log('  PUSH [' + item.repoName + '] ' + item.syncPath + ' -> v' + (r.version || '?')); });
     });
-    req.on('error', e => console.log('  ERR  ' + fileName + ': ' + e.message));
+    req.on('error', e => console.log('  ERR  ' + item.syncPath + ': ' + e.message));
     req.write(body); req.end();
 }
 " "FILE_ARG_HERE"
@@ -123,13 +216,14 @@ Replace `FILE_ARG_HERE` with the actual file argument, or omit process.argv[1] u
 
 ### pull
 
-Pull and decrypt a file (or all synced files) from the sync API.
+Pull and decrypt files from the sync API. Pulls both project and global repos.
 
 For each file:
 1. GET `/api/sync/pull/<repo>/<file>` → get encrypted data
 2. Decrypt with passphrase from `~/.itachi-key`
 3. For `.env`: merge (remote wins for shared keys, local-only preserved, machine keys untouched)
-4. For `.md`: whole-file replacement
+4. For all others (`.md`, skills, commands): whole-file replacement
+5. Project files write to `<cwd>/<file_path>`, global files write to `~/.claude/<file_path>`
 
 Use this node inline pattern:
 
@@ -140,10 +234,11 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const os = require('os');
 
 const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
 const project = path.basename(process.cwd());
-const keyFile = path.join(require('os').homedir(), '.itachi-key');
+const keyFile = path.join(os.homedir(), '.itachi-key');
 const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
 const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
 const targetFile = process.argv[1] || null;
@@ -179,35 +274,45 @@ function mergeEnv(local, remote) {
     return Object.entries(lkv).map(([k,v]) => k+'='+v).join('\n') + '\n';
 }
 
-(async () => {
-    const list = await httpGet(syncApi + '/list/' + encodeURIComponent(project));
-    const files = targetFile ? list.files.filter(f => f.file_path === targetFile) : list.files;
-    if (!files || files.length === 0) { console.log('No files to pull'); return; }
+async function pullRepo(repoName, baseDir, label) {
+    const list = await httpGet(syncApi + '/list/' + encodeURIComponent(repoName));
+    const files = targetFile ? (list.files || []).filter(f => f.file_path === targetFile) : (list.files || []);
+    if (files.length === 0) { console.log('No files to pull for ' + label); return; }
     for (const f of files) {
-        const fd = await httpGet(syncApi + '/pull/' + encodeURIComponent(project) + '/' + f.file_path);
+        const localPath = path.join(baseDir, f.file_path);
+        const fd = await httpGet(syncApi + '/pull/' + encodeURIComponent(repoName) + '/' + f.file_path);
         const remote = decrypt(fd.encrypted_data, fd.salt, passphrase);
-        const fn = f.file_path;
+        const fn = path.basename(f.file_path);
         if (fn === '.env' || fn.startsWith('.env.')) {
-            if (fs.existsSync(fn)) {
-                const merged = mergeEnv(fs.readFileSync(fn, 'utf8'), remote);
-                fs.writeFileSync(fn, merged);
-                console.log('  PULL ' + fn + ' (merged, v' + f.version + ')');
+            if (fs.existsSync(localPath)) {
+                const merged = mergeEnv(fs.readFileSync(localPath, 'utf8'), remote);
+                fs.writeFileSync(localPath, merged);
+                console.log('  PULL [' + repoName + '] ' + f.file_path + ' (merged, v' + f.version + ')');
             } else {
-                fs.writeFileSync(fn, remote);
-                console.log('  PULL ' + fn + ' (new, v' + f.version + ')');
+                fs.mkdirSync(path.dirname(localPath), { recursive: true });
+                fs.writeFileSync(localPath, remote);
+                console.log('  PULL [' + repoName + '] ' + f.file_path + ' (new, v' + f.version + ')');
             }
         } else {
-            fs.writeFileSync(fn, remote);
-            console.log('  PULL ' + fn + ' (replaced, v' + f.version + ')');
+            fs.mkdirSync(path.dirname(localPath), { recursive: true });
+            fs.writeFileSync(localPath, remote);
+            console.log('  PULL [' + repoName + '] ' + f.file_path + ' (replaced, v' + f.version + ')');
         }
     }
+}
+
+(async () => {
+    await pullRepo(project, process.cwd(), 'project ' + project);
+    await pullRepo('_global', path.join(os.homedir(), '.claude'), 'global');
 })().catch(e => console.error('Error:', e.message));
 " "FILE_ARG_HERE"
 ```
 
 ### diff
 
-Show differences between local and remote without writing. For each synced file:
+Show differences between local and remote without writing. Diffs both project and global repos.
+
+For each synced file:
 1. Pull and decrypt remote version
 2. Compare with local file
 3. Display diff (added/removed lines)
@@ -219,10 +324,11 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const os = require('os');
 
 const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
 const project = path.basename(process.cwd());
-const keyFile = path.join(require('os').homedir(), '.itachi-key');
+const keyFile = path.join(os.homedir(), '.itachi-key');
 const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
 const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
 const targetFile = process.argv[1] || null;
@@ -252,23 +358,25 @@ function stripMachine(content) {
     return content.replace(new RegExp('^(' + machineKeys.join('|') + ')=.*$', 'gm'), '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
-(async () => {
-    const list = await httpGet(syncApi + '/list/' + encodeURIComponent(project));
-    const files = targetFile ? list.files.filter(f => f.file_path === targetFile) : list.files;
-    if (!files || files.length === 0) { console.log('No synced files to diff'); return; }
+async function diffRepo(repoName, baseDir, label) {
+    const list = await httpGet(syncApi + '/list/' + encodeURIComponent(repoName));
+    const files = targetFile ? (list.files || []).filter(f => f.file_path === targetFile) : (list.files || []);
+    if (files.length === 0) { console.log('No synced files to diff for ' + label); return; }
 
+    console.log('=== ' + label + ' ===');
     for (const f of files) {
+        const localPath = path.join(baseDir, f.file_path);
         console.log('--- ' + f.file_path + ' (remote v' + f.version + ' by ' + f.updated_by + ') ---');
         let localContent = '';
-        if (fs.existsSync(f.file_path)) {
-            localContent = fs.readFileSync(f.file_path, 'utf8');
+        if (fs.existsSync(localPath)) {
+            localContent = fs.readFileSync(localPath, 'utf8');
             const fn = path.basename(f.file_path);
             if (fn === '.env' || fn.startsWith('.env.')) localContent = stripMachine(localContent);
         }
         const localHash = crypto.createHash('sha256').update(localContent).digest('hex');
         if (localHash === f.content_hash) { console.log('  (identical)\n'); continue; }
 
-        const fd = await httpGet(syncApi + '/pull/' + encodeURIComponent(project) + '/' + f.file_path);
+        const fd = await httpGet(syncApi + '/pull/' + encodeURIComponent(repoName) + '/' + f.file_path);
         const remote = decrypt(fd.encrypted_data, fd.salt, passphrase);
 
         const localLines = localContent.split('\n');
@@ -279,9 +387,15 @@ function stripMachine(content) {
         const removed = localLines.filter(l => l && !remoteSet.has(l));
         if (added.length > 0) { console.log('  + ' + added.join('\n  + ')); }
         if (removed.length > 0) { console.log('  - ' + removed.join('\n  - ')); }
-        if (added.length === 0 && removed.length === 0 && !fs.existsSync(f.file_path)) { console.log('  (new file - not present locally)'); }
+        if (added.length === 0 && removed.length === 0 && !fs.existsSync(localPath)) { console.log('  (new file - not present locally)'); }
         console.log('');
     }
+}
+
+(async () => {
+    await diffRepo(project, process.cwd(), 'Project: ' + project);
+    console.log('');
+    await diffRepo('_global', path.join(os.homedir(), '.claude'), 'Global');
 })().catch(e => console.error('Error:', e.message));
 " "FILE_ARG_HERE"
 ```

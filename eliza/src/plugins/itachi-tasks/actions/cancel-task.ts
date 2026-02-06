@@ -1,0 +1,82 @@
+import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
+import { TaskService } from '../services/task-service.js';
+
+export const cancelTaskAction: Action = {
+  name: 'CANCEL_TASK',
+  description: 'Cancel a queued or running task',
+  similes: ['cancel task', 'stop task', 'abort task', 'kill task'],
+  examples: [
+    [
+      { name: 'user', content: { text: '/cancel a1b2c3d4' } },
+      { name: 'Itachi', content: { text: 'Task a1b2c3d4 cancelled.' } },
+    ],
+    [
+      { name: 'user', content: { text: 'Cancel that last task' } },
+      { name: 'Itachi', content: { text: 'Task e5f6g7h8 cancelled.' } },
+    ],
+  ],
+
+  validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+    const text = message.content?.text?.toLowerCase() || '';
+    return text.includes('cancel') || text.includes('abort') || text.includes('stop task');
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    message: Memory,
+    _state?: State,
+    _options?: unknown,
+    callback?: HandlerCallback
+  ): Promise<ActionResult> => {
+    try {
+      const taskService = runtime.getService<TaskService>('itachi-tasks');
+      if (!taskService) {
+        return { success: false, error: 'Task service not available' };
+      }
+
+      const text = message.content?.text || '';
+      const telegramUserId = (message.content as Record<string, unknown>).telegram_user_id as number | undefined;
+
+      // Extract task ID prefix
+      const match = text.match(/\/cancel\s+(\S+)/) || text.match(/cancel\s+(?:task\s+)?(\S{4,})/i);
+
+      let task;
+      if (match) {
+        task = await taskService.getTaskByPrefix(match[1], telegramUserId);
+      } else {
+        // Cancel the most recent queued/running task
+        const active = await taskService.getActiveTasks();
+        task = active.length > 0 ? active[active.length - 1] : null;
+      }
+
+      if (!task) {
+        if (callback) await callback({ text: 'Task not found.' });
+        return { success: false, error: 'Task not found' };
+      }
+
+      if (!['queued', 'claimed', 'running'].includes(task.status)) {
+        if (callback) {
+          await callback({
+            text: `Task ${task.id.substring(0, 8)} is already ${task.status}, cannot cancel.`,
+          });
+        }
+        return { success: false, error: `Task already ${task.status}` };
+      }
+
+      await taskService.cancelTask(task.id);
+      const shortId = task.id.substring(0, 8);
+
+      if (callback) {
+        await callback({ text: `Task ${shortId} cancelled.` });
+      }
+
+      return {
+        success: true,
+        data: { taskId: task.id, shortId, previousStatus: task.status },
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { success: false, error: msg };
+    }
+  },
+};

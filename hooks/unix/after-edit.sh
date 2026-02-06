@@ -51,29 +51,57 @@ curl -s -k -X POST "${MEMORY_API}/code-change" \
   --max-time 10 > /dev/null 2>&1
 
 # ============ Encrypted File Sync ============
-# Push .env and .md files to encrypted sync storage
+# Push .env, .md, skills, and commands to encrypted sync storage
 
 ITACHI_KEY_FILE="$HOME/.itachi-key"
 
 # Only sync if passphrase exists
 if [ -f "$ITACHI_KEY_FILE" ] && [ -f "$FILE_PATH" ]; then
-    # Check if file is .env or .md
+    # Determine sync repo and relative file path
+    SYNC_REPO=""
+    SYNC_FILE_PATH=""
+
+    # 1. .env or .md in project root → repo=<project>, file_path=<filename>
     case "$FILENAME" in
         .env|.env.*|*.md)
-            # Machine-specific keys to strip from .env before syncing
-            MACHINE_KEYS="ITACHI_ORCHESTRATOR_ID|ITACHI_WORKSPACE_DIR|ITACHI_PROJECT_PATHS"
+            SYNC_REPO="$PROJECT_NAME"
+            SYNC_FILE_PATH="$FILENAME"
+            ;;
+    esac
 
-            node -e "
+    # 2-4. Skills and commands (check full path)
+    if [ -z "$SYNC_REPO" ]; then
+        case "$FILE_PATH" in
+            "$PWD/.claude/skills/"*)
+                SYNC_REPO="$PROJECT_NAME"
+                SYNC_FILE_PATH="${FILE_PATH#$PWD/}"
+                ;;
+            "$HOME/.claude/skills/"*)
+                SYNC_REPO="_global"
+                SYNC_FILE_PATH="skills/${FILE_PATH#$HOME/.claude/skills/}"
+                ;;
+            "$HOME/.claude/commands/"*)
+                SYNC_REPO="_global"
+                SYNC_FILE_PATH="commands/${FILE_PATH#$HOME/.claude/commands/}"
+                ;;
+        esac
+    fi
+
+    if [ -n "$SYNC_REPO" ]; then
+        MACHINE_KEYS="ITACHI_ORCHESTRATOR_ID|ITACHI_WORKSPACE_DIR|ITACHI_PROJECT_PATHS"
+
+        node -e "
 const crypto = require('crypto');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
 
 const filePath = process.argv[1];
-const project = process.argv[2];
+const repoName = process.argv[2];
 const keyFile = process.argv[3];
 const syncApi = process.argv[4];
 const machineKeys = process.argv[5];
+const syncFilePath = process.argv[6];
 
 try {
     const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
@@ -98,8 +126,8 @@ try {
     const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);
 
     const body = JSON.stringify({
-        repo_name: project,
-        file_path: fileName,
+        repo_name: repoName,
+        file_path: syncFilePath,
         encrypted_data: packed.toString('base64'),
         salt: salt.toString('base64'),
         content_hash: contentHash,
@@ -118,9 +146,8 @@ try {
     req.write(body);
     req.end();
 } catch(e) {}
-" "$FILE_PATH" "$PROJECT_NAME" "$ITACHI_KEY_FILE" "$SYNC_API" "$MACHINE_KEYS" 2>/dev/null &
-            ;;
-    esac
+" "$FILE_PATH" "$SYNC_REPO" "$ITACHI_KEY_FILE" "$SYNC_API" "$MACHINE_KEYS" "$SYNC_FILE_PATH" 2>/dev/null &
+    fi
 fi
 
 exit 0

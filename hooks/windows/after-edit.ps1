@@ -71,13 +71,45 @@ try {
     $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"
 
     if ((Test-Path $itachiKeyFile) -and (Test-Path $filePath)) {
-        # Check if file is .env or .md
-        $shouldSync = $false
+        # Determine sync repo and relative file path
+        $syncRepo = $null
+        $syncFilePath = $null
+        $cwd = (Get-Location).Path
+        $userHome = $env:USERPROFILE
+
+        # 1. .env or .md in project root
         if ($fileName -eq '.env' -or $fileName -match '^\.env\.' -or $fileName -match '\.md$') {
-            $shouldSync = $true
+            $syncRepo = $project
+            $syncFilePath = $fileName
         }
 
-        if ($shouldSync) {
+        # 2. Project skills: <cwd>/.claude/skills/**
+        if (-not $syncRepo) {
+            $projectSkillsPrefix = Join-Path $cwd ".claude\skills\"
+            $userSkillsPrefix = Join-Path $userHome ".claude\skills\"
+            $userCommandsPrefix = Join-Path $userHome ".claude\commands\"
+            # Normalize path separators for comparison
+            $normalizedFilePath = $filePath.Replace('/', '\')
+
+            if ($normalizedFilePath.StartsWith($projectSkillsPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $syncRepo = $project
+                $syncFilePath = $normalizedFilePath.Substring($cwd.Length + 1).Replace('\', '/')
+            }
+            # 3. User skills: ~/.claude/skills/**
+            elseif ($normalizedFilePath.StartsWith($userSkillsPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $syncRepo = "_global"
+                $relativePart = $normalizedFilePath.Substring($userSkillsPrefix.Length).Replace('\', '/')
+                $syncFilePath = "skills/$relativePart"
+            }
+            # 4. User commands: ~/.claude/commands/**
+            elseif ($normalizedFilePath.StartsWith($userCommandsPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $syncRepo = "_global"
+                $relativePart = $normalizedFilePath.Substring($userCommandsPrefix.Length).Replace('\', '/')
+                $syncFilePath = "commands/$relativePart"
+            }
+        }
+
+        if ($syncRepo) {
             $machineKeys = @('ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS')
 
             # Use node for crypto (same pattern as unix hook)
@@ -88,10 +120,11 @@ const https = require('https');
 const http = require('http');
 
 const filePath = process.argv[1];
-const project = process.argv[2];
+const repoName = process.argv[2];
 const keyFile = process.argv[3];
 const syncApi = process.argv[4];
 const machineKeysStr = process.argv[5];
+const syncFilePath = process.argv[6];
 
 try {
     const machineKeys = machineKeysStr.split(',');
@@ -114,8 +147,8 @@ try {
     const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);
 
     const body = JSON.stringify({
-        repo_name: project,
-        file_path: fileName,
+        repo_name: repoName,
+        file_path: syncFilePath,
         encrypted_data: packed.toString('base64'),
         salt: salt.toString('base64'),
         content_hash: contentHash,
@@ -138,7 +171,7 @@ try {
             $machineKeysJoined = $machineKeys -join ','
             Start-Process -NoNewWindow -FilePath "node" -ArgumentList @(
                 "-e", $nodeScript,
-                $filePath, $project, $itachiKeyFile, $SYNC_API, $machineKeysJoined
+                $filePath, $syncRepo, $itachiKeyFile, $SYNC_API, $machineKeysJoined, $syncFilePath
             ) -ErrorAction SilentlyContinue
         }
     }

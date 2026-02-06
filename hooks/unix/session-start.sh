@@ -137,6 +137,81 @@ function mergeEnv(localContent, remoteContent) {
     if [ -n "$SYNC_OUTPUT" ]; then
         echo "$SYNC_OUTPUT"
     fi
+
+    # ============ Global Sync (skills + commands) ============
+    GLOBAL_SYNC_OUTPUT=$(node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+
+const repoName = '_global';
+const keyFile = process.argv[1];
+const syncApi = process.argv[2];
+const targetDir = process.argv[3];
+
+function httpGet(url) {
+    return new Promise((resolve, reject) => {
+        const u = new URL(url);
+        const mod = u.protocol === 'https:' ? https : http;
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+            let d = '';
+            res.on('data', c => d += c);
+            res.on('end', () => {
+                if (res.statusCode >= 400) reject(new Error(d));
+                else resolve(JSON.parse(d));
+            });
+        }).on('error', reject);
+    });
+}
+
+function decrypt(encB64, saltB64, passphrase) {
+    const packed = Buffer.from(encB64, 'base64');
+    const salt = Buffer.from(saltB64, 'base64');
+    const iv = packed.subarray(0, 12);
+    const tag = packed.subarray(12, 28);
+    const ct = packed.subarray(28);
+    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(ct, null, 'utf8') + decipher.final('utf8');
+}
+
+(async () => {
+    try {
+        const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
+        const list = await httpGet(syncApi + '/list/' + encodeURIComponent(repoName));
+        if (!list.files || list.files.length === 0) return;
+
+        const output = [];
+        for (const f of list.files) {
+            const localPath = path.join(targetDir, f.file_path);
+            let localHash = null;
+
+            if (fs.existsSync(localPath)) {
+                const localContent = fs.readFileSync(localPath, 'utf8');
+                localHash = crypto.createHash('sha256').update(localContent).digest('hex');
+            }
+
+            if (localHash === f.content_hash) continue;
+
+            const fileData = await httpGet(syncApi + '/pull/' + encodeURIComponent(repoName) + '/' + f.file_path);
+            const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+
+            // All global files use whole-file replacement
+            fs.mkdirSync(path.dirname(localPath), { recursive: true });
+            fs.writeFileSync(localPath, remoteContent);
+            output.push('[sync] Updated ~/' + path.relative(require('os').homedir(), localPath) + ' (v' + f.version + ' by ' + f.updated_by + ')');
+        }
+        if (output.length > 0) console.log(output.join('\n'));
+    } catch(e) {}
+})();
+" "$ITACHI_KEY_FILE" "$SYNC_API" "$HOME/.claude" 2>/dev/null)
+
+    if [ -n "$GLOBAL_SYNC_OUTPUT" ]; then
+        echo "$GLOBAL_SYNC_OUTPUT"
+    fi
 fi
 
 # ============ Memory Context ============
