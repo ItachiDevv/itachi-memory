@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ITACHI System Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="modal-close" id="settings-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label" for="api-url-input">API Base URL</label>
+        <input type="text" id="api-url-input" class="form-input" placeholder="https://eliza-claude-production.up.railway.app">
+        <p class="form-hint">Leave empty for relative URLs (same origin).</p>
+
+        <label class="form-label" for="api-key-input">API Key (x-api-key)</label>
+        <input type="password" id="api-key-input" class="form-input" placeholder="Enter ITACHI_API_KEY">
+        <p class="form-hint">Sent as x-api-key header with every request.</p>
+
+        <label class="form-label" for="refresh-input">Auto-Refresh Interval (seconds)</label>
+        <input type="number" id="refresh-input" class="form-input" min="3" max="120" value="10">
+
+        <label class="form-label" for="orchestrator-url-input">Local Orchestrator URL</label>
+        <input type="text" id="orchestrator-url-input" class="form-input" placeholder="http://localhost:3001">
+        <p class="form-hint">For local orchestrator health polling.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="settings-cancel">Cancel</button>
+        <button class="btn btn-primary" id="settings-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Detail Modal -->
+  <div id="task-modal" class="modal-overlay hidden">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2>Task Detail</h2>
+        <button class="modal-close" id="task-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="task-modal-body">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-icon">&#x272A;</span>
+        <span class="logo-text">ITACHI</span>
+        <span class="logo-sub">SYSTEM DASHBOARD</span>
+      </div>
+    </div>
+    <div class="header-center">
+      <div class="status-pills">
+        <div class="pill" id="pill-health">
+          <span class="status-dot" id="dot-health"></span>
+          <span class="pill-label">Server</span>
+          <span class="pill-value" id="val-health">--</span>
+        </div>
+        <div class="pill">
+          <span class="pill-icon">&#128200;</span>
+          <span class="pill-label">Memories</span>
+          <span class="pill-value" id="val-memories">--</span>
+        </div>
+        <div class="pill">
+          <span class="pill-icon">&#9881;</span>
+          <span class="pill-label">Active Tasks</span>
+          <span class="pill-value" id="val-active-tasks">--</span>
+        </div>
+        <div class="pill">
+          <span class="pill-icon">&#128172;</span>
+          <span class="pill-label">Telegram</span>
+          <span class="pill-value" id="val-telegram">--</span>
+        </div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="refresh-control">
+        <span class="last-refresh" id="last-refresh">Never</span>
+        <label class="toggle-label">
+          <input type="checkbox" id="auto-refresh-toggle" checked>
+          <span class="toggle-switch"></span>
+          Auto
+        </label>
+        <button class="btn-icon" id="refresh-btn" title="Refresh Now">&#x21BB;</button>
+      </div>
+      <button class="btn-icon" id="settings-btn" title="Settings">&#9881;</button>
+    </div>
+  </header>
+
+  <!-- Main Grid -->
+  <main class="dashboard-grid">
+
+    <!-- Connected Machines -->
+    <section class="panel panel-machines" id="panel-machines">
+      <div class="panel-header">
+        <h3>Connected Machines</h3>
+        <span class="badge" id="machine-count">0</span>
+      </div>
+      <div class="panel-body" id="machines-list">
+        <div class="empty-state">No orchestrators detected</div>
+      </div>
+    </section>
+
+    <!-- Task Queue -->
+    <section class="panel panel-tasks" id="panel-tasks">
+      <div class="panel-header">
+        <h3>Task Queue</h3>
+        <div class="panel-controls">
+          <select id="task-filter-project" class="filter-select">
+            <option value="">All Projects</option>
+          </select>
+          <select id="task-filter-status" class="filter-select">
+            <option value="">All Statuses</option>
+            <option value="queued">Queued</option>
+            <option value="claimed">Claimed</option>
+            <option value="running">Running</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="timeout">Timeout</option>
+          </select>
+        </div>
+      </div>
+      <div class="kanban" id="kanban-board">
+        <div class="kanban-col">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Queued</span>
+            <span class="kanban-col-count" id="count-queued">0</span>
+          </div>
+          <div class="kanban-col-body" id="col-queued"></div>
+        </div>
+        <div class="kanban-col">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Running</span>
+            <span class="kanban-col-count" id="count-running">0</span>
+          </div>
+          <div class="kanban-col-body" id="col-running"></div>
+        </div>
+        <div class="kanban-col">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Completed</span>
+            <span class="kanban-col-count" id="count-completed">0</span>
+          </div>
+          <div class="kanban-col-body" id="col-completed"></div>
+        </div>
+        <div class="kanban-col">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Failed</span>
+            <span class="kanban-col-count" id="count-failed">0</span>
+          </div>
+          <div class="kanban-col-body" id="col-failed"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Memory Feed -->
+    <section class="panel panel-memory" id="panel-memory">
+      <div class="panel-header">
+        <h3>Memory Activity Feed</h3>
+        <span class="badge" id="memory-feed-count">0</span>
+      </div>
+      <div class="panel-body memory-feed" id="memory-feed">
+        <div class="empty-state">No recent memories</div>
+      </div>
+    </section>
+
+    <!-- Metrics Panel -->
+    <section class="panel panel-metrics" id="panel-metrics">
+      <div class="panel-header">
+        <h3>System Metrics</h3>
+      </div>
+      <div class="panel-body metrics-grid">
+        <div class="metric-card">
+          <h4>Memories by Category</h4>
+          <div class="chart-container">
+            <canvas id="chart-categories"></canvas>
+          </div>
+        </div>
+        <div class="metric-card">
+          <h4>Task Results</h4>
+          <div class="chart-container">
+            <canvas id="chart-task-results"></canvas>
+          </div>
+        </div>
+        <div class="metric-card metric-card-wide">
+          <h4>Top Edited Files</h4>
+          <div class="chart-container chart-container-bar">
+            <canvas id="chart-top-files"></canvas>
+          </div>
+        </div>
+        <div class="metric-card">
+          <h4>Memory Stats</h4>
+          <div class="stats-list" id="memory-stats-list">
+            <div class="stat-row"><span>Total</span><span id="stat-total">--</span></div>
+            <div class="stat-row"><span>Oldest</span><span id="stat-oldest">--</span></div>
+            <div class="stat-row"><span>Newest</span><span id="stat-newest">--</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Repo Registry -->
+    <section class="panel panel-repos" id="panel-repos">
+      <div class="panel-header">
+        <h3>Repo Registry</h3>
+        <span class="badge" id="repo-count">0</span>
+      </div>
+      <div class="panel-body" id="repos-list">
+        <div class="empty-state">No repos configured</div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Connection Error Banner -->
+  <div class="connection-banner hidden" id="connection-banner">
+    <span>&#9888; Unable to reach the Itachi server. Check your API URL and network connection.</span>
+    <button class="btn-icon" id="banner-dismiss">&times;</button>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
