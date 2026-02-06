@@ -221,21 +221,23 @@ export class TaskService extends Service {
   // Repo management
 
   async getMergedRepos(): Promise<RepoInfo[]> {
-    const knownRepos = (this.runtime.getSetting('ITACHI_REPOS') || '')
-      .split(',')
-      .map((r: string) => r.trim())
-      .filter(Boolean);
+    // Primary source: project_registry table
+    const { data: registry } = await this.supabase
+      .from('project_registry')
+      .select('name, repo_url')
+      .eq('active', true);
 
-    const { data } = await this.supabase.from('repos').select('name, repo_url');
-    const dbRepos = data || [];
+    if (registry && registry.length > 0) {
+      return registry
+        .sort((a: any, b: any) => a.name.localeCompare(b.name))
+        .map((r: any) => ({ name: r.name, repo_url: r.repo_url || null }));
+    }
 
-    const repoMap = new Map<string, string | null>();
-    for (const name of knownRepos) repoMap.set(name, null);
-    for (const r of dbRepos) repoMap.set(r.name, r.repo_url || null);
-
-    return [...repoMap.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, repo_url]) => ({ name, repo_url }));
+    // Fallback: legacy repos table (backward compat)
+    const { data: legacyData } = await this.supabase.from('repos').select('name, repo_url');
+    return (legacyData || [])
+      .sort((a: any, b: any) => a.name.localeCompare(b.name))
+      .map((r: any) => ({ name: r.name, repo_url: r.repo_url || null }));
   }
 
   async getMergedRepoNames(): Promise<string[]> {

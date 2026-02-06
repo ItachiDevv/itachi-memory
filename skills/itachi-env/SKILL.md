@@ -13,7 +13,7 @@ Manual push/pull/status/diff for `.env`, `.md`, skills, and commands synced acro
 
 ## Prerequisites
 - `~/.itachi-key` must exist (passphrase file)
-- Sync API at `https://eliza-claude-production.up.railway.app/api/sync`
+- Sync API at `http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync`
 
 ## Usage
 
@@ -25,7 +25,7 @@ Parse the user's subcommand from `$ARGUMENTS`:
 
 ## Implementation
 
-For ALL subcommands, use `node -e` inline with the crypto pattern below. The project name is `basename` of the current working directory. The sync API base is `https://eliza-claude-production.up.railway.app/api/sync`.
+For ALL subcommands, use `node -e` inline with the crypto pattern below. The project name is `basename` of the current working directory. The sync API base is `http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync`.
 
 ### Crypto Constants
 - **Cipher**: AES-256-GCM
@@ -44,7 +44,7 @@ List all synced files for this project AND global (`_global`) repo. Run:
 node -e "
 const https = require('https');
 const http = require('http');
-const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
+const syncApi = 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync';
 const project = require('path').basename(process.cwd());
 
 function httpGet(url) {
@@ -119,7 +119,7 @@ const https = require('https');
 const http = require('http');
 const os = require('os');
 
-const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
+const syncApi = 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync';
 const project = path.basename(process.cwd());
 const keyFile = path.join(os.homedir(), '.itachi-key');
 const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
@@ -236,7 +236,7 @@ const https = require('https');
 const http = require('http');
 const os = require('os');
 
-const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
+const syncApi = 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync';
 const project = path.basename(process.cwd());
 const keyFile = path.join(os.homedir(), '.itachi-key');
 const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
@@ -326,7 +326,7 @@ const https = require('https');
 const http = require('http');
 const os = require('os');
 
-const syncApi = 'https://eliza-claude-production.up.railway.app/api/sync';
+const syncApi = 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync';
 const project = path.basename(process.cwd());
 const keyFile = path.join(os.homedir(), '.itachi-key');
 const passphrase = fs.readFileSync(keyFile, 'utf8').trim();

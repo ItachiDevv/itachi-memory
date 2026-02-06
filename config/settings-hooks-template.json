@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command_template": {
+              "unix": "bash __HOOKS_DIR__/session-start.sh",
+              "windows": "powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"__HOOKS_DIR__\\session-start.ps1\""
+            },
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command_template": {
+              "unix": "bash __HOOKS_DIR__/after-edit.sh",
+              "windows": "powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"__HOOKS_DIR__\\after-edit.ps1\""
+            },
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command_template": {
+              "unix": "bash __HOOKS_DIR__/session-end.sh",
+              "windows": "powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"__HOOKS_DIR__\\session-end.ps1\""
+            },
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

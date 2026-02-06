@@ -6,7 +6,7 @@
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $SYNC_API = "https://eliza-claude-production.up.railway.app/api/sync"
+    $SYNC_API = "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync"
     $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"
     $claudeDir = Join-Path $env:USERPROFILE ".claude"
     $logFile = Join-Path $claudeDir ".skill-sync.log"

@@ -4,7 +4,7 @@
 # 2) Fetches session briefing from code-intel API
 # 3) Fetches recent memories for context
 
-BASE_API="${ITACHI_API_URL:-https://eliza-claude-production.up.railway.app}"
+BASE_API="${ITACHI_API_URL:-http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io}"
 MEMORY_API="$BASE_API/api/memory"
 SYNC_API="$BASE_API/api/sync"
 SESSION_API="$BASE_API/api/session"
@@ -226,6 +226,183 @@ function decrypt(encB64, saltB64, passphrase) {
     if [ -n "$GLOBAL_SYNC_OUTPUT" ]; then
         echo "$GLOBAL_SYNC_OUTPUT"
     fi
+fi
+
+# ============ Settings Hooks Merge ============
+# Pull settings-hooks.json from _global, merge Itachi hooks into local settings.json
+SETTINGS_MERGE_OUTPUT=$(node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+const os = require('os');
+
+const keyFile = process.argv[1];
+const syncApi = process.argv[2];
+const platform = process.argv[3];
+
+function httpGet(url) {
+    return new Promise((resolve, reject) => {
+        const u = new URL(url);
+        const mod = u.protocol === 'https:' ? https : http;
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers: { 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') } }, (res) => {
+            let d = '';
+            res.on('data', c => d += c);
+            res.on('end', () => {
+                if (res.statusCode >= 400) reject(new Error(d));
+                else resolve(JSON.parse(d));
+            });
+        }).on('error', reject);
+    });
+}
+
+function decrypt(encB64, saltB64, passphrase) {
+    const packed = Buffer.from(encB64, 'base64');
+    const salt = Buffer.from(saltB64, 'base64');
+    const iv = packed.subarray(0, 12);
+    const tag = packed.subarray(12, 28);
+    const ct = packed.subarray(28);
+    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(ct, null, 'utf8') + decipher.final('utf8');
+}
+
+(async () => {
+    try {
+        const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
+        const hooksDir = path.join(os.homedir(), '.claude', 'hooks');
+        const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
+
+        const fileData = await httpGet(syncApi + '/pull/_global/settings-hooks.json');
+        const templateStr = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+        const template = JSON.parse(templateStr);
+
+        if (!template.hooks || Object.keys(template.hooks).length === 0) return;
+
+        let settings = {};
+        if (fs.existsSync(settingsFile)) {
+            settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+        }
+        if (!settings.hooks) settings.hooks = {};
+
+        const itachiMarkers = ['session-start', 'after-edit', 'session-end'];
+        const isItachiHook = (cmd) => itachiMarkers.some(m => cmd && cmd.toLowerCase().includes(m));
+
+        for (const [event, templateEntries] of Object.entries(template.hooks)) {
+            const existing = settings.hooks[event] || [];
+            const nonItachi = existing.filter(entry => {
+                if (!entry.hooks) return true;
+                return !entry.hooks.some(h => isItachiHook(h.command));
+            });
+
+            const newEntries = templateEntries.map(entry => {
+                const converted = JSON.parse(JSON.stringify(entry));
+                for (const h of (converted.hooks || [])) {
+                    if (h.command_template) {
+                        const cmd = h.command_template[platform] || h.command_template.unix;
+                        h.command = cmd.replace(/__HOOKS_DIR__/g, hooksDir);
+                        delete h.command_template;
+                    }
+                }
+                return converted;
+            });
+
+            settings.hooks[event] = [...nonItachi, ...newEntries];
+        }
+
+        fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+        console.log('[sync] Merged Itachi hooks into settings.json');
+    } catch(e) {}
+})();
+" "$ITACHI_KEY_FILE" "$SYNC_API" "unix" 2>/dev/null)
+
+if [ -n "$SETTINGS_MERGE_OUTPUT" ]; then
+    echo "$SETTINGS_MERGE_OUTPUT"
+fi
+
+# ============ API Keys Merge ============
+# Pull api-keys from _global, merge into ~/.itachi-api-keys
+API_KEYS_MERGE_OUTPUT=$(node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+const os = require('os');
+
+const keyFile = process.argv[1];
+const syncApi = process.argv[2];
+
+const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
+
+function httpGet(url) {
+    return new Promise((resolve, reject) => {
+        const u = new URL(url);
+        const mod = u.protocol === 'https:' ? https : http;
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers: { 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') } }, (res) => {
+            let d = '';
+            res.on('data', c => d += c);
+            res.on('end', () => {
+                if (res.statusCode >= 400) reject(new Error(d));
+                else resolve(JSON.parse(d));
+            });
+        }).on('error', reject);
+    });
+}
+
+function decrypt(encB64, saltB64, passphrase) {
+    const packed = Buffer.from(encB64, 'base64');
+    const salt = Buffer.from(saltB64, 'base64');
+    const iv = packed.subarray(0, 12);
+    const tag = packed.subarray(12, 28);
+    const ct = packed.subarray(28);
+    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(ct, null, 'utf8') + decipher.final('utf8');
+}
+
+(async () => {
+    try {
+        const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
+        const apiKeysFile = path.join(os.homedir(), '.itachi-api-keys');
+
+        const fileData = await httpGet(syncApi + '/pull/_global/api-keys');
+        const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+
+        const remoteKV = {};
+        for (const line of remoteContent.split('\n')) {
+            const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+            if (m) remoteKV[m[1]] = m[2];
+        }
+
+        const localKV = {};
+        if (fs.existsSync(apiKeysFile)) {
+            const localContent = fs.readFileSync(apiKeysFile, 'utf8');
+            for (const line of localContent.split('\n')) {
+                const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+                if (m) localKV[m[1]] = m[2];
+            }
+        }
+
+        const merged = { ...localKV, ...remoteKV };
+
+        for (const mk of machineKeys) {
+            if (localKV[mk]) merged[mk] = localKV[mk];
+            else delete merged[mk];
+        }
+
+        const result = Object.entries(merged).map(([k, v]) => k + '=' + v).join('\n') + '\n';
+        fs.writeFileSync(apiKeysFile, result);
+        console.log('[sync] Merged API keys');
+    } catch(e) {}
+})();
+" "$ITACHI_KEY_FILE" "$SYNC_API" 2>/dev/null)
+
+if [ -n "$API_KEYS_MERGE_OUTPUT" ]; then
+    echo "$API_KEYS_MERGE_OUTPUT"
 fi
 
 # ============ Session Briefing (Code-Intel) ============

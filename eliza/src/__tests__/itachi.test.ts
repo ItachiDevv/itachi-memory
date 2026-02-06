@@ -40,7 +40,7 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
     SUPABASE_URL: 'https://test.supabase.co',
     SUPABASE_SERVICE_ROLE_KEY: 'test-key',
     ITACHI_ALLOWED_USERS: '123,456',
-    ITACHI_REPOS: 'repo-a,repo-b,repo-c',
+    // ITACHI_REPOS removed — repos come from project_registry table
     ITACHI_BOOTSTRAP_CONFIG: 'encrypted-config-data',
     ITACHI_BOOTSTRAP_SALT: 'salt-value',
     ...((overrides.settings as Record<string, string>) || {}),
@@ -192,27 +192,22 @@ describe('Task service', () => {
     expect(cancellable.includes(task.status)).toBe(true);
   });
 
-  it('12. getMergedRepos deduplicates env and DB repos', () => {
-    const envRepos = ['repo-a', 'repo-b'];
+  it('12. getMergedRepos returns sorted DB repos from project_registry', () => {
     const dbRepos = [
-      { name: 'repo-b', repo_url: 'https://github.com/user/repo-b' },
       { name: 'repo-c', repo_url: null },
+      { name: 'repo-a', repo_url: 'https://github.com/user/repo-a' },
+      { name: 'repo-b', repo_url: 'https://github.com/user/repo-b' },
     ];
 
-    const repoMap = new Map<string, string | null>();
-    for (const name of envRepos) repoMap.set(name, null);
-    for (const r of dbRepos) repoMap.set(r.name, r.repo_url);
+    const sorted = dbRepos
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(r => ({ name: r.name, repo_url: r.repo_url }));
 
-    const merged = [...repoMap.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, repo_url]) => ({ name, repo_url }));
-
-    expect(merged).toHaveLength(3); // repo-a, repo-b, repo-c
-    expect(merged[0].name).toBe('repo-a');
-    expect(merged[0].repo_url).toBeNull();
-    expect(merged[1].name).toBe('repo-b');
-    expect(merged[1].repo_url).toBe('https://github.com/user/repo-b'); // DB wins
-    expect(merged[2].name).toBe('repo-c');
+    expect(sorted).toHaveLength(3);
+    expect(sorted[0].name).toBe('repo-a');
+    expect(sorted[1].name).toBe('repo-b');
+    expect(sorted[2].name).toBe('repo-c');
+    expect(sorted[2].repo_url).toBeNull();
   });
 });
 

@@ -4,7 +4,7 @@
 # 2) Sends per-edit data to code-intel API (session/edit)
 # 3) If .env or .md file AND ~/.itachi-key exists, encrypts + pushes to sync API
 
-BASE_API="${ITACHI_API_URL:-https://eliza-claude-production.up.railway.app}"
+BASE_API="${ITACHI_API_URL:-http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io}"
 MEMORY_API="$BASE_API/api/memory"
 SYNC_API="$BASE_API/api/sync"
 SESSION_API="$BASE_API/api/session"
@@ -236,6 +236,143 @@ try {
     req.end();
 } catch(e) {}
 " "$FILE_PATH" "$SYNC_REPO" "$ITACHI_KEY_FILE" "$SYNC_API" "$MACHINE_KEYS" "$SYNC_FILE_PATH" 2>/dev/null &
+    fi
+
+    # ============ Settings.json Hook Sync (Push) ============
+    SETTINGS_FILE="$HOME/.claude/settings.json"
+    if [ "$FILE_PATH" = "$SETTINGS_FILE" ]; then
+        node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+const os = require('os');
+
+const keyFile = process.argv[1];
+const syncApi = process.argv[2];
+const settingsFile = process.argv[3];
+
+try {
+    const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    if (!settings.hooks) process.exit(0);
+
+    const itachiMarkers = ['session-start', 'after-edit', 'session-end'];
+    const isItachiHook = (cmd) => itachiMarkers.some(m => cmd && cmd.toLowerCase().includes(m));
+
+    const hooksDir = path.join(os.homedir(), '.claude', 'hooks');
+
+    const template = { version: 1, hooks: {} };
+    for (const [event, entries] of Object.entries(settings.hooks)) {
+        const itachiEntries = [];
+        for (const entry of entries) {
+            if (entry.hooks && entry.hooks.some(h => isItachiHook(h.command))) {
+                const newEntry = JSON.parse(JSON.stringify(entry));
+                for (const h of newEntry.hooks) {
+                    if (h.command && isItachiHook(h.command)) {
+                        const unixCmd = h.command.replace(new RegExp(hooksDir.replace(/\\//g, '\\\\/'), 'g'), '__HOOKS_DIR__');
+                        const winEquiv = unixCmd
+                            .replace(/^bash\\s+/, 'powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"')
+                            .replace(/\\.sh$/, '.ps1\"')
+                            .replace(/__HOOKS_DIR__\\//g, '__HOOKS_DIR__\\\\\\\\');
+                        h.command_template = {
+                            unix: unixCmd,
+                            windows: winEquiv
+                        };
+                        delete h.command;
+                    }
+                }
+                itachiEntries.push(newEntry);
+            }
+        }
+        if (itachiEntries.length > 0) template.hooks[event] = itachiEntries;
+    }
+
+    if (Object.keys(template.hooks).length === 0) process.exit(0);
+
+    const content = JSON.stringify(template, null, 2);
+    const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+    const salt = crypto.randomBytes(16);
+    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()]);
+    const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);
+
+    const body = JSON.stringify({
+        repo_name: '_global',
+        file_path: 'settings-hooks.json',
+        encrypted_data: packed.toString('base64'),
+        salt: salt.toString('base64'),
+        content_hash: contentHash,
+        updated_by: os.hostname()
+    });
+
+    const url = new URL(syncApi + '/push');
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') },
+        timeout: 10000, rejectUnauthorized: false
+    }, (res) => { res.resume(); });
+    req.on('error', () => {});
+    req.write(body);
+    req.end();
+} catch(e) {}
+" "$ITACHI_KEY_FILE" "$SYNC_API" "$SETTINGS_FILE" 2>/dev/null &
+    fi
+
+    # ============ API Keys Sync (Push) ============
+    API_KEYS_FILE="$HOME/.itachi-api-keys"
+    if [ "$FILE_PATH" = "$API_KEYS_FILE" ]; then
+        node -e "
+const crypto = require('crypto');
+const fs = require('fs');
+const https = require('https');
+const http = require('http');
+const os = require('os');
+
+const keyFile = process.argv[1];
+const syncApi = process.argv[2];
+const apiKeysFile = process.argv[3];
+
+try {
+    const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
+    let content = fs.readFileSync(apiKeysFile, 'utf8');
+
+    const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
+    content = content.replace(new RegExp('^(' + machineKeys.join('|') + ')=.*$', 'gm'), '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+
+    const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+    const salt = crypto.randomBytes(16);
+    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()]);
+    const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);
+
+    const body = JSON.stringify({
+        repo_name: '_global',
+        file_path: 'api-keys',
+        encrypted_data: packed.toString('base64'),
+        salt: salt.toString('base64'),
+        content_hash: contentHash,
+        updated_by: os.hostname()
+    });
+
+    const url = new URL(syncApi + '/push');
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') },
+        timeout: 10000, rejectUnauthorized: false
+    }, (res) => { res.resume(); });
+    req.on('error', () => {});
+    req.write(body);
+    req.end();
+} catch(e) {}
+" "$ITACHI_KEY_FILE" "$SYNC_API" "$API_KEYS_FILE" 2>/dev/null &
     fi
 fi
 

@@ -4,7 +4,7 @@
 
 set -e
 
-API_URL="${1:-https://eliza-claude-production.up.railway.app}"
+API_URL="${1:-http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 HOOKS_DIR="$CLAUDE_DIR/hooks"

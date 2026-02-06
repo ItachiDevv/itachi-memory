@@ -1,14 +1,14 @@
 # Itachi Memory - SessionEnd Hook
 # 1) Logs session end to memory API
 # 2) Posts session complete to code-intel API
-# Only runs when launched via `itachi` (ITACHI_ENABLED=1)
+# Runs for ALL Claude sessions (manual + orchestrator). Set ITACHI_DISABLED=1 to opt out.
 
-if (-not $env:ITACHI_ENABLED) { exit 0 }
+if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $BASE_API = if ($env:ITACHI_API_URL) { $env:ITACHI_API_URL } else { "https://eliza-claude-production.up.railway.app" }
+    $BASE_API = if ($env:ITACHI_API_URL) { $env:ITACHI_API_URL } else { "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io" }
     $MEMORY_API = "$BASE_API/api/memory"
     $SESSION_API = "$BASE_API/api/session"
     $authHeaders = @{ "Content-Type" = "application/json" }

@@ -13,7 +13,7 @@ When the user runs `/recent` (optionally with a limit number):
 
 2. Make a GET request to the memory API:
    ```
-   curl -s "https://eliza-claude-production.up.railway.app/api/memory/recent?project=<current-project>&limit=<limit>"
+   curl -s "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/recent?project=<current-project>&limit=<limit>"
    ```
 
 3. Display results in a formatted table or list:

@@ -82,7 +82,6 @@ function createRuntime(serviceOverrides: Record<string, unknown> = {}) {
         SUPABASE_URL: 'https://test.supabase.co',
         SUPABASE_SERVICE_ROLE_KEY: 'test-key',
         ITACHI_ALLOWED_USERS: '123,456',
-        ITACHI_REPOS: 'repo-a,repo-b',
       };
       return settings[key] || '';
     },
@@ -309,10 +308,10 @@ describe('TaskService integration', () => {
     const service = new TaskService(runtime as any);
     const names = await service.getMergedRepoNames();
 
-    // env has repo-a, repo-b; DB has repo-a, repo-c -> merged: repo-a, repo-b, repo-c
+    // DB has repo-a, repo-c from project_registry -> sorted: repo-a, repo-c
     expect(names).toContain('repo-a');
-    expect(names).toContain('repo-b');
     expect(names).toContain('repo-c');
+    expect(names).not.toContain('repo-b'); // no longer from env
     expect(names).toEqual([...names].sort()); // verify sorted
 
     mockQueryBuilder.then = origThen;

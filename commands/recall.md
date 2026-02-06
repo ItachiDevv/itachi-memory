@@ -11,7 +11,7 @@ When the user runs `/recall <query>`:
 
 1. Make a GET request to the memory API:
    ```
-   curl -s "https://eliza-claude-production.up.railway.app/api/memory/search?query=<URL-encoded-query>&project=<current-project>&limit=5"
+   curl -s "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/search?query=<URL-encoded-query>&project=<current-project>&limit=5"
    ```
 
 2. If results are found, display them in a formatted list:

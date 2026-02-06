@@ -3,7 +3,7 @@
 # 1) Logs session end to memory API
 # 2) Posts session complete to code-intel API
 
-BASE_API="${ITACHI_API_URL:-https://eliza-claude-production.up.railway.app}"
+BASE_API="${ITACHI_API_URL:-http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io}"
 MEMORY_API="$BASE_API/api/memory"
 SESSION_API="$BASE_API/api/session"
 AUTH_HEADER="Authorization: Bearer ${ITACHI_API_KEY:-}"

@@ -35,5 +35,5 @@ export const config: Config = {
     pollIntervalMs: parseInt(process.env.ITACHI_POLL_INTERVAL_MS || '5000', 10),
     projectPaths: parseProjectPaths(process.env.ITACHI_PROJECT_PATHS || '{}'),
     projectFilter: process.env.ITACHI_PROJECT_FILTER || undefined,
-    apiUrl: process.env.ITACHI_API_URL || 'https://eliza-claude-production.up.railway.app',
+    apiUrl: process.env.ITACHI_API_URL || 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io',
 };

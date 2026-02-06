@@ -103,7 +103,6 @@ export const character: Character = {
       SUPABASE_SERVICE_ROLE_KEY: loadCredential('SUPABASE_SERVICE_ROLE_KEY', '.supabase-credentials', /SUPABASE_SERVICE_ROLE_KEY=(.+)/),
       POSTGRES_URL: loadCredential('POSTGRES_URL', '.supabase-credentials', /POSTGRES_URL=(.+)/),
       ITACHI_ALLOWED_USERS: process.env.ITACHI_ALLOWED_USERS ?? '',
-      ITACHI_REPOS: process.env.ITACHI_REPOS ?? '',
       ITACHI_BOOTSTRAP_CONFIG: process.env.ITACHI_BOOTSTRAP_CONFIG ?? '',
       ITACHI_BOOTSTRAP_SALT: process.env.ITACHI_BOOTSTRAP_SALT ?? '',
     },

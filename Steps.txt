@@ -1,0 +1,12 @@
+ Steps:
+ 1. Create new Supabase project in Pro org (pick US East region to match Hetzner if possible)
+ 2. Enable pgvector extension: CREATE EXTENSION IF NOT EXISTS vector;
+ 3. Run migrations in order:
+   - schema/supabase-migration-elizaos.sql (itachi_memories, itachi_tasks, match_memories,
+ claim_next_task)
+   - schema/supabase-migration-v3-scaling.sql (project_registry, updated claim_next_task)
+   - schema/supabase-migration-v4-code-intel.sql (session_edits, session_summaries,
+ cross_project_insights)
+ 4. Reload PostgREST schema cache: NOTIFY pgrst, 'reload schema';
+ 5. Update all env vars (SUPABASE_URL, SUPABASE_KEY) in hooks, orchestrator, and ElizaOS
+ 6. Verify with /health endpoint

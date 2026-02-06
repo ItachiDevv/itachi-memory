@@ -44,7 +44,7 @@ A persistent memory system for Claude Code called "Itachi" that stores context f
             ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              RAILWAY (CLOUD)                                 │
-│  https://eliza-claude-production.up.railway.app                             │
+│  http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io                             │
 │                                                                             │
 │  Endpoints:                                                                 │
 │  - GET  /health              → {status, memories count}                     │
@@ -259,30 +259,30 @@ ANTHROPIC_API_KEY=sk-ant-... (optional, for Claude AI in bot)
 
 ### Health Check
 ```bash
-curl -k https://eliza-claude-production.up.railway.app/health
+curl -k http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/health
 # Returns: {"status":"ok","memories":42}
 ```
 
 ### Store Memory
 ```bash
-curl -k -X POST https://eliza-claude-production.up.railway.app/api/memory/code-change \
+curl -k -X POST http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/code-change \
   -H "Content-Type: application/json" \
   -d '{"files":["auth.js"],"summary":"Added OAuth","category":"code_change","project":"my-app"}'
 ```
 
 ### Semantic Search
 ```bash
-curl -k "https://eliza-claude-production.up.railway.app/api/memory/search?query=authentication&limit=5"
+curl -k "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/search?query=authentication&limit=5"
 ```
 
 ### Recent Memories
 ```bash
-curl -k "https://eliza-claude-production.up.railway.app/api/memory/recent?project=my-app&limit=10"
+curl -k "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/recent?project=my-app&limit=10"
 ```
 
 ### Statistics
 ```bash
-curl -k "https://eliza-claude-production.up.railway.app/api/memory/stats?project=my-app"
+curl -k "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/stats?project=my-app"
 ```
 
 ---
@@ -364,10 +364,10 @@ A dedicated computer running 24/7 that receives coding tasks via Telegram and sp
 
 ```bash
 # Test API
-curl -k https://eliza-claude-production.up.railway.app/health
+curl -k http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/health
 
 # Test memory storage
-curl -k -X POST https://eliza-claude-production.up.railway.app/api/memory/code-change \
+curl -k -X POST http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/code-change \
   -H "Content-Type: application/json" \
   -d '{"files":["test.js"],"summary":"Test","category":"test","project":"test"}'
 

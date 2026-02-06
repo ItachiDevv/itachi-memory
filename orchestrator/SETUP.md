@@ -79,7 +79,7 @@ ITACHI_DEFAULT_MODEL=sonnet
 ITACHI_DEFAULT_BUDGET=5.00
 ITACHI_POLL_INTERVAL_MS=5000
 ITACHI_PROJECT_PATHS={}
-ITACHI_API_URL=https://eliza-claude-production.up.railway.app
+ITACHI_API_URL=http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io
 ```
 
 ### Example .env (Windows)
@@ -94,7 +94,7 @@ ITACHI_DEFAULT_MODEL=sonnet
 ITACHI_DEFAULT_BUDGET=5.00
 ITACHI_POLL_INTERVAL_MS=5000
 ITACHI_PROJECT_PATHS={}
-ITACHI_API_URL=https://eliza-claude-production.up.railway.app
+ITACHI_API_URL=http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io
 ```
 
 ---

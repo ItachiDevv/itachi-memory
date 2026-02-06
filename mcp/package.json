@@ -1,0 +1,13 @@
+{
+  "name": "itachi-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Itachi Memory System — gives Claude native tool access to memories, sessions, and tasks",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

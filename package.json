@@ -1,0 +1,27 @@
+{
+  "name": "itachi-memory",
+  "version": "1.0.0",
+  "description": "Persistent memory for Claude Code sessions. Automatically tracks file changes, stores them in Supabase with OpenAI embeddings, and retrieves relevant context at session start.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ItachiDevv/itachi-memory.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ItachiDevv/itachi-memory/issues"
+  },
+  "homepage": "https://github.com/ItachiDevv/itachi-memory#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.95.2"
+  }
+}

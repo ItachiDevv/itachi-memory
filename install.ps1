@@ -2,7 +2,7 @@
 # Usage: powershell -ExecutionPolicy Bypass -File install.ps1
 
 param(
-    [string]$ApiUrl = "https://eliza-claude-production.up.railway.app"
+    [string]$ApiUrl = "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io"
 )
 
 $ErrorActionPreference = "Stop"
