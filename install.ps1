@@ -163,6 +163,7 @@ $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"
 
 # Define all supported credentials
 $credentials = @(
+    @{ key = "ITACHI_API_KEY";         label = "Itachi API Key";               hint = "Required for all hooks/orchestrator auth" },
     @{ key = "GITHUB_TOKEN";           label = "GitHub Personal Access Token"; hint = "ghp_... (repo, workflow scopes)" },
     @{ key = "VERCEL_TOKEN";           label = "Vercel Token";                 hint = "from vercel.com/account/tokens" },
     @{ key = "SUPABASE_ACCESS_TOKEN";  label = "Supabase Access Token";        hint = "from supabase.com/dashboard/account/tokens (Management API)" },

@@ -152,6 +152,7 @@ prompt_key() {
     fi
 }
 
+prompt_key "ITACHI_API_KEY"         "Itachi API Key"               "Required for all hooks/orchestrator auth"
 prompt_key "GITHUB_TOKEN"          "GitHub Personal Access Token" "ghp_... (repo, workflow scopes)"
 prompt_key "VERCEL_TOKEN"          "Vercel Token"                 "from vercel.com/account/tokens"
 prompt_key "SUPABASE_ACCESS_TOKEN" "Supabase Access Token"        "from supabase.com/dashboard/account/tokens"

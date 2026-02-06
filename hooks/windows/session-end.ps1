@@ -8,6 +8,8 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
     $MEMORY_API = "https://eliza-claude-production.up.railway.app/api/memory"
+    $authHeaders = @{ "Content-Type" = "application/json" }
+    if ($env:ITACHI_API_KEY) { $authHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
     $project = Split-Path -Leaf (Get-Location)
 
     # Detect git branch
@@ -42,7 +44,7 @@ try {
 
     Invoke-RestMethod -Uri "$MEMORY_API/code-change" `
         -Method Post `
-        -ContentType "application/json" `
+        -Headers $authHeaders `
         -Body $body `
         -TimeoutSec 10 | Out-Null
 }

@@ -24,8 +24,11 @@ if [ -n "$TASK_ID" ]; then
     TASK_FIELD=",\"task_id\":\"${TASK_ID}\""
 fi
 
+AUTH_HEADER="Authorization: Bearer ${ITACHI_API_KEY:-}"
+
 curl -s -k -X POST "${MEMORY_API}/code-change" \
   -H "Content-Type: application/json" \
+  -H "$AUTH_HEADER" \
   -d "{\"files\":[],\"summary\":\"Session ended: ${REASON}\",\"category\":\"session\",\"project\":\"${PROJECT_NAME}\",\"branch\":\"${BRANCH}\"${TASK_FIELD}}" \
   --max-time 10 > /dev/null 2>&1
 
