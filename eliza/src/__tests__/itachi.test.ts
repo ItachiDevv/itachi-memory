@@ -38,7 +38,7 @@ function createMockSupabase(overrides: Record<string, unknown> = {}) {
 function createMockRuntime(overrides: Record<string, unknown> = {}) {
   const settings: Record<string, string> = {
     SUPABASE_URL: 'https://test.supabase.co',
-    SUPABASE_KEY: 'test-key',
+    SUPABASE_SERVICE_ROLE_KEY: 'test-key',
     ITACHI_ALLOWED_USERS: '123,456',
     ITACHI_REPOS: 'repo-a,repo-b,repo-c',
     ITACHI_BOOTSTRAP_CONFIG: 'encrypted-config-data',
@@ -344,7 +344,7 @@ describe('Bootstrap endpoint', () => {
     const runtime = createMockRuntime({
       settings: {
         SUPABASE_URL: 'https://test.supabase.co',
-        SUPABASE_KEY: 'key',
+        SUPABASE_SERVICE_ROLE_KEY: 'key',
         ITACHI_BOOTSTRAP_CONFIG: '',
         ITACHI_BOOTSTRAP_SALT: '',
       },

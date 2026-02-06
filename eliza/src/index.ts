@@ -4,6 +4,15 @@ import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
 import { itachiTasksPlugin } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
+import {
+  itachiCodeIntelPlugin,
+  editAnalyzerWorker, registerEditAnalyzerTask,
+  sessionSynthesizerWorker, registerSessionSynthesizerTask,
+  repoExpertiseWorker, registerRepoExpertiseTask,
+  styleExtractorWorker, registerStyleExtractorTask,
+  crossProjectWorker, registerCrossProjectTask,
+  cleanupWorker, registerCleanupTask,
+} from './plugins/itachi-code-intel/index.js';
 
 const agent: ProjectAgent = {
   character,
@@ -12,6 +21,7 @@ const agent: ProjectAgent = {
     itachiTasksPlugin,
     itachiSyncPlugin,
     itachiSelfImprovePlugin,
+    itachiCodeIntelPlugin,
   ],
   init: async (runtime) => {
     runtime.logger.info('Itachi agent initialized');
@@ -25,6 +35,26 @@ const agent: ProjectAgent = {
       runtime.logger.info('Reflection worker + task registered');
     } catch (err: unknown) {
       runtime.logger.warn('Failed to register reflection task (non-fatal):', err instanceof Error ? err.message : String(err));
+    }
+
+    // Register code-intel workers + tasks
+    const codeIntelWorkers = [
+      { worker: editAnalyzerWorker, register: registerEditAnalyzerTask, name: 'edit-analyzer' },
+      { worker: sessionSynthesizerWorker, register: registerSessionSynthesizerTask, name: 'session-synthesizer' },
+      { worker: repoExpertiseWorker, register: registerRepoExpertiseTask, name: 'repo-expertise' },
+      { worker: styleExtractorWorker, register: registerStyleExtractorTask, name: 'style-extractor' },
+      { worker: crossProjectWorker, register: registerCrossProjectTask, name: 'cross-project' },
+      { worker: cleanupWorker, register: registerCleanupTask, name: 'cleanup' },
+    ];
+
+    for (const { worker, register, name } of codeIntelWorkers) {
+      try {
+        runtime.registerTaskWorker(worker);
+        await register(runtime);
+        runtime.logger.info(`Code-intel worker registered: ${name}`);
+      } catch (err: unknown) {
+        runtime.logger.warn(`Failed to register ${name} worker (non-fatal):`, err instanceof Error ? err.message : String(err));
+      }
     }
   },
 };

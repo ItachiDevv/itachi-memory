@@ -1,6 +1,7 @@
 # Itachi Memory - SessionStart Hook
 # 1) Pulls + decrypts synced .env/.md files from remote
-# 2) Fetches recent memories for context
+# 2) Fetches session briefing from code-intel API
+# 3) Fetches recent memories for context
 # Only runs when launched via `itachi` (ITACHI_ENABLED=1)
 
 if (-not $env:ITACHI_ENABLED) { exit 0 }
@@ -8,11 +9,36 @@ if (-not $env:ITACHI_ENABLED) { exit 0 }
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $MEMORY_API = "https://eliza-claude-production.up.railway.app/api/memory"
-    $SYNC_API = "https://eliza-claude-production.up.railway.app/api/sync"
+    $BASE_API = if ($env:ITACHI_API_URL) { $env:ITACHI_API_URL } else { "https://eliza-claude-production.up.railway.app" }
+    $MEMORY_API = "$BASE_API/api/memory"
+    $SYNC_API = "$BASE_API/api/sync"
+    $SESSION_API = "$BASE_API/api/session"
     $authHeaders = @{}
     if ($env:ITACHI_API_KEY) { $authHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
-    $project = Split-Path -Leaf (Get-Location)
+
+    # ============ Project Resolution ============
+    $project = $null
+    if ($env:ITACHI_PROJECT_NAME) {
+        $project = $env:ITACHI_PROJECT_NAME
+    }
+    if (-not $project) {
+        $itachiProjectFile = Join-Path (Get-Location) ".itachi-project"
+        if (Test-Path $itachiProjectFile) {
+            $project = (Get-Content $itachiProjectFile -Raw).Trim()
+        }
+    }
+    if (-not $project) {
+        try {
+            $remoteUrl = git remote get-url origin 2>$null
+            if ($remoteUrl) {
+                $project = ($remoteUrl -replace '\.git$','') -replace '.*/','.'
+                $project = ($project -split '[/:]')[-1]
+            }
+        } catch {}
+    }
+    if (-not $project) {
+        $project = Split-Path -Leaf (Get-Location)
+    }
 
     # Detect git branch
     $branchName = "main"
@@ -220,7 +246,58 @@ function decrypt(encB64, saltB64, passphrase) {
         }
     }
 
-    # ============ Memory Context ============
+    # ============ Session Briefing (Code-Intel) ============
+    try {
+        $briefingResponse = Invoke-RestMethod -Uri "$SESSION_API/briefing?project=$project&branch=$branchName" `
+            -Method Get `
+            -Headers $authHeaders `
+            -TimeoutSec 10
+
+        if ($briefingResponse) {
+            Write-Output ""
+            Write-Output "=== Session Briefing for $project ($branchName) ==="
+
+            if ($briefingResponse.recentSessions -and $briefingResponse.recentSessions.Count -gt 0) {
+                Write-Output "Recent sessions:"
+                foreach ($sess in $briefingResponse.recentSessions) {
+                    $files = if ($sess.filesChanged) { ($sess.filesChanged -join ", ") } else { "" }
+                    Write-Output "  - $($sess.summary)$(if($files){" [$files]"})"
+                }
+            }
+
+            if ($briefingResponse.hotFiles -and $briefingResponse.hotFiles.Count -gt 0) {
+                Write-Output "Hot files (last 7d):"
+                foreach ($hf in $briefingResponse.hotFiles | Select-Object -First 5) {
+                    Write-Output "  - $($hf.path) ($($hf.editCount) edits)"
+                }
+            }
+
+            if ($briefingResponse.activePatterns -and $briefingResponse.activePatterns.Count -gt 0) {
+                Write-Output "Active patterns:"
+                foreach ($pat in $briefingResponse.activePatterns) {
+                    Write-Output "  - $pat"
+                }
+            }
+
+            if ($briefingResponse.activeTasks -and $briefingResponse.activeTasks.Count -gt 0) {
+                Write-Output "Active tasks:"
+                foreach ($task in $briefingResponse.activeTasks) {
+                    Write-Output "  - [$($task.status)] $($task.description)"
+                }
+            }
+
+            if ($briefingResponse.warnings -and $briefingResponse.warnings.Count -gt 0) {
+                foreach ($warn in $briefingResponse.warnings) {
+                    Write-Output "  [warn] $warn"
+                }
+            }
+
+            Write-Output "=== End Briefing ==="
+            Write-Output ""
+        }
+    } catch {}
+
+    # ============ Memory Context (fallback) ============
     $memHeaders = @{}
     if ($env:ITACHI_API_KEY) { $memHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
     $response = Invoke-RestMethod -Uri "$MEMORY_API/recent?project=$project&limit=5&branch=$branchName" `

@@ -11,11 +11,15 @@ export function getSupabase(): SupabaseClient {
     return supabase;
 }
 
-export async function claimNextTask(): Promise<Task | null> {
+export async function claimNextTask(projectFilter?: string): Promise<Task | null> {
     const sb = getSupabase();
-    const { data, error } = await sb.rpc('claim_next_task', {
+    const rpcParams: Record<string, unknown> = {
         p_orchestrator_id: config.orchestratorId,
-    });
+    };
+    if (projectFilter) {
+        rpcParams.p_project = projectFilter;
+    }
+    const { data, error } = await sb.rpc('claim_next_task', rpcParams);
 
     if (error) {
         console.error('Error claiming task:', error.message);
@@ -29,7 +33,7 @@ export async function claimNextTask(): Promise<Task | null> {
 export async function updateTask(taskId: string, updates: TaskUpdate): Promise<void> {
     const sb = getSupabase();
     const { error } = await sb
-        .from('tasks')
+        .from('itachi_tasks')
         .update(updates)
         .eq('id', taskId);
 
@@ -43,7 +47,7 @@ export async function recoverStuckTasks(): Promise<number> {
 
     // Find tasks stuck as 'running' or 'claimed' by this orchestrator
     const { data, error } = await sb
-        .from('tasks')
+        .from('itachi_tasks')
         .select('id')
         .eq('orchestrator_id', config.orchestratorId)
         .in('status', ['running', 'claimed']);

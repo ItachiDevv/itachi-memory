@@ -80,7 +80,7 @@ function createRuntime(serviceOverrides: Record<string, unknown> = {}) {
     getSetting: (key: string) => {
       const settings: Record<string, string> = {
         SUPABASE_URL: 'https://test.supabase.co',
-        SUPABASE_KEY: 'test-key',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-key',
         ITACHI_ALLOWED_USERS: '123,456',
         ITACHI_REPOS: 'repo-a,repo-b',
       };
@@ -116,14 +116,15 @@ describe('MemoryService integration', () => {
     const runtime = createRuntime();
     (runtime as any).getSetting = (key: string) => (key === 'SUPABASE_URL' ? '' : 'val');
 
-    expect(() => new MemoryService(runtime as any)).toThrow('SUPABASE_URL and SUPABASE_KEY are required');
+    expect(() => new MemoryService(runtime as any)).toThrow('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
   });
 
-  it('2. MemoryService constructor throws without SUPABASE_KEY', () => {
+  it('2. MemoryService constructor throws without SUPABASE_SERVICE_ROLE_KEY', () => {
     const runtime = createRuntime();
-    (runtime as any).getSetting = (key: string) => (key === 'SUPABASE_KEY' ? '' : 'val');
+    (runtime as any).getSetting = (key: string) =>
+      (key === 'SUPABASE_SERVICE_ROLE_KEY' || key === 'SUPABASE_KEY') ? '' : 'val';
 
-    expect(() => new MemoryService(runtime as any)).toThrow('SUPABASE_URL and SUPABASE_KEY are required');
+    expect(() => new MemoryService(runtime as any)).toThrow('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
   });
 
   it('3. storeMemory calls insert with correct table data', async () => {

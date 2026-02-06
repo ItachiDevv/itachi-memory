@@ -77,5 +77,6 @@ export interface Config {
     defaultBudget: number;
     pollIntervalMs: number;
     projectPaths: Record<string, string>;
+    projectFilter?: string;
     apiUrl: string;
 }

@@ -13,7 +13,7 @@ const server = http.createServer(async (req, res) => {
         try {
             const sb = getSupabase();
             const { count } = await sb
-                .from('tasks')
+                .from('itachi_tasks')
                 .select('*', { count: 'exact', head: true })
                 .eq('status', 'queued');
             queuedCount = count || 0;

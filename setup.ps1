@@ -87,7 +87,8 @@ if (Test-Path $credFile) {
     Write-Host "  Found existing credentials at $credFile" -ForegroundColor Gray
     $content = Get-Content $credFile -Raw
     if ($content -match 'SUPABASE_URL=(.+)') { $supaUrl = $Matches[1].Trim() }
-    if ($content -match 'SUPABASE_KEY=(.+)') { $supaKey = $Matches[1].Trim() }
+    if ($content -match 'SUPABASE_SERVICE_ROLE_KEY=(.+)') { $supaKey = $Matches[1].Trim() }
+    elseif ($content -match 'SUPABASE_KEY=(.+)') { $supaKey = $Matches[1].Trim() }
 }
 
 if (-not $supaUrl -or -not $supaKey) {
@@ -123,7 +124,7 @@ try {
     decipher.setAuthTag(tag);
     const config = JSON.parse(decipher.update(ct, null, 'utf8') + decipher.final('utf8'));
     console.log(config.SUPABASE_URL);
-    console.log(config.SUPABASE_KEY);
+    console.log(config.SUPABASE_SERVICE_ROLE_KEY || config.SUPABASE_KEY);
 } catch(e) {
     console.error('DECRYPT_FAILED');
     process.exit(1);
@@ -136,7 +137,7 @@ try {
             $supaKey = $lines[1].Trim()
             @"
 SUPABASE_URL=$supaUrl
-SUPABASE_KEY=$supaKey
+SUPABASE_SERVICE_ROLE_KEY=$supaKey
 "@ | Set-Content $credFile -Encoding UTF8
             Write-Host "  Bootstrapped credentials to $credFile" -ForegroundColor Green
         } else {
@@ -149,10 +150,10 @@ SUPABASE_KEY=$supaKey
         Write-Host "  (Get these from the project owner or your Supabase dashboard)" -ForegroundColor Gray
         Write-Host ""
         $supaUrl = Read-Host "  SUPABASE_URL"
-        $supaKey = Read-Host "  SUPABASE_KEY"
+        $supaKey = Read-Host "  SUPABASE_SERVICE_ROLE_KEY"
         @"
 SUPABASE_URL=$supaUrl
-SUPABASE_KEY=$supaKey
+SUPABASE_SERVICE_ROLE_KEY=$supaKey
 "@ | Set-Content $credFile -Encoding UTF8
         Write-Host "  Saved to $credFile" -ForegroundColor Gray
     }
@@ -314,7 +315,7 @@ if (-not (Test-Path $orchEnv)) {
         # Check if orchestrator-env secret exists
         try {
             $env:SUPABASE_URL = $supaUrl
-            $env:SUPABASE_KEY = $supaKey
+            $env:SUPABASE_SERVICE_ROLE_KEY = $supaKey
             $listOutput = node $secretsJs list 2>$null
             if ($listOutput -match "orchestrator-env") {
                 Write-Host ""
@@ -354,11 +355,14 @@ if (-not $useSecrets) {
     if (-not $wsDir) { $wsDir = $defaultWs }
     New-Item -ItemType Directory -Path $wsDir -Force | Out-Null
 
+    $maxConc = Read-Host "  Max concurrent Claude sessions [2]"
+    if (-not $maxConc) { $maxConc = "2" }
+
     @"
 SUPABASE_URL=$supaUrl
-SUPABASE_KEY=$supaKey
+SUPABASE_SERVICE_ROLE_KEY=$supaKey
 ITACHI_ORCHESTRATOR_ID=$orchId
-ITACHI_MAX_CONCURRENT=2
+ITACHI_MAX_CONCURRENT=$maxConc
 ITACHI_WORKSPACE_DIR=$wsDir
 ITACHI_TASK_TIMEOUT_MS=600000
 ITACHI_DEFAULT_MODEL=sonnet

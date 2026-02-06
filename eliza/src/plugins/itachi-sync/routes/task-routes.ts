@@ -65,7 +65,7 @@ export const taskRoutes: Route[] = [
         const rt = runtime as IAgentRuntime;
         if (!checkAuth(req, res, rt)) return;
 
-        const { orchestrator_id } = req.query as Record<string, string>;
+        const { orchestrator_id, project } = req.query as Record<string, string>;
         if (!orchestrator_id) {
           res.status(400).json({ error: 'orchestrator_id required' });
           return;
@@ -77,7 +77,7 @@ export const taskRoutes: Route[] = [
           return;
         }
 
-        const task = await taskService.claimNextTask(orchestrator_id);
+        const task = await taskService.claimNextTask(orchestrator_id, project);
         res.json({ task: task || null });
       } catch (error) {
         res.status(500).json({ error: sanitizeError(error) });

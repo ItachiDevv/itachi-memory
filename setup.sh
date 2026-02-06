@@ -88,7 +88,8 @@ fi
 if [ -f "$CRED_FILE" ]; then
     echo "  Found existing credentials at $CRED_FILE"
     SUPABASE_URL=$(grep 'SUPABASE_URL=' "$CRED_FILE" | cut -d= -f2- | tr -d ' ')
-    SUPABASE_KEY=$(grep 'SUPABASE_KEY=' "$CRED_FILE" | cut -d= -f2- | tr -d ' ')
+    SUPABASE_KEY=$(grep 'SUPABASE_SERVICE_ROLE_KEY=' "$CRED_FILE" | cut -d= -f2- | tr -d ' ')
+    [ -z "$SUPABASE_KEY" ] && SUPABASE_KEY=$(grep 'SUPABASE_KEY=' "$CRED_FILE" | cut -d= -f2- | tr -d ' ')
 fi
 
 if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
@@ -113,7 +114,7 @@ try {
     decipher.setAuthTag(tag);
     const config = JSON.parse(decipher.update(ct, null, 'utf8') + decipher.final('utf8'));
     console.log(config.SUPABASE_URL);
-    console.log(config.SUPABASE_KEY);
+    console.log(config.SUPABASE_SERVICE_ROLE_KEY || config.SUPABASE_KEY);
 } catch(e) {
     console.error('DECRYPT_FAILED');
     process.exit(1);
@@ -125,7 +126,7 @@ try {
             SUPABASE_KEY=$(echo "$DECRYPT_RESULT" | tail -1)
             cat > "$CRED_FILE" << EOF
 SUPABASE_URL=$SUPABASE_URL
-SUPABASE_KEY=$SUPABASE_KEY
+SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_KEY
 EOF
             chmod 600 "$CRED_FILE"
             echo "  Bootstrapped credentials to $CRED_FILE"
@@ -139,10 +140,10 @@ EOF
         echo "  (Get these from the project owner or your Supabase dashboard)"
         echo ""
         read -rp "  SUPABASE_URL: " SUPABASE_URL
-        read -rp "  SUPABASE_KEY: " SUPABASE_KEY
+        read -rp "  SUPABASE_SERVICE_ROLE_KEY: " SUPABASE_KEY
         cat > "$CRED_FILE" << EOF
 SUPABASE_URL=$SUPABASE_URL
-SUPABASE_KEY=$SUPABASE_KEY
+SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_KEY
 EOF
         chmod 600 "$CRED_FILE"
         echo "  Saved to $CRED_FILE"
@@ -267,7 +268,7 @@ if [ ! -f "$ORCH_ENV" ]; then
     fi
 
     if [ -f "$SECRETS_JS" ]; then
-        export SUPABASE_URL SUPABASE_KEY
+        export SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_KEY
         LIST_OUTPUT=$(node "$SECRETS_JS" list 2>/dev/null || echo "")
         if echo "$LIST_OUTPUT" | grep -q "orchestrator-env"; then
             echo ""
@@ -323,13 +324,16 @@ else
     WS_DIR="${WS_DIR:-$DEFAULT_WS}"
     mkdir -p "$WS_DIR"
 
+    read -rp "  Max concurrent Claude sessions [2]: " MAX_CONC
+    MAX_CONC="${MAX_CONC:-2}"
+
     echo ""
     echo "Writing orchestrator config..."
     cat > "$ORCH_ENV" << EOF
 SUPABASE_URL=$SUPABASE_URL
-SUPABASE_KEY=$SUPABASE_KEY
+SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_KEY
 ITACHI_ORCHESTRATOR_ID=$ORCH_ID
-ITACHI_MAX_CONCURRENT=2
+ITACHI_MAX_CONCURRENT=$MAX_CONC
 ITACHI_WORKSPACE_DIR=$WS_DIR
 ITACHI_TASK_TIMEOUT_MS=600000
 ITACHI_DEFAULT_MODEL=sonnet

@@ -1,6 +1,7 @@
 # Itachi Memory - PostToolUse Hook (Write|Edit)
 # 1) Sends file change notifications to memory API
-# 2) If .env or .md file AND ~/.itachi-key exists, encrypts + pushes to sync API
+# 2) Sends per-edit data to code-intel API (session/edit)
+# 3) If .env or .md file AND ~/.itachi-key exists, encrypts + pushes to sync API
 # Must never block Claude Code - all errors silently caught
 
 if (-not $env:ITACHI_ENABLED) { exit 0 }
@@ -8,8 +9,10 @@ if (-not $env:ITACHI_ENABLED) { exit 0 }
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $MEMORY_API = "https://eliza-claude-production.up.railway.app/api/memory"
-    $SYNC_API = "https://eliza-claude-production.up.railway.app/api/sync"
+    $BASE_API = if ($env:ITACHI_API_URL) { $env:ITACHI_API_URL } else { "https://eliza-claude-production.up.railway.app" }
+    $MEMORY_API = "$BASE_API/api/memory"
+    $SYNC_API = "$BASE_API/api/sync"
+    $SESSION_API = "$BASE_API/api/session"
     $authHeaders = @{ "Content-Type" = "application/json" }
     if ($env:ITACHI_API_KEY) { $authHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
 
@@ -26,9 +29,33 @@ try {
     }
     if (-not $filePath) { exit 0 }
 
-    # Get filename and project
+    # Get filename
     $fileName = Split-Path $filePath -Leaf
-    $project = Split-Path -Leaf (Get-Location)
+
+    # ============ Project Resolution ============
+    # Priority: $env:ITACHI_PROJECT_NAME > .itachi-project file > git remote > basename
+    $project = $null
+    if ($env:ITACHI_PROJECT_NAME) {
+        $project = $env:ITACHI_PROJECT_NAME
+    }
+    if (-not $project) {
+        $itachiProjectFile = Join-Path (Get-Location) ".itachi-project"
+        if (Test-Path $itachiProjectFile) {
+            $project = (Get-Content $itachiProjectFile -Raw).Trim()
+        }
+    }
+    if (-not $project) {
+        try {
+            $remoteUrl = git remote get-url origin 2>$null
+            if ($remoteUrl) {
+                $project = ($remoteUrl -replace '\.git$','') -replace '.*/','.'
+                $project = ($project -split '[/:]')[-1]
+            }
+        } catch {}
+    }
+    if (-not $project) {
+        $project = Split-Path -Leaf (Get-Location)
+    }
 
     # Detect git branch
     $branchName = "main"
@@ -37,6 +64,13 @@ try {
 
     # Task ID from orchestrator (null for manual sessions)
     $taskId = $env:ITACHI_TASK_ID
+
+    # Session ID (generate if not set)
+    $sessionId = $env:ITACHI_SESSION_ID
+    if (-not $sessionId) {
+        $sessionId = "manual-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + [System.Environment]::ProcessId
+        $env:ITACHI_SESSION_ID = $sessionId
+    }
 
     # Auto-categorize based on file
     $category = "code_change"
@@ -52,6 +86,7 @@ try {
 
     $summary = "Updated $fileName"
 
+    # ============ Memory API (existing) ============
     $bodyObj = @{
         files    = @($fileName)
         summary  = $summary
@@ -68,6 +103,74 @@ try {
         -Headers $authHeaders `
         -Body $body `
         -TimeoutSec 10 | Out-Null
+
+    # ============ Code-Intel: Session Edit ============
+    $toolName = if ($json.tool_name) { $json.tool_name } else { "unknown" }
+    $editType = if ($toolName -eq "Write") { "create" } else { "modify" }
+
+    # Build diff from old_string/new_string
+    $diffContent = $null
+    $linesAdded = 0
+    $linesRemoved = 0
+    if ($json.tool_input) {
+        $oldStr = $json.tool_input.old_string
+        $newStr = $json.tool_input.new_string
+
+        if ($newStr -and -not $oldStr) {
+            # Write tool (new file)
+            $editType = "create"
+            $diffContent = $newStr
+            $linesAdded = ($newStr -split "`n").Count
+        }
+        elseif ($oldStr -and $newStr) {
+            # Edit tool
+            $editType = "modify"
+            $diffContent = "--- old`n$oldStr`n+++ new`n$newStr"
+            $linesRemoved = ($oldStr -split "`n").Count
+            $linesAdded = ($newStr -split "`n").Count
+        }
+
+        # Truncate diff to 10KB
+        if ($diffContent -and $diffContent.Length -gt 10240) {
+            $diffContent = $diffContent.Substring(0, 10240)
+        }
+    }
+
+    # Detect language from extension
+    $language = $null
+    $ext = [System.IO.Path]::GetExtension($filePath).ToLower()
+    $langMap = @{
+        '.ts' = 'typescript'; '.tsx' = 'typescript'; '.js' = 'javascript'; '.jsx' = 'javascript'
+        '.py' = 'python'; '.rs' = 'rust'; '.go' = 'go'; '.java' = 'java'
+        '.sql' = 'sql'; '.sh' = 'shell'; '.ps1' = 'powershell'
+        '.css' = 'css'; '.html' = 'html'; '.json' = 'json'; '.yaml' = 'yaml'; '.yml' = 'yaml'
+        '.md' = 'markdown'; '.toml' = 'toml'; '.dockerfile' = 'dockerfile'
+    }
+    if ($langMap.ContainsKey($ext)) { $language = $langMap[$ext] }
+
+    $editBody = @{
+        session_id    = $sessionId
+        project       = $project
+        file_path     = $filePath
+        edit_type     = $editType
+        lines_added   = $linesAdded
+        lines_removed = $linesRemoved
+        tool_name     = $toolName
+        branch        = $branchName
+    }
+    if ($diffContent) { $editBody.diff_content = $diffContent }
+    if ($language) { $editBody.language = $language }
+    if ($taskId) { $editBody.task_id = $taskId }
+
+    $editJson = $editBody | ConvertTo-Json -Compress
+
+    try {
+        Invoke-RestMethod -Uri "$SESSION_API/edit" `
+            -Method Post `
+            -Headers $authHeaders `
+            -Body $editJson `
+            -TimeoutSec 10 | Out-Null
+    } catch {}
 
     # ============ Encrypted File Sync ============
     $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"

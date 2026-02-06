@@ -88,7 +88,7 @@ async function poll(): Promise<void> {
     if (activeSessions.size >= config.maxConcurrent) return;
 
     try {
-        const task = await claimNextTask();
+        const task = await claimNextTask(config.projectFilter);
         if (!task) return;
 
         // Run task without awaiting (it runs in background)

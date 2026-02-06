@@ -56,9 +56,9 @@ export class TaskService extends Service {
     super();
     this.runtime = runtime;
     const url = runtime.getSetting('SUPABASE_URL');
-    const key = runtime.getSetting('SUPABASE_KEY');
+    const key = runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY');
     if (!url || !key) {
-      throw new Error('SUPABASE_URL and SUPABASE_KEY are required for TaskService');
+      throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for TaskService');
     }
     this.supabase = createClient(url, key);
   }
@@ -193,10 +193,15 @@ export class TaskService extends Service {
     });
   }
 
-  async claimNextTask(orchestratorId: string): Promise<ItachiTask | null> {
-    const { data, error } = await this.supabase.rpc('claim_next_task', {
+  async claimNextTask(orchestratorId: string, project?: string): Promise<ItachiTask | null> {
+    const rpcParams: Record<string, unknown> = {
       p_orchestrator_id: orchestratorId,
-    });
+    };
+    if (project) {
+      rpcParams.p_project = project;
+    }
+
+    const { data, error } = await this.supabase.rpc('claim_next_task', rpcParams);
 
     if (error) throw new Error(error.message || JSON.stringify(error));
     if (!data || data.length === 0) return null;

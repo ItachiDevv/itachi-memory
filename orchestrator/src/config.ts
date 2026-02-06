@@ -25,7 +25,7 @@ function parseProjectPaths(raw: string): Record<string, string> {
 
 export const config: Config = {
     supabaseUrl: required('SUPABASE_URL'),
-    supabaseKey: required('SUPABASE_KEY'),
+    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || required('SUPABASE_KEY'),
     orchestratorId: process.env.ITACHI_ORCHESTRATOR_ID || 'default-orchestrator',
     maxConcurrent: parseInt(process.env.ITACHI_MAX_CONCURRENT || '2', 10),
     workspaceDir: process.env.ITACHI_WORKSPACE_DIR || path.join(require('os').homedir(), 'itachi-workspaces'),
@@ -34,5 +34,6 @@ export const config: Config = {
     defaultBudget: parseFloat(process.env.ITACHI_DEFAULT_BUDGET || '5.00'),
     pollIntervalMs: parseInt(process.env.ITACHI_POLL_INTERVAL_MS || '5000', 10),
     projectPaths: parseProjectPaths(process.env.ITACHI_PROJECT_PATHS || '{}'),
+    projectFilter: process.env.ITACHI_PROJECT_FILTER || undefined,
     apiUrl: process.env.ITACHI_API_URL || 'https://eliza-claude-production.up.railway.app',
 };

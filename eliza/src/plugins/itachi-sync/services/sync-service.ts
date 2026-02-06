@@ -25,9 +25,9 @@ export class SyncService extends Service {
     super();
     this.runtime = runtime;
     const url = runtime.getSetting('SUPABASE_URL');
-    const key = runtime.getSetting('SUPABASE_KEY');
+    const key = runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY');
     if (!url || !key) {
-      throw new Error('SUPABASE_URL and SUPABASE_KEY are required for SyncService');
+      throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for SyncService');
     }
     this.supabase = createClient(url, key);
   }

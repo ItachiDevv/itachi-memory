@@ -100,7 +100,7 @@ export const character: Character = {
       OPENAI_API_KEY: loadCredential('OPENAI_API_KEY', '.eliza-openai-key', /OPENAI_API_KEY=(.+)/),
       TELEGRAM_BOT_TOKEN: loadCredential('TELEGRAM_BOT_TOKEN', '.telegram-bot-token'),
       SUPABASE_URL: loadCredential('SUPABASE_URL', '.supabase-credentials', /SUPABASE_URL=(.+)/),
-      SUPABASE_KEY: loadCredential('SUPABASE_KEY', '.supabase-credentials', /SUPABASE_KEY=(.+)/),
+      SUPABASE_SERVICE_ROLE_KEY: loadCredential('SUPABASE_SERVICE_ROLE_KEY', '.supabase-credentials', /SUPABASE_SERVICE_ROLE_KEY=(.+)/),
       POSTGRES_URL: loadCredential('POSTGRES_URL', '.supabase-credentials', /POSTGRES_URL=(.+)/),
       ITACHI_ALLOWED_USERS: process.env.ITACHI_ALLOWED_USERS ?? '',
       ITACHI_REPOS: process.env.ITACHI_REPOS ?? '',

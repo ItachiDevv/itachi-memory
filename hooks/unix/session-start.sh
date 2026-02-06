@@ -1,12 +1,32 @@
 #!/bin/bash
 # Itachi Memory - SessionStart Hook
 # 1) Pulls + decrypts synced .env/.md files from remote
-# 2) Fetches recent memories for context
+# 2) Fetches session briefing from code-intel API
+# 3) Fetches recent memories for context
 
-MEMORY_API="https://eliza-claude-production.up.railway.app/api/memory"
-SYNC_API="https://eliza-claude-production.up.railway.app/api/sync"
+BASE_API="${ITACHI_API_URL:-https://eliza-claude-production.up.railway.app}"
+MEMORY_API="$BASE_API/api/memory"
+SYNC_API="$BASE_API/api/sync"
+SESSION_API="$BASE_API/api/session"
 AUTH_HEADER="Authorization: Bearer ${ITACHI_API_KEY:-}"
-PROJECT_NAME=$(basename "$PWD")
+
+# ============ Project Resolution ============
+PROJECT_NAME=""
+if [ -n "$ITACHI_PROJECT_NAME" ]; then
+    PROJECT_NAME="$ITACHI_PROJECT_NAME"
+fi
+if [ -z "$PROJECT_NAME" ] && [ -f ".itachi-project" ]; then
+    PROJECT_NAME=$(cat .itachi-project | tr -d '\n\r')
+fi
+if [ -z "$PROJECT_NAME" ]; then
+    REMOTE_URL=$(git remote get-url origin 2>/dev/null)
+    if [ -n "$REMOTE_URL" ]; then
+        PROJECT_NAME=$(echo "$REMOTE_URL" | sed 's/\.git$//' | sed 's/.*[/:]//')
+    fi
+fi
+if [ -z "$PROJECT_NAME" ]; then
+    PROJECT_NAME=$(basename "$PWD")
+fi
 
 # Detect git branch
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
@@ -73,9 +93,7 @@ function mergeEnv(localContent, remoteContent) {
         const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
         if (m) remoteKV[m[1]] = m[2];
     }
-    // Remote wins for shared keys, local-only preserved
     Object.assign(localKV, remoteKV);
-    // Preserve machine-specific keys from local (not in remote)
     for (const line of localLines) {
         const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
         if (m && machineKeys.includes(m[1])) {
@@ -105,16 +123,13 @@ function mergeEnv(localContent, remoteContent) {
                 localHash = crypto.createHash('sha256').update(localContent).digest('hex');
             }
 
-            // Skip if content hash matches (no changes)
             if (localHash === f.content_hash) continue;
 
-            // Pull and decrypt
             const fileData = await httpGet(syncApi + '/pull/' + encodeURIComponent(project) + '/' + f.file_path);
             const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
 
             const fn = path.basename(f.file_path);
             if (fn === '.env' || fn.startsWith('.env.')) {
-                // .env: additive key-level merge
                 if (fs.existsSync(localPath)) {
                     const localContent = fs.readFileSync(localPath, 'utf8');
                     const merged = mergeEnv(localContent, remoteContent);
@@ -124,7 +139,6 @@ function mergeEnv(localContent, remoteContent) {
                     fs.writeFileSync(localPath, remoteContent);
                 }
             } else {
-                // .md: whole-file replacement
                 fs.mkdirSync(path.dirname(localPath), { recursive: true });
                 fs.writeFileSync(localPath, remoteContent);
             }
@@ -200,7 +214,6 @@ function decrypt(encB64, saltB64, passphrase) {
             const fileData = await httpGet(syncApi + '/pull/' + encodeURIComponent(repoName) + '/' + f.file_path);
             const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
 
-            // All global files use whole-file replacement
             fs.mkdirSync(path.dirname(localPath), { recursive: true });
             fs.writeFileSync(localPath, remoteContent);
             output.push('[sync] Updated ~/' + path.relative(require('os').homedir(), localPath) + ' (v' + f.version + ' by ' + f.updated_by + ')');
@@ -215,7 +228,58 @@ function decrypt(encB64, saltB64, passphrase) {
     fi
 fi
 
-# ============ Memory Context ============
+# ============ Session Briefing (Code-Intel) ============
+BRIEFING=$(curl -s -k -H "$AUTH_HEADER" "${SESSION_API}/briefing?project=${PROJECT_NAME}&branch=${BRANCH}" --max-time 10 2>/dev/null)
+
+if [ -n "$BRIEFING" ]; then
+    BRIEFING_OUTPUT=$(node -e "
+try {
+    const d = JSON.parse(process.argv[1]);
+    const lines = [];
+    lines.push('');
+    lines.push('=== Session Briefing for ${PROJECT_NAME} (${BRANCH}) ===');
+
+    if (d.recentSessions && d.recentSessions.length > 0) {
+        lines.push('Recent sessions:');
+        d.recentSessions.forEach(s => {
+            const files = (s.filesChanged || []).join(', ');
+            lines.push('  - ' + (s.summary || '(no summary)') + (files ? ' [' + files + ']' : ''));
+        });
+    }
+
+    if (d.hotFiles && d.hotFiles.length > 0) {
+        lines.push('Hot files (last 7d):');
+        d.hotFiles.slice(0, 5).forEach(f => {
+            lines.push('  - ' + f.path + ' (' + f.editCount + ' edits)');
+        });
+    }
+
+    if (d.activePatterns && d.activePatterns.length > 0) {
+        lines.push('Active patterns:');
+        d.activePatterns.forEach(p => lines.push('  - ' + p));
+    }
+
+    if (d.activeTasks && d.activeTasks.length > 0) {
+        lines.push('Active tasks:');
+        d.activeTasks.forEach(t => lines.push('  - [' + t.status + '] ' + t.description));
+    }
+
+    if (d.warnings && d.warnings.length > 0) {
+        d.warnings.forEach(w => lines.push('  [warn] ' + w));
+    }
+
+    lines.push('=== End Briefing ===');
+    lines.push('');
+    console.log(lines.join('\n'));
+} catch(e) {}
+" "$BRIEFING" 2>/dev/null)
+
+    if [ -n "$BRIEFING_OUTPUT" ]; then
+        echo "$BRIEFING_OUTPUT"
+    fi
+fi
+
+# ============ Memory Context (fallback) ============
 RECENT=$(curl -s -k -H "$AUTH_HEADER" "${MEMORY_API}/recent?project=${PROJECT_NAME}&limit=5&branch=${BRANCH}" --max-time 10 2>/dev/null)
 
 if [ -n "$RECENT" ]; then
