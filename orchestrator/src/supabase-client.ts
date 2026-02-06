@@ -63,9 +63,11 @@ export async function recoverStuckTasks(): Promise<number> {
 
 export async function notifyTaskCompletion(taskId: string): Promise<void> {
     try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
         const response = await fetch(`${config.apiUrl}/api/tasks/${taskId}/notify`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
         });
         if (!response.ok) {
             console.error(`Notify failed for task ${taskId}: ${response.statusText}`);

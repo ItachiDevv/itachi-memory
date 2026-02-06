@@ -7,7 +7,9 @@ import type { Task } from './types';
 // Fetch repo_url from the Itachi API when not available locally
 async function fetchRepoUrl(project: string): Promise<string | null> {
     try {
-        const res = await fetch(`${config.apiUrl}/api/repos/${encodeURIComponent(project)}`);
+        const headers: Record<string, string> = {};
+        if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
+        const res = await fetch(`${config.apiUrl}/api/repos/${encodeURIComponent(project)}`, { headers });
         if (!res.ok) return null;
         const data = await res.json();
         return data.repo_url || null;

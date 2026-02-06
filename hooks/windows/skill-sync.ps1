@@ -32,7 +32,7 @@ function httpGet(url) {
     return new Promise((resolve, reject) => {
         const u = new URL(url);
         const mod = u.protocol === 'https:' ? https : http;
-        mod.get(u, { rejectUnauthorized: false, timeout: 30000 }, (res) => {
+        mod.get(u, { rejectUnauthorized: false, timeout: 30000, headers: { 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') } }, (res) => {
             let d = '';
             res.on('data', c => d += c);
             res.on('end', () => {
@@ -50,7 +50,7 @@ function httpPost(url, body) {
         const data = JSON.stringify(body);
         const req = mod.request(u, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') },
             timeout: 30000,
             rejectUnauthorized: false
         }, (res) => {

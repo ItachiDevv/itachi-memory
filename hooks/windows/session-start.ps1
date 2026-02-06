@@ -10,6 +10,8 @@ try {
 
     $MEMORY_API = "https://eliza-claude-production.up.railway.app/api/memory"
     $SYNC_API = "https://eliza-claude-production.up.railway.app/api/sync"
+    $authHeaders = @{}
+    if ($env:ITACHI_API_KEY) { $authHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
     $project = Split-Path -Leaf (Get-Location)
 
     # Detect git branch
@@ -39,7 +41,7 @@ function httpGet(url) {
     return new Promise((resolve, reject) => {
         const u = new URL(url);
         const mod = u.protocol === 'https:' ? https : http;
-        mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers: { 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') } }, (res) => {
             let d = '';
             res.on('data', c => d += c);
             res.on('end', () => {
@@ -157,7 +159,7 @@ function httpGet(url) {
     return new Promise((resolve, reject) => {
         const u = new URL(url);
         const mod = u.protocol === 'https:' ? https : http;
-        mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers: { 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') } }, (res) => {
             let d = '';
             res.on('data', c => d += c);
             res.on('end', () => {
@@ -219,8 +221,11 @@ function decrypt(encB64, saltB64, passphrase) {
     }
 
     # ============ Memory Context ============
+    $memHeaders = @{}
+    if ($env:ITACHI_API_KEY) { $memHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
     $response = Invoke-RestMethod -Uri "$MEMORY_API/recent?project=$project&limit=5&branch=$branchName" `
         -Method Get `
+        -Headers $memHeaders `
         -TimeoutSec 10
 
     if ($response.recent -and $response.recent.Count -gt 0) {

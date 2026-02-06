@@ -5,6 +5,7 @@
 
 MEMORY_API="https://eliza-claude-production.up.railway.app/api/memory"
 SYNC_API="https://eliza-claude-production.up.railway.app/api/sync"
+AUTH_HEADER="Authorization: Bearer ${ITACHI_API_KEY:-}"
 PROJECT_NAME=$(basename "$PWD")
 
 # Detect git branch
@@ -47,6 +48,7 @@ fi
 # Send to memory API
 curl -s -k -X POST "${MEMORY_API}/code-change" \
   -H "Content-Type: application/json" \
+  -H "$AUTH_HEADER" \
   -d "{\"files\":[\"${FILENAME}\"],\"summary\":\"${SUMMARY}\",\"category\":\"${CATEGORY}\",\"project\":\"${PROJECT_NAME}\",\"branch\":\"${BRANCH}\"${TASK_FIELD}}" \
   --max-time 10 > /dev/null 2>&1
 
@@ -138,7 +140,7 @@ try {
     const mod = url.protocol === 'https:' ? https : http;
     const req = mod.request(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') },
         timeout: 10000,
         rejectUnauthorized: false
     }, (res) => { res.resume(); });

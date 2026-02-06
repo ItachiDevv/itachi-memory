@@ -10,6 +10,8 @@ try {
 
     $MEMORY_API = "https://eliza-claude-production.up.railway.app/api/memory"
     $SYNC_API = "https://eliza-claude-production.up.railway.app/api/sync"
+    $authHeaders = @{ "Content-Type" = "application/json" }
+    if ($env:ITACHI_API_KEY) { $authHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
 
     # Read JSON from stdin
     $raw = [Console]::In.ReadToEnd()
@@ -63,7 +65,7 @@ try {
 
     Invoke-RestMethod -Uri "$MEMORY_API/code-change" `
         -Method Post `
-        -ContentType "application/json" `
+        -Headers $authHeaders `
         -Body $body `
         -TimeoutSec 10 | Out-Null
 
@@ -159,7 +161,7 @@ try {
     const mod = url.protocol === 'https:' ? https : http;
     const req = mod.request(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') },
         timeout: 10000,
         rejectUnauthorized: false
     }, (res) => { res.resume(); });

@@ -5,6 +5,7 @@
 
 MEMORY_API="https://eliza-claude-production.up.railway.app/api/memory"
 SYNC_API="https://eliza-claude-production.up.railway.app/api/sync"
+AUTH_HEADER="Authorization: Bearer ${ITACHI_API_KEY:-}"
 PROJECT_NAME=$(basename "$PWD")
 
 # Detect git branch
@@ -33,7 +34,7 @@ function httpGet(url) {
     return new Promise((resolve, reject) => {
         const u = new URL(url);
         const mod = u.protocol === 'https:' ? https : http;
-        mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers: { 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') } }, (res) => {
             let d = '';
             res.on('data', c => d += c);
             res.on('end', () => {
@@ -155,7 +156,7 @@ function httpGet(url) {
     return new Promise((resolve, reject) => {
         const u = new URL(url);
         const mod = u.protocol === 'https:' ? https : http;
-        mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+        mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers: { 'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '') } }, (res) => {
             let d = '';
             res.on('data', c => d += c);
             res.on('end', () => {
@@ -215,7 +216,7 @@ function decrypt(encB64, saltB64, passphrase) {
 fi
 
 # ============ Memory Context ============
-RECENT=$(curl -s -k "${MEMORY_API}/recent?project=${PROJECT_NAME}&limit=5&branch=${BRANCH}" --max-time 10 2>/dev/null)
+RECENT=$(curl -s -k -H "$AUTH_HEADER" "${MEMORY_API}/recent?project=${PROJECT_NAME}&limit=5&branch=${BRANCH}" --max-time 10 2>/dev/null)
 
 if [ -n "$RECENT" ]; then
     OUTPUT=$(node -e "
