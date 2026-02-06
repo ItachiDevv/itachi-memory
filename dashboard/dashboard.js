@@ -7,12 +7,17 @@
   'use strict';
 
   // ── Configuration ─────────────────────────────────────────
-  const DEFAULTS = {
+  // Priority: URL params > localStorage > window.__ITACHI_ENV__ > hardcoded
+  const HARDCODED_DEFAULTS = {
     apiUrl: '',
     apiKey: '',
     refreshInterval: 10,
     orchestratorUrl: 'http://localhost:3001',
   };
+
+  // Merge Vercel env vars (set by build.sh) over hardcoded defaults
+  const ENV = (typeof window.__ITACHI_ENV__ === 'object' && window.__ITACHI_ENV__) || {};
+  const DEFAULTS = { ...HARDCODED_DEFAULTS, ...ENV };
 
   let config = { ...DEFAULTS };
   let refreshTimer = null;
