@@ -1,7 +1,7 @@
 import type { Project, ProjectAgent } from '@elizaos/core';
 import { character } from './character.js';
 import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
-import { itachiTasksPlugin } from './plugins/itachi-tasks/index.js';
+import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
 import {
@@ -55,6 +55,15 @@ const agent: ProjectAgent = {
       } catch (err: unknown) {
         runtime.logger.warn(`Failed to register ${name} worker (non-fatal):`, err instanceof Error ? err.message : String(err));
       }
+    }
+
+    // Register task dispatcher worker (10s interval)
+    try {
+      runtime.registerTaskWorker(taskDispatcherWorker);
+      await registerTaskDispatcherTask(runtime);
+      runtime.logger.info('Task dispatcher worker registered');
+    } catch (err: unknown) {
+      runtime.logger.warn('Failed to register task dispatcher worker (non-fatal):', err instanceof Error ? err.message : String(err));
     }
   },
 };

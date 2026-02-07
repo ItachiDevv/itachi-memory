@@ -59,11 +59,57 @@ export interface ClaudeStreamEvent {
     };
 }
 
+export interface ElizaStreamEvent {
+    type: 'text' | 'tool_use' | 'result';
+    text?: string;
+    tool_use?: {
+        name: string;
+        input: Record<string, unknown>;
+    };
+    result?: {
+        summary: string;
+        cost_usd: number;
+        duration_ms: number;
+        is_error: boolean;
+        files_changed?: string[];
+        pr_url?: string | null;
+    };
+}
+
+export type Engine = 'claude' | 'codex';
+
+export interface TaskClassification {
+    difficulty: 'trivial' | 'simple' | 'medium' | 'complex' | 'major';
+    reasoning: string;
+    suggestedModel: 'haiku' | 'sonnet' | 'opus';
+    engine: Engine;
+    useAgentTeams: boolean;
+    teamSize: number;
+    estimatedFiles: number;
+}
+
+export interface CodexStreamEvent {
+    type: string;
+    thread_id?: string;
+    item?: {
+        id: string;
+        type: string;
+        command?: string;
+        content?: string;
+        exit_code?: number;
+    };
+    usage?: {
+        input_tokens: number;
+        output_tokens: number;
+    };
+}
+
 export interface ActiveSession {
     task: Task;
     workspacePath: string;
     startedAt: Date;
     timeoutHandle: NodeJS.Timeout;
+    classification?: TaskClassification;
 }
 
 export interface Config {
@@ -75,8 +121,11 @@ export interface Config {
     taskTimeoutMs: number;
     defaultModel: string;
     defaultBudget: number;
+    defaultEngine: Engine;
     pollIntervalMs: number;
     projectPaths: Record<string, string>;
     projectFilter?: string;
     apiUrl: string;
+    machineId: string;
+    machineDisplayName: string;
 }

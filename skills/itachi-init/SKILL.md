@@ -54,11 +54,11 @@ To disable memory for this project, create a file called .no-memory in the proje
 REPO_NAME="$(basename "$(pwd)")"
 REPO_URL="$(git remote get-url origin 2>/dev/null || echo "")"
 if [ -n "$REPO_URL" ]; then
-  curl -s -X POST http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/repos/register \
+  curl -s -X POST $ITACHI_API_URL/api/repos/register \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"$REPO_NAME\", \"repo_url\": \"$REPO_URL\"}"
 else
-  curl -s -X POST http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/repos/register \
+  curl -s -X POST $ITACHI_API_URL/api/repos/register \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"$REPO_NAME\"}"
 fi
@@ -70,9 +70,9 @@ On Windows (PowerShell), use the equivalent:
 $repoName = Split-Path -Leaf (Get-Location)
 $repoUrl = git remote get-url origin 2>$null
 if ($repoUrl) {
-  Invoke-RestMethod -Uri "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`",`"repo_url`":`"$repoUrl`"}"
+  Invoke-RestMethod -Uri "$ITACHI_API_URL/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`",`"repo_url`":`"$repoUrl`"}"
 } else {
-  Invoke-RestMethod -Uri "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`"}"
+  Invoke-RestMethod -Uri "$ITACHI_API_URL/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`"}"
 }
 ```
 

@@ -11,7 +11,7 @@ async function fetchRepoUrl(project: string): Promise<string | null> {
         if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
         const res = await fetch(`${config.apiUrl}/api/repos/${encodeURIComponent(project)}`, { headers });
         if (!res.ok) return null;
-        const data = await res.json();
+        const data = await res.json() as { repo_url?: string };
         return data.repo_url || null;
     } catch {
         return null;

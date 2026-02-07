@@ -6,7 +6,7 @@
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $SYNC_API = "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync"
+    $SYNC_API = if ($env:ITACHI_API_URL) { "$env:ITACHI_API_URL/api/sync" } else { "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/sync" }
     $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"
     $claudeDir = Join-Path $env:USERPROFILE ".claude"
     $logFile = Join-Path $claudeDir ".skill-sync.log"

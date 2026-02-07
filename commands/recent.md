@@ -11,9 +11,9 @@ When the user runs `/recent` (optionally with a limit number):
 
 1. Default limit is 10 if not specified.
 
-2. Make a GET request to the memory API:
+2. Make a GET request to the memory API (use `$ITACHI_API_URL` env var):
    ```
-   curl -s "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/recent?project=<current-project>&limit=<limit>"
+   curl -s "$ITACHI_API_URL/api/memory/recent?project=<current-project>&limit=<limit>"
    ```
 
 3. Display results in a formatted table or list:

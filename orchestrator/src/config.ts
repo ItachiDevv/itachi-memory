@@ -1,6 +1,6 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
-import type { Config } from './types';
+import type { Config, Engine } from './types';
 
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
@@ -23,6 +23,8 @@ function parseProjectPaths(raw: string): Record<string, string> {
     }
 }
 
+const machineId = required('ITACHI_MACHINE_ID');
+
 export const config: Config = {
     supabaseUrl: required('SUPABASE_URL'),
     supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || required('SUPABASE_KEY'),
@@ -36,4 +38,7 @@ export const config: Config = {
     projectPaths: parseProjectPaths(process.env.ITACHI_PROJECT_PATHS || '{}'),
     projectFilter: process.env.ITACHI_PROJECT_FILTER || undefined,
     apiUrl: process.env.ITACHI_API_URL || 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io',
+    defaultEngine: (process.env.ITACHI_DEFAULT_ENGINE || 'claude') as Engine,
+    machineId,
+    machineDisplayName: process.env.ITACHI_MACHINE_NAME || machineId,
 };

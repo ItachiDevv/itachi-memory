@@ -1,7 +1,8 @@
 import { ChildProcess } from 'child_process';
 import { config } from './config';
 import { claimNextTask, updateTask, recoverStuckTasks } from './supabase-client';
-import { spawnClaudeSession } from './session-manager';
+import { spawnSession } from './session-manager';
+import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
 import type { Task, ActiveSession } from './types';
@@ -33,6 +34,10 @@ async function runTask(task: Task): Promise<void> {
         return;
     }
 
+    // Classify task to determine model, budget, and team configuration
+    const classification = await classifyTask(task, config);
+    console.log(`[runner] Classification for ${shortId}: ${classification.difficulty} (${classification.engine}/${classification.suggestedModel}, teams: ${classification.useAgentTeams}, ~${classification.estimatedFiles} files)`);
+
     // Update status to running
     await updateTask(task.id, {
         status: 'running',
@@ -40,8 +45,8 @@ async function runTask(task: Task): Promise<void> {
         started_at: new Date().toISOString(),
     });
 
-    // Spawn Claude session
-    const { process: proc, result: resultPromise } = spawnClaudeSession(task, workspacePath);
+    // Spawn session with appropriate engine (claude or codex)
+    const { process: proc, result: resultPromise } = spawnSession(task, workspacePath, classification);
 
     // Set up timeout
     const timeoutHandle = setTimeout(() => {
@@ -68,6 +73,7 @@ async function runTask(task: Task): Promise<void> {
         workspacePath,
         startedAt: new Date(),
         timeoutHandle,
+        classification,
         process: proc,
     });
 
@@ -88,7 +94,7 @@ async function poll(): Promise<void> {
     if (activeSessions.size >= config.maxConcurrent) return;
 
     try {
-        const task = await claimNextTask(config.projectFilter);
+        const task = await claimNextTask(config.projectFilter, config.machineId);
         if (!task) return;
 
         // Run task without awaiting (it runs in background)

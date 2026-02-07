@@ -11,11 +11,14 @@ export function getSupabase(): SupabaseClient {
     return supabase;
 }
 
-export async function claimNextTask(projectFilter?: string): Promise<Task | null> {
+export async function claimNextTask(projectFilter?: string, machineId?: string): Promise<Task | null> {
     const sb = getSupabase();
     const rpcParams: Record<string, unknown> = {
         p_orchestrator_id: config.orchestratorId,
     };
+    if (machineId) {
+        rpcParams.p_machine_id = machineId;
+    }
     if (projectFilter) {
         rpcParams.p_project = projectFilter;
     }

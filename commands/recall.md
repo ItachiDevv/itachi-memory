@@ -9,9 +9,9 @@ Search the Itachi Memory System for relevant past context.
 
 When the user runs `/recall <query>`:
 
-1. Make a GET request to the memory API:
+1. Make a GET request to the memory API (use `$ITACHI_API_URL` env var):
    ```
-   curl -s "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/api/memory/search?query=<URL-encoded-query>&project=<current-project>&limit=5"
+   curl -s "$ITACHI_API_URL/api/memory/search?query=<URL-encoded-query>&project=<current-project>&limit=5"
    ```
 
 2. If results are found, display them in a formatted list:

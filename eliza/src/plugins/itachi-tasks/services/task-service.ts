@@ -20,7 +20,9 @@ export interface ItachiTask {
   pr_url?: string;
   telegram_chat_id: number;
   telegram_user_id: number;
+  telegram_topic_id?: number;
   orchestrator_id?: string;
+  assigned_machine?: string;
   workspace_path?: string;
   notified_at?: string;
   created_at: string;
@@ -152,7 +154,7 @@ export class TaskService extends Service {
   async getActiveTasks(): Promise<ItachiTask[]> {
     const { data, error } = await this.supabase
       .from('itachi_tasks')
-      .select('id, project, description, status, orchestrator_id, created_at')
+      .select('id, project, description, status, orchestrator_id, telegram_topic_id, created_at')
       .in('status', ['queued', 'claimed', 'running'])
       .order('priority', { ascending: false })
       .order('created_at', { ascending: true });
@@ -166,6 +168,7 @@ export class TaskService extends Service {
       'status', 'target_branch', 'session_id', 'result_summary',
       'result_json', 'error_message', 'files_changed', 'pr_url',
       'workspace_path', 'started_at', 'completed_at', 'notified_at',
+      'telegram_topic_id', 'assigned_machine',
     ];
 
     const filtered: Record<string, unknown> = {};

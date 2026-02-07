@@ -38,7 +38,7 @@ const CREDENTIALS = [
   { key: 'GITHUB_TOKEN',           label: 'GitHub Personal Access Token', hint: 'ghp_... (repo, workflow scopes)' },
   { key: 'VERCEL_TOKEN',           label: 'Vercel Token',                 hint: 'from vercel.com/account/tokens' },
   { key: 'SUPABASE_ACCESS_TOKEN',  label: 'Supabase Access Token',        hint: 'from supabase.com/dashboard/account/tokens' },
-  { key: 'ANTHROPIC_API_KEY',      label: 'Anthropic API Key',            hint: 'sk-ant-...' },
+  { key: 'OPENAI_API_KEY',         label: 'OpenAI API Key',               hint: 'sk-... (optional, for embeddings)' },
   { key: 'GEMINI_API_KEY',         label: 'Google Gemini API Key',        hint: 'from aistudio.google.com/apikey' },
   { key: 'X_API_KEY',              label: 'X (Twitter) API Key',          hint: 'from developer.x.com' },
   { key: 'X_API_SECRET',           label: 'X (Twitter) API Secret',       hint: '' },
@@ -48,7 +48,7 @@ const CREDENTIALS = [
 ];
 
 // Machine-specific keys (never synced)
-const MACHINE_KEYS = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
+const MACHINE_KEYS = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS', 'ITACHI_MACHINE_ID', 'ITACHI_MACHINE_NAME'];
 
 // All skills to install
 const ALL_SKILLS = ['itachi-init', 'itachi-env', 'github', 'vercel', 'supabase', 'x-api'];
@@ -250,39 +250,160 @@ async function checkPrerequisites() {
   log('  All dependencies OK', 'green');
 }
 
-async function ensureClaudeAuth() {
+/**
+ * Find Claude auth credential file path.
+ * Returns the path if found, null otherwise.
+ */
+function findClaudeCredentials() {
+  const locations = [
+    join(CLAUDE_DIR, '.credentials.json'),
+    join(PLATFORM === 'windows'
+      ? join(process.env.APPDATA || '', 'claude-code', 'credentials.json')
+      : join(HOME, '.config', 'claude-code', 'credentials.json')),
+  ];
+  return locations.find(p => existsSync(p)) || null;
+}
+
+/**
+ * Find Codex auth credential file path.
+ */
+function findCodexCredentials() {
+  const codexAuth = join(HOME, '.codex', 'auth.json');
+  return existsSync(codexAuth) ? codexAuth : null;
+}
+
+/**
+ * Push CLI auth credentials to sync storage so other machines can pull them.
+ */
+async function pushAuthCredentials(passphrase) {
+  try {
+    const claudeCreds = findClaudeCredentials();
+    if (claudeCreds) {
+      const content = readFileSync(claudeCreds, 'utf8');
+      await encryptAndPush(content, passphrase, '_global', 'claude-auth');
+      log('  Pushed Claude auth to sync', 'gray');
+    }
+    const codexCreds = findCodexCredentials();
+    if (codexCreds) {
+      const content = readFileSync(codexCreds, 'utf8');
+      await encryptAndPush(content, passphrase, '_global', 'codex-auth');
+      log('  Pushed Codex auth to sync', 'gray');
+    }
+  } catch {
+    log('  Could not push auth credentials to sync', 'gray');
+  }
+}
+
+/**
+ * Pull CLI auth credentials from sync storage.
+ * Returns { claude: boolean, codex: boolean } indicating what was pulled.
+ */
+async function pullAuthCredentials(passphrase) {
+  const result = { claude: false, codex: false };
+  const syncApi = `${API_URL}/api/sync`;
+  try {
+    // Pull Claude auth
+    if (!findClaudeCredentials()) {
+      try {
+        const fileData = await httpGet(`${syncApi}/pull/_global/claude-auth`);
+        const content = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+        const credPath = join(CLAUDE_DIR, '.credentials.json');
+        ensureDir(dirname(credPath));
+        writeFileSync(credPath, content);
+        result.claude = true;
+        log('  Pulled Claude auth from sync', 'green');
+      } catch {
+        // No synced credentials yet
+      }
+    }
+    // Pull Codex auth
+    if (!findCodexCredentials()) {
+      try {
+        const fileData = await httpGet(`${syncApi}/pull/_global/codex-auth`);
+        const content = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+        const codexDir = join(HOME, '.codex');
+        ensureDir(codexDir);
+        writeFileSync(join(codexDir, 'auth.json'), content);
+        result.codex = true;
+        log('  Pulled Codex auth from sync', 'green');
+      } catch {
+        // No synced credentials yet
+      }
+    }
+  } catch {
+    // Sync unavailable
+  }
+  return result;
+}
+
+async function ensureClaudeAuth(passphrase) {
   log('\n[auth] Checking Claude Code authentication...', 'yellow');
   try {
-    // `claude --version` works without auth; `claude -p "test" --max-turns 0` would require it
-    // Best approach: check if there's a stored auth token
-    const authDir = PLATFORM === 'windows'
-      ? join(process.env.APPDATA || '', 'claude-code')
-      : join(HOME, '.config', 'claude-code');
-
-    // Try running claude with a no-op to check auth
     execSync('claude --version', { stdio: 'pipe' });
 
-    // Check for auth credentials
-    const hasAuth = existsSync(join(CLAUDE_DIR, '.credentials.json'))
-      || existsSync(join(authDir, 'credentials.json'))
-      || process.env.ANTHROPIC_API_KEY;
+    if (!findClaudeCredentials()) {
+      // Try pulling from sync first
+      const pulled = await pullAuthCredentials(passphrase);
+      if (pulled.claude) {
+        log('  Claude authenticated via synced credentials.', 'green');
+        return;
+      }
 
-    if (!hasAuth) {
       log('  Claude Code is installed but not authenticated.', 'yellow');
-      log('  Running "claude" to trigger login...', 'yellow');
       log('  (Follow the prompts in the browser to complete authentication)', 'gray');
       log('');
       try {
         execSync('claude login', { stdio: 'inherit', timeout: 120000 });
         log('  Claude authenticated.', 'green');
+        // Push credentials to sync for other machines
+        await pushAuthCredentials(passphrase);
       } catch {
         log('  Authentication skipped. You can run "claude login" later.', 'yellow');
       }
     } else {
       log('  Claude Code is authenticated.', 'green');
+      // Ensure credentials are synced
+      await pushAuthCredentials(passphrase);
     }
   } catch {
-    log('  Could not verify Claude auth (will work if ANTHROPIC_API_KEY is set)', 'gray');
+    log('  Claude Code not installed or not accessible', 'gray');
+  }
+}
+
+async function ensureCodexAuth(passphrase) {
+  log('\n[auth] Checking Codex CLI authentication...', 'yellow');
+  try {
+    if (!commandExists('codex')) {
+      log('  Codex CLI not installed. Installing...', 'yellow');
+      execSync('npm install -g @openai/codex', { stdio: 'inherit' });
+    }
+
+    if (!findCodexCredentials()) {
+      // Try pulling from sync first
+      const pulled = await pullAuthCredentials(passphrase);
+      if (pulled.codex) {
+        log('  Codex authenticated via synced credentials.', 'green');
+        return;
+      }
+
+      log('  Codex CLI is installed but not authenticated.', 'yellow');
+      log('  (Follow the prompts in the browser to complete authentication)', 'gray');
+      log('');
+      try {
+        execSync('codex login', { stdio: 'inherit', timeout: 120000 });
+        log('  Codex authenticated.', 'green');
+        // Push credentials to sync for other machines
+        await pushAuthCredentials(passphrase);
+      } catch {
+        log('  Authentication skipped. You can run "codex login" later.', 'yellow');
+      }
+    } else {
+      log('  Codex CLI is authenticated.', 'green');
+      // Ensure credentials are synced
+      await pushAuthCredentials(passphrase);
+    }
+  } catch {
+    log('  Could not verify Codex auth', 'gray');
   }
 }
 
@@ -847,15 +968,25 @@ async function setupOrchestrator(supaUrl, supaKey) {
   const wsDir = (await ask(`  Workspace directory [${defaultWs}]: `)) || defaultWs;
   ensureDir(wsDir);
 
+  // Machine dispatch config
+  const defaultMachineId = hostname().toLowerCase().replace(/ /g, '-').replace(/[^a-z0-9-]/g, '');
+  const machineId = (await ask(`  Machine ID [${defaultMachineId}]: `)) || defaultMachineId;
+  const machineName = (await ask(`  Machine display name [${machineId}]: `)) || machineId;
+
   if (useSecrets) {
     let content = readFileSync(orchEnv, 'utf8');
     content = content.replace(/ITACHI_ORCHESTRATOR_ID=.+/, `ITACHI_ORCHESTRATOR_ID=${orchId}`);
     content = content.replace(/ITACHI_WORKSPACE_DIR=.+/, `ITACHI_WORKSPACE_DIR=${wsDir}`);
     content = content.replace(/ITACHI_PROJECT_PATHS=\{.+\}/, 'ITACHI_PROJECT_PATHS={}');
+    // Add machine dispatch vars if missing
+    if (!content.includes('ITACHI_MACHINE_ID=')) content += `\nITACHI_MACHINE_ID=${machineId}`;
+    else content = content.replace(/ITACHI_MACHINE_ID=.+/, `ITACHI_MACHINE_ID=${machineId}`);
+    if (!content.includes('ITACHI_MACHINE_NAME=')) content += `\nITACHI_MACHINE_NAME=${machineName}`;
+    else content = content.replace(/ITACHI_MACHINE_NAME=.+/, `ITACHI_MACHINE_NAME=${machineName}`);
     writeFileSync(orchEnv, content);
-    log('  Updated orchestrator ID and workspace path', 'gray');
+    log('  Updated orchestrator ID, workspace, and machine config', 'gray');
   } else {
-    const maxConc = (await ask('  Max concurrent Claude sessions [2]: ')) || '2';
+    const maxConc = (await ask('  Max concurrent sessions [5]: ')) || '5';
     writeFileSync(orchEnv, [
       `SUPABASE_URL=${supaUrl}`, `SUPABASE_SERVICE_ROLE_KEY=${supaKey}`,
       `ITACHI_ORCHESTRATOR_ID=${orchId}`, `ITACHI_MAX_CONCURRENT=${maxConc}`,
@@ -863,6 +994,8 @@ async function setupOrchestrator(supaUrl, supaKey) {
       `ITACHI_DEFAULT_MODEL=sonnet`, `ITACHI_DEFAULT_BUDGET=5.00`,
       `ITACHI_POLL_INTERVAL_MS=5000`, `ITACHI_PROJECT_PATHS={}`,
       `ITACHI_API_URL=${API_URL}`,
+      `ITACHI_DEFAULT_ENGINE=claude`,
+      `ITACHI_MACHINE_ID=${machineId}`, `ITACHI_MACHINE_NAME=${machineName}`,
     ].join('\n') + '\n');
     log(`  Written: ${orchEnv}`, 'gray');
   }
@@ -905,9 +1038,10 @@ async function main() {
   try {
     await detectPlatform();
     await checkPrerequisites();
-    await ensureClaudeAuth();
     const passphrase = await setupPassphrase();
     const { supaUrl, supaKey } = await bootstrapCredentials(passphrase);
+    await ensureClaudeAuth(passphrase);
+    await ensureCodexAuth(passphrase);
     await installHooks();
     await registerSkillSync();
     await pullGlobalSync(passphrase);

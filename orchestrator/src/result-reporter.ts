@@ -2,6 +2,7 @@ import { updateTask, notifyTaskCompletion } from './supabase-client';
 import { getFilesChanged, commitAndPush, createPR, cleanupWorkspace } from './workspace-manager';
 import type { Task } from './types';
 import type { SessionResult } from './session-manager';
+import { streamToEliza } from './session-manager';
 
 export async function reportResult(
     task: Task,
@@ -48,6 +49,19 @@ export async function reportResult(
         });
 
         console.log(`[reporter] Task ${shortId}: ${result.isError ? 'FAILED' : 'COMPLETED'} (${filesChanged.length} files, $${result.costUsd.toFixed(2)})`);
+
+        // Stream final result to ElizaOS
+        streamToEliza(task.id, {
+            type: 'result',
+            result: {
+                summary,
+                cost_usd: result.costUsd,
+                duration_ms: result.durationMs,
+                is_error: result.isError,
+                files_changed: filesChanged,
+                pr_url: prUrl,
+            },
+        });
 
         // Notify via Telegram
         await notifyTaskCompletion(task.id);
