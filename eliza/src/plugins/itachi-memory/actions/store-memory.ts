@@ -23,7 +23,9 @@ export const storeMemoryAction: Action = {
       text.includes('note') ||
       text.includes('store') ||
       text.includes('save') ||
-      text.length > 20 // Any substantial message could be worth storing
+      text.includes("don't forget") ||
+      text.includes('keep in mind') ||
+      text.includes('log this')
     );
   },
 

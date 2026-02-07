@@ -10,6 +10,7 @@ export interface ItachiMemory {
   files: string[];
   branch?: string;
   task_id?: string;
+  metadata?: Record<string, unknown>;
   created_at: string;
   similarity?: number;
 }
@@ -22,6 +23,7 @@ export interface StoreMemoryParams {
   files: string[];
   branch?: string;
   task_id?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface MemoryStats {
@@ -89,6 +91,7 @@ export class MemoryService extends Service {
     };
     if (params.branch) insertObj.branch = params.branch;
     if (params.task_id) insertObj.task_id = params.task_id;
+    if (params.metadata) insertObj.metadata = params.metadata;
 
     const { data, error } = await this.supabase
       .from('itachi_memories')
@@ -121,6 +124,23 @@ export class MemoryService extends Service {
     return (data as ItachiMemory[]) || [];
   }
 
+  async searchMemoriesWeighted(
+    query: string,
+    project?: string,
+    limit = 5,
+    category?: string
+  ): Promise<ItachiMemory[]> {
+    const results = await this.searchMemories(query, project, limit * 2, undefined, category);
+    return results
+      .map((m) => {
+        const significance = (m.metadata as Record<string, unknown>)?.significance;
+        const sigWeight = typeof significance === 'number' ? significance : 1.0;
+        return { ...m, similarity: (m.similarity ?? 0.5) * (0.5 + 0.5 * sigWeight) };
+      })
+      .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
+      .slice(0, limit);
+  }
+
   async getRecentMemories(
     project?: string,
     limit = 10,
@@ -128,7 +148,7 @@ export class MemoryService extends Service {
   ): Promise<ItachiMemory[]> {
     let query = this.supabase
       .from('itachi_memories')
-      .select('id, project, category, content, summary, files, branch, task_id, created_at')
+      .select('id, project, category, content, summary, files, branch, task_id, metadata, created_at')
       .order('created_at', { ascending: false })
       .limit(limit);
 

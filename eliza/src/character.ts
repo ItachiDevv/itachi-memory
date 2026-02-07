@@ -95,6 +95,7 @@ export const character: Character = {
   ],
   settings: {
     ENABLE_EXTENDED_CAPABILITIES: true,
+    SHOULD_RESPOND_BYPASS_SOURCES: 'telegram',
     secrets: {
       ANTHROPIC_API_KEY: loadCredential('ANTHROPIC_API_KEY', '.anthropic-key', /ANTHROPIC_API_KEY=(.+)/),
       OPENAI_API_KEY: loadCredential('OPENAI_API_KEY', '.eliza-openai-key', /OPENAI_API_KEY=(.+)/),

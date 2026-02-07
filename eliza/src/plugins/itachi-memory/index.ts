@@ -3,11 +3,14 @@ import { MemoryService } from './services/memory-service.js';
 import { storeMemoryAction } from './actions/store-memory.js';
 import { recentMemoriesProvider } from './providers/recent-memories.js';
 import { memoryStatsProvider } from './providers/memory-stats.js';
+import { conversationContextProvider } from './providers/conversation-context.js';
+import { conversationMemoryEvaluator } from './evaluators/conversation-memory.js';
 
 export const itachiMemoryPlugin: Plugin = {
   name: 'itachi-memory',
   description: 'Project memory storage, semantic search, and fact extraction for Itachi',
   actions: [storeMemoryAction],
-  providers: [recentMemoriesProvider, memoryStatsProvider],
+  evaluators: [conversationMemoryEvaluator],
+  providers: [recentMemoriesProvider, memoryStatsProvider, conversationContextProvider],
   services: [MemoryService],
 };
