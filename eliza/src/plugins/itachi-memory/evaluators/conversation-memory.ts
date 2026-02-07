@@ -3,18 +3,18 @@ import { MemoryService } from '../services/memory-service.js';
 
 export const conversationMemoryEvaluator: Evaluator = {
   name: 'CONVERSATION_MEMORY',
-  description: 'Store Telegram conversation exchanges in project memory with significance scoring',
-  similes: ['remember conversation', 'store chat context'],
+  description: 'LLM-filtered storage of Telegram conversation exchanges — only stores exchanges worth remembering long-term',
+  similes: ['remember conversation', 'store chat context', 'filter conversation memory'],
   alwaysRun: true,
 
   examples: [
     {
-      prompt: 'User asked about PostgreSQL migration decision and Itachi confirmed the approach.',
-      response: 'Stored conversation memory with significance 0.85: decided to use PostgreSQL for new project.',
+      prompt: 'User decided to switch from REST to GraphQL for the new API and Itachi confirmed the migration plan.',
+      response: 'Stored conversation memory: decided to migrate API from REST to GraphQL with phased rollout.',
     },
     {
-      prompt: 'User said "thanks" and Itachi replied "you\'re welcome".',
-      response: 'Stored conversation memory with significance 0.1: casual exchange.',
+      prompt: 'User said "hey" and Itachi replied "Hello! How can I help you today?".',
+      response: 'Skipped — casual greeting, not worth storing long-term.',
     },
   ],
 
@@ -24,13 +24,12 @@ export const conversationMemoryEvaluator: Evaluator = {
     if (source !== 'telegram') return false;
 
     // Only trigger on the agent's own response (not user messages)
-    // In ElizaOS, the agent's entityId matches the runtime agent
     const isAgentMessage = message.entityId === message.agentId;
     if (!isAgentMessage) return false;
 
     // Skip very short messages
     const text = message.content?.text || '';
-    if (text.length < 30) return false;
+    if (text.length < 50) return false;
 
     return true;
   },
@@ -58,7 +57,7 @@ export const conversationMemoryEvaluator: Evaluator = {
 
       const currentMessage = message.content?.text || '';
 
-      const prompt = `You are analyzing a conversation between a user and Itachi (an AI project manager) to determine its long-term significance and extract a summary.
+      const prompt = `You are analyzing a conversation between a user and Itachi (an AI project manager) to decide if this exchange is worth remembering long-term.
 
 Recent conversation:
 ${context}
@@ -66,18 +65,17 @@ ${context}
 Current response:
 ${currentMessage}
 
-Score this exchange 0.0-1.0 for long-term significance:
-- 0.0-0.2: Greetings, thanks, acknowledgments, small talk
-- 0.3-0.5: General questions answered, status updates, minor clarifications
-- 0.6-0.8: Technical decisions, preferences expressed, important context shared
-- 0.9-1.0: Critical decisions, architectural choices, project pivots, explicit "remember this"
-
-Also extract:
-- A 1-2 sentence summary of the exchange
-- The project name if mentioned (or "general" if none)
+Is this exchange worth storing in long-term memory? Consider:
+- Decisions, preferences, architectural choices, project context = YES
+- Greetings, thanks, acknowledgments, small talk, status pings = NO
+- Bug reports, error details, debugging conclusions = YES
+- Simple confirmations without new information = NO
 
 Respond ONLY with valid JSON, no markdown fences:
-{"significance": 0.0, "summary": "...", "project": "..."}`;
+{"worth_storing": true, "summary": "1-2 sentence summary of what to remember", "project": "project name or general"}
+
+If NOT worth storing:
+{"worth_storing": false, "summary": "", "project": ""}`;
 
       const result = await runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
@@ -85,7 +83,7 @@ Respond ONLY with valid JSON, no markdown fences:
       });
 
       const raw = typeof result === 'string' ? result : String(result);
-      let parsed: { significance: number; summary: string; project: string };
+      let parsed: { worth_storing: boolean; summary: string; project: string };
       try {
         parsed = JSON.parse(raw.trim());
       } catch {
@@ -93,9 +91,15 @@ Respond ONLY with valid JSON, no markdown fences:
         return;
       }
 
-      if (typeof parsed.significance !== 'number' || !parsed.summary) return;
+      if (typeof parsed.worth_storing !== 'boolean') return;
 
-      const significance = Math.max(0, Math.min(1, parsed.significance));
+      if (!parsed.worth_storing) {
+        runtime.logger.debug('CONVERSATION_MEMORY: skipped — not worth storing');
+        return;
+      }
+
+      if (!parsed.summary) return;
+
       const project = parsed.project || 'general';
 
       await memoryService.storeMemory({
@@ -104,11 +108,10 @@ Respond ONLY with valid JSON, no markdown fences:
         content: currentMessage,
         summary: parsed.summary,
         files: [],
-        metadata: { significance, source: 'telegram' },
       });
 
       runtime.logger.info(
-        `CONVERSATION_MEMORY: stored (significance=${significance.toFixed(2)}, project=${project})`
+        `CONVERSATION_MEMORY: stored (project=${project}, summary=${parsed.summary.substring(0, 60)})`
       );
     } catch (error) {
       runtime.logger.error('CONVERSATION_MEMORY error:', error);
