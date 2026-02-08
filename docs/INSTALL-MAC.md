@@ -186,8 +186,8 @@ ls -la ~/.claude/hooks/
 # Verify env var
 echo $ITACHI_API_URL
 
-# Should show the sslip.io URL. If empty:
-export ITACHI_API_URL="http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io"
+# Should show the API URL. If empty:
+export ITACHI_API_URL="https://itachisbrainserver.online"
 # Then re-run setup to fix permanently
 ```
 

@@ -126,8 +126,8 @@ itachi-memory/
 - On Windows: verify PowerShell execution policy allows scripts
 
 ### API not reachable
-- Test: `curl http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/health`
-- On Windows with TLS issues, use PowerShell: `Invoke-RestMethod -Uri 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io/health'`
+- Test: `curl https://itachisbrainserver.online/health`
+- On Windows with TLS issues, use PowerShell: `Invoke-RestMethod -Uri 'https://itachisbrainserver.online/health'`
 
 ### Memories not appearing
 - Check the API URL in hook scripts matches your deployment

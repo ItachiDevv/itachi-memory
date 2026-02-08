@@ -19,11 +19,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ============ Config ============
-const API_URL = 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io';
-// Bypass DNS: connect directly to IP embedded in sslip.io domain, set Host header for Traefik routing
+const API_URL = 'https://itachisbrainserver.online';
 const API_HOST = new URL(API_URL).host;
-const API_IP_MATCH = new URL(API_URL).hostname.match(/(\d+\.\d+\.\d+\.\d+)\.sslip\.io$/);
-const API_ORIGIN = API_IP_MATCH ? `${new URL(API_URL).protocol}//${API_IP_MATCH[1]}` : new URL(API_URL).origin;
+const API_ORIGIN = new URL(API_URL).origin;
 const PLATFORM = osPlatform() === 'win32' ? 'windows' : osPlatform() === 'darwin' ? 'macos' : 'linux';
 const HOME = homedir();
 const CLAUDE_DIR = join(HOME, '.claude');

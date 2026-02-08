@@ -1,7 +1,7 @@
 # Itachi Memory System — TODO
 
 ## Infrastructure
-- [ ] Set up custom domain with SSL for Coolify (replace sslip.io URL)
+- [ ] Set up custom domain with SSL for Coolify (replace API URL)
 - [ ] Add Hetzner Cloud Firewall (allow ports 22, 80, 443 only)
 - [ ] Shut down old Railway deployment (`eliza-claude-production`)
 

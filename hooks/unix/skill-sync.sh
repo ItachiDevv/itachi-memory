@@ -4,7 +4,7 @@
 # Runs as a cron job daily at 3:00 AM
 # Silent — never blocks anything, logs to ~/.claude/.skill-sync.log
 
-SYNC_API="${ITACHI_API_URL:-http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io}/api/sync"
+SYNC_API="${ITACHI_API_URL:-https://itachisbrainserver.online}/api/sync"
 ITACHI_KEY_FILE="$HOME/.itachi-key"
 CLAUDE_DIR="$HOME/.claude"
 

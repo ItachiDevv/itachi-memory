@@ -4,7 +4,7 @@
 # 2) Fetches session briefing from code-intel API
 # 3) Fetches recent memories for context
 
-BASE_API="${ITACHI_API_URL:-http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io}"
+BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 MEMORY_API="$BASE_API/api/memory"
 SYNC_API="$BASE_API/api/sync"
 SESSION_API="$BASE_API/api/session"

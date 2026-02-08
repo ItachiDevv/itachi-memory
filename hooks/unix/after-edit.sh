@@ -4,7 +4,7 @@
 # 2) Sends per-edit data to code-intel API (session/edit)
 # 3) If .env or .md file AND ~/.itachi-key exists, encrypts + pushes to sync API
 
-BASE_API="${ITACHI_API_URL:-http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io}"
+BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 MEMORY_API="$BASE_API/api/memory"
 SYNC_API="$BASE_API/api/sync"
 SESSION_API="$BASE_API/api/session"

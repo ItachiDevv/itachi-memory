@@ -8,7 +8,7 @@ if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $BASE_API = if ($env:ITACHI_API_URL) { $env:ITACHI_API_URL } else { "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io" }
+    $BASE_API = if ($env:ITACHI_API_URL) { $env:ITACHI_API_URL } else { "https://itachisbrainserver.online" }
     $MEMORY_API = "$BASE_API/api/memory"
     $SESSION_API = "$BASE_API/api/session"
     $authHeaders = @{ "Content-Type" = "application/json" }

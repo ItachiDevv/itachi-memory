@@ -191,8 +191,8 @@ dir "$env:USERPROFILE\.claude\hooks\"
 # Verify env var (in a NEW terminal)
 echo $env:ITACHI_API_URL
 
-# Should show the sslip.io URL. If empty, set it:
-setx ITACHI_API_URL "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io"
+# Should show the API URL. If empty, set it:
+setx ITACHI_API_URL "https://itachisbrainserver.online"
 # Then open a new terminal
 ```
 

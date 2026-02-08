@@ -13,7 +13,7 @@ import { join, dirname, basename } from "path";
 // ============ Config ============
 const API_URL =
   process.env.ITACHI_API_URL ||
-  "http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io";
+  "https://itachisbrainserver.online";
 
 // ============ Project Resolution ============
 function resolveProject() {
