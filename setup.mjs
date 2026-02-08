@@ -117,26 +117,53 @@ function commandExists(cmd) {
 }
 
 async function httpGet(url) {
-  const headers = {};
-  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
-  try { return JSON.parse(text); } catch { return text; }
+  // Try fetch first, fall back to curl if it fails (fixes Mac/Node DNS issues)
+  try {
+    const headers = {};
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+    try { return JSON.parse(text); } catch { return text; }
+  } catch (fetchErr) {
+    // Fallback: use curl (works on Mac/Linux where Node fetch may fail)
+    try {
+      const authArg = API_KEY ? ` -H "Authorization: Bearer ${API_KEY}"` : '';
+      const result = execSync(`curl -sf --max-time 10${authArg} "${url}"`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+      try { return JSON.parse(result); } catch { return result; }
+    } catch {
+      throw fetchErr; // curl also failed, throw the original fetch error
+    }
+  }
 }
 
 async function httpPost(url, body) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15000),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
-  try { return JSON.parse(text); } catch { return text; }
+  // Try fetch first, fall back to curl if it fails
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+    try { return JSON.parse(text); } catch { return text; }
+  } catch (fetchErr) {
+    // Fallback: use curl (stdin avoids shell escaping issues)
+    try {
+      const authArg = API_KEY ? ` -H "Authorization: Bearer ${API_KEY}"` : '';
+      const result = execSync(
+        `curl -sf --max-time 15 -X POST -H "Content-Type: application/json"${authArg} -d @- "${url}"`,
+        { encoding: 'utf8', input: JSON.stringify(body), stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+      try { return JSON.parse(result); } catch { return result; }
+    } catch {
+      throw fetchErr;
+    }
+  }
 }
 
 function decrypt(encB64, saltB64, passphrase) {
