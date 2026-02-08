@@ -459,8 +459,8 @@ async function bootstrapCredentials(passphrase) {
       }
     } catch (e) {
       if (e.message.includes('DECRYPT') || e.message.includes('Unsupported')) {
-        log('  ERROR: Wrong passphrase or bootstrap decryption failed.', 'red');
-        process.exit(1);
+        log('  WARNING: Bootstrap decryption failed (passphrase may not match bootstrap data).', 'yellow');
+        log('  Falling back to manual entry.', 'yellow');
       }
       log('  Bootstrap not available. Falling back to manual entry.', 'yellow');
       supaUrl = await ask('  SUPABASE_URL: ');
