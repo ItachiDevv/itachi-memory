@@ -118,24 +118,166 @@ function commandExists(cmd) {
 async function httpGet(url) {
   const headers = {};
   if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
-  try { return JSON.parse(text); } catch { return text; }
+
+  // Strategy 1: Node.js fetch
+  try {
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+    const text = await res.text();
+    if (res.ok) {
+      try { return JSON.parse(text); } catch { return text; }
+    }
+    // If we got a 404 with ElizaOS catch-all signature, try curl fallback
+    if (res.status === 404 && text.includes('API endpoint not found')) {
+      log(`  [httpGet] fetch got 404 for ${url}, trying curl fallback...`, 'gray');
+    } else {
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+  } catch (fetchErr) {
+    if (fetchErr.message && !fetchErr.message.includes('API endpoint not found')) {
+      // For non-404 errors, try curl fallback too
+      log(`  [httpGet] fetch failed: ${fetchErr.message}, trying curl fallback...`, 'gray');
+    }
+  }
+
+  // Strategy 2: curl subprocess (bypasses Node.js HTTP stack entirely)
+  try {
+    const curlHeaders = ['-H', 'Accept: application/json'];
+    if (API_KEY) curlHeaders.push('-H', `Authorization: Bearer ${API_KEY}`);
+    const curlCmd = PLATFORM === 'windows'
+      ? `curl -s -S --max-time 10 ${curlHeaders.map(h => `"${h}"`).join(' ')} "${url}"`
+      : `curl -s -S --max-time 10 ${curlHeaders.map(h => `'${h}'`).join(' ')} '${url}'`;
+    const curlResult = execSync(curlCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    if (curlResult) {
+      try {
+        const parsed = JSON.parse(curlResult);
+        // Check if curl also got the 404
+        if (parsed.success === false && parsed.error?.code === 404) {
+          throw new Error(`HTTP 404: ${curlResult}`);
+        }
+        return parsed;
+      } catch (parseErr) {
+        if (parseErr.message.includes('HTTP 404')) throw parseErr;
+        return curlResult;
+      }
+    }
+  } catch (curlErr) {
+    if (curlErr.message.includes('HTTP 404')) throw curlErr;
+    log(`  [httpGet] curl fallback also failed: ${curlErr.message}`, 'gray');
+  }
+
+  // Strategy 3: Node.js https module (different HTTP stack from undici-based fetch)
+  const https = await import('https');
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const parsedUrl = new URL(url);
+      const opts = {
+        hostname: parsedUrl.hostname,
+        port: 443,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: 'GET',
+        headers: { ...headers, 'Accept': 'application/json' },
+      };
+      const req = https.get(opts, (res) => {
+        let body = '';
+        res.on('data', d => body += d);
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try { resolve(JSON.parse(body)); } catch { resolve(body); }
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+          }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')); });
+    });
+    return result;
+  } catch (httpsErr) {
+    throw new Error(`All HTTP strategies failed for ${url}: ${httpsErr.message}`);
+  }
 }
 
 async function httpPost(url, postBody) {
   const headers = { 'Content-Type': 'application/json' };
   if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(postBody),
-    signal: AbortSignal.timeout(15000),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
-  try { return JSON.parse(text); } catch { return text; }
+  const bodyStr = JSON.stringify(postBody);
+
+  // Strategy 1: Node.js fetch
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: bodyStr,
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await res.text();
+    if (res.ok) {
+      try { return JSON.parse(text); } catch { return text; }
+    }
+    if (res.status === 404 && text.includes('API endpoint not found')) {
+      log(`  [httpPost] fetch got 404, trying curl fallback...`, 'gray');
+    } else {
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+  } catch (fetchErr) {
+    if (fetchErr.message && !fetchErr.message.includes('API endpoint not found')) {
+      log(`  [httpPost] fetch failed: ${fetchErr.message}, trying curl fallback...`, 'gray');
+    }
+  }
+
+  // Strategy 2: curl subprocess
+  try {
+    const escaped = bodyStr.replace(/'/g, "'\\''");
+    const curlHeaders = ['-H', 'Content-Type: application/json'];
+    if (API_KEY) curlHeaders.push('-H', `Authorization: Bearer ${API_KEY}`);
+    const curlCmd = PLATFORM === 'windows'
+      ? `curl -s -S --max-time 15 -X POST ${curlHeaders.map(h => `"${h}"`).join(' ')} -d "${bodyStr.replace(/"/g, '\\"')}" "${url}"`
+      : `curl -s -S --max-time 15 -X POST ${curlHeaders.map(h => `'${h}'`).join(' ')} -d '${escaped}' '${url}'`;
+    const curlResult = execSync(curlCmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    if (curlResult) {
+      const parsed = JSON.parse(curlResult);
+      if (parsed.success === false && parsed.error?.code === 404) {
+        throw new Error(`HTTP 404: ${curlResult}`);
+      }
+      return parsed;
+    }
+  } catch (curlErr) {
+    if (curlErr.message.includes('HTTP 404')) throw curlErr;
+    log(`  [httpPost] curl fallback also failed: ${curlErr.message}`, 'gray');
+  }
+
+  // Strategy 3: Node.js https module
+  const https = await import('https');
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const parsedUrl = new URL(url);
+      const opts = {
+        hostname: parsedUrl.hostname,
+        port: 443,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: 'POST',
+        headers: { ...headers, 'Content-Length': Buffer.byteLength(bodyStr) },
+      };
+      const req = https.request(opts, (res) => {
+        let body = '';
+        res.on('data', d => body += d);
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try { resolve(JSON.parse(body)); } catch { resolve(body); }
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+          }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(15000, () => { req.destroy(); reject(new Error('Timeout')); });
+      req.write(bodyStr);
+      req.end();
+    });
+    return result;
+  } catch (httpsErr) {
+    throw new Error(`All HTTP strategies failed for ${url}: ${httpsErr.message}`);
+  }
 }
 
 function decrypt(encB64, saltB64, passphrase) {
@@ -897,11 +1039,74 @@ claude @args
 
 async function testConnectivity() {
   log('\nTesting API connectivity...', 'yellow');
+
+  // Test 1: Health endpoint
   try {
     const health = await httpGet(`${API_URL}/health`);
-    log(`  API: OK (${health.memories || 0} memories)`, 'green');
-  } catch {
-    log(`  WARNING: Could not reach ${API_URL}`, 'red');
+    log(`  /health: OK (${health.memories || 0} memories)`, 'green');
+  } catch (e) {
+    log(`  /health: FAILED - ${e.message}`, 'red');
+  }
+
+  // Test 2: Sync list endpoint (the one that fails on Mac)
+  try {
+    const list = await httpGet(`${API_URL}/api/sync/list/_global`);
+    const count = list.files ? list.files.length : 0;
+    log(`  /api/sync/list/_global: OK (${count} files)`, 'green');
+  } catch (e) {
+    log(`  /api/sync/list/_global: FAILED - ${e.message}`, 'red');
+
+    // Run diagnostics
+    log('', '');
+    log('  === Diagnostics ===', 'yellow');
+
+    // DNS check
+    try {
+      const dns = await import('dns');
+      const addresses = await new Promise((resolve, reject) => {
+        dns.default.lookup(new URL(API_URL).hostname, { all: true }, (err, addrs) => {
+          if (err) reject(err); else resolve(addrs);
+        });
+      });
+      log(`  DNS: ${JSON.stringify(addresses)}`, 'gray');
+    } catch (dnsErr) {
+      log(`  DNS lookup failed: ${dnsErr.message}`, 'red');
+    }
+
+    // TLS check
+    try {
+      const tls = await import('tls');
+      const sock = tls.default.connect(443, new URL(API_URL).hostname, { servername: new URL(API_URL).hostname });
+      await new Promise((resolve, reject) => {
+        sock.on('secureConnect', () => {
+          const cert = sock.getPeerCertificate();
+          log(`  TLS: ${sock.getProtocol()}, cert CN=${cert.subject?.CN}, remote=${sock.remoteAddress}`, 'gray');
+          sock.end();
+          resolve();
+        });
+        sock.on('error', (err) => { log(`  TLS error: ${err.message}`, 'red'); resolve(); });
+        setTimeout(() => { sock.destroy(); resolve(); }, 5000);
+      });
+    } catch {}
+
+    // Try direct curl for comparison
+    try {
+      const curlResult = execSync(
+        `curl -s -o /dev/null -w "%{http_code} %{remote_ip} %{ssl_verify_result}" "${API_URL}/api/sync/list/_global"`,
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000 }
+      ).trim();
+      log(`  curl diagnostic: status=${curlResult}`, 'gray');
+    } catch (curlErr) {
+      log(`  curl diagnostic failed: ${curlErr.message}`, 'gray');
+    }
+  }
+
+  // Test 3: Bootstrap endpoint (for comparison)
+  try {
+    const bootstrap = await httpGet(`${API_URL}/api/bootstrap`);
+    log(`  /api/bootstrap: OK`, 'green');
+  } catch (e) {
+    log(`  /api/bootstrap: FAILED - ${e.message}`, 'red');
   }
 }
 
