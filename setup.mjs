@@ -53,6 +53,9 @@ const MACHINE_KEYS = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_
 // All skills to install
 const ALL_SKILLS = ['itachi-init', 'itachi-env', 'github', 'vercel', 'supabase', 'x-api'];
 
+// ============ State ============
+let API_KEY = ''; // Set after bootstrap, used for auth on all subsequent requests
+
 // ============ Helpers ============
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 
@@ -118,11 +121,13 @@ function httpGet(url) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const mod = u.protocol === 'https:' ? https : http;
-    mod.get(u, { rejectUnauthorized: false, timeout: 10000 }, (res) => {
+    const headers = {};
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+    mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers }, (res) => {
       let d = '';
       res.on('data', c => d += c);
       res.on('end', () => {
-        if (res.statusCode >= 400) reject(new Error(d));
+        if (res.statusCode >= 400) reject(new Error(`HTTP ${res.statusCode}: ${d}`));
         else { try { resolve(JSON.parse(d)); } catch { resolve(d); } }
       });
     }).on('error', reject);
@@ -134,15 +139,17 @@ function httpPost(url, body) {
     const u = new URL(url);
     const mod = u.protocol === 'https:' ? https : http;
     const data = JSON.stringify(body);
+    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) };
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
     const req = mod.request(u, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      headers,
       timeout: 15000, rejectUnauthorized: false,
     }, (res) => {
       let d = '';
       res.on('data', c => d += c);
       res.on('end', () => {
-        if (res.statusCode >= 400) reject(new Error(d));
+        if (res.statusCode >= 400) reject(new Error(`HTTP ${res.statusCode}: ${d}`));
         else { try { resolve(JSON.parse(d)); } catch { resolve(d); } }
       });
     });
@@ -428,6 +435,10 @@ async function bootstrapCredentials(passphrase) {
     const keyMatch = content.match(/SUPABASE_SERVICE_ROLE_KEY=(.+)/) || content.match(/SUPABASE_KEY=(.+)/);
     if (urlMatch) supaUrl = urlMatch[1].trim();
     if (keyMatch) supaKey = keyMatch[1].trim();
+
+    // Load API_KEY from existing keys file for auth on subsequent requests
+    const existingKeys = loadApiKeys();
+    if (existingKeys.ITACHI_API_KEY) API_KEY = existingKeys.ITACHI_API_KEY;
   }
 
   if (!supaUrl || !supaKey) {
@@ -444,6 +455,7 @@ async function bootstrapCredentials(passphrase) {
 
         // Extract ITACHI_API_KEY from bootstrap and add to api-keys file
         if (config.ITACHI_API_KEY) {
+          API_KEY = config.ITACHI_API_KEY;
           const existingKeys = loadApiKeys();
           if (!existingKeys.ITACHI_API_KEY) {
             existingKeys.ITACHI_API_KEY = config.ITACHI_API_KEY;
@@ -710,16 +722,16 @@ async function setupApiKeys(passphrase) {
     log('  No remote API keys available (first machine or server unreachable).', 'gray');
   }
 
-  // Step 2: Prompt for missing keys (or all keys on first machine)
-  const existingKeys = loadApiKeys();
-  const missingKeys = CREDENTIALS.filter(c => !existingKeys[c.key]);
-
-  if (missingKeys.length > 0 || !pulledFromRemote) {
+  // Step 2: If sync worked, we're done. Only prompt on first machine (no sync data).
+  if (pulledFromRemote) {
+    const existingKeys = loadApiKeys();
+    const setCount = CREDENTIALS.filter(c => existingKeys[c.key]).length;
+    log(`  ${setCount}/${CREDENTIALS.length} API keys configured.`, 'green');
+  } else {
+    // First machine — prompt for keys
+    const existingKeys = loadApiKeys();
     log('');
-    log('  Configure API keys. Press Enter to skip any key.', 'gray');
-    if (pulledFromRemote) {
-      log(`  (${CREDENTIALS.length - missingKeys.length} key(s) already synced from remote)`, 'gray');
-    }
+    log('  No synced keys found. Configure API keys (press Enter to skip):', 'yellow');
     log('');
 
     let changed = false;
@@ -738,10 +750,9 @@ async function setupApiKeys(passphrase) {
       saveApiKeys(existingKeys);
       log('  Saved API keys.', 'green');
 
-      // Push to remote sync
+      // Push to remote sync for other machines
       try {
         const content = readFileSync(API_KEYS_FILE, 'utf8');
-        // Strip machine keys before pushing
         const stripped = content.replace(new RegExp(`^(${MACHINE_KEYS.join('|')})=.*$`, 'gm'), '').replace(/\n{3,}/g, '\n\n').trim() + '\n';
         await encryptAndPush(stripped, passphrase, '_global', 'api-keys');
         log('  Encrypted + synced to remote.', 'green');
@@ -749,8 +760,6 @@ async function setupApiKeys(passphrase) {
         log('  Could not sync to remote (server unreachable).', 'gray');
       }
     }
-  } else {
-    log('  All API keys present.', 'green');
   }
 }
 
