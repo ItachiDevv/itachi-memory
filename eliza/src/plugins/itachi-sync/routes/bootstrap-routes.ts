@@ -88,7 +88,8 @@ export const bootstrapRoutes: Route[] = [
     public: true,
     handler: async (req, res, runtime) => {
       const rt = runtime as IAgentRuntime;
-      if (!checkAuth(req, res, rt)) return;
+      // No auth check — bootstrap is the entry point for new machines.
+      // The encrypted config is already protected by the shared passphrase (AES-256-GCM).
 
       const config = rt.getSetting('ITACHI_BOOTSTRAP_CONFIG');
       const salt = rt.getSetting('ITACHI_BOOTSTRAP_SALT');

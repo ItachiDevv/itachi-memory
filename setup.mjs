@@ -729,7 +729,7 @@ async function pullGlobalSync(passphrase) {
       }
       if (localHash === f.content_hash) continue;
 
-      const fileData = await httpGet(`${syncApi}/pull/_global/${f.file_path}`);
+      const fileData = await httpGet(`${syncApi}/pull/_global/${encodeURIComponent(f.file_path)}`);
       const content = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
       ensureDir(dirname(localPath));
       writeFileSync(localPath, content);
@@ -819,7 +819,7 @@ async function setupApiKeys(passphrase) {
   // Step 1: Try to pull from remote sync (second machine gets keys for free)
   let pulledFromRemote = false;
   try {
-    const fileData = await httpGet(`${API_URL}/api/sync/pull/_global/api-keys`);
+    const fileData = await httpGet(`${API_URL}/api/sync/pull/_global/${encodeURIComponent('api-keys')}`);
     const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
     const remoteKV = {};
     for (const line of remoteContent.split('\n')) {

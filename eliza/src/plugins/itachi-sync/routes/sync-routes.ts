@@ -54,10 +54,11 @@ export const syncRoutes: Route[] = [
     },
   },
 
-  // Pull encrypted file
+  // Pull encrypted file — uses :filePath param (callers must URL-encode slashes as %2F)
+  // Also supports legacy unencoded paths via URL parsing fallback
   {
     type: 'GET',
-    path: '/api/sync/pull/:repo/*',
+    path: '/api/sync/pull/:repo/:filePath',
     public: true,
     handler: async (req, res, runtime) => {
       try {
@@ -65,7 +66,17 @@ export const syncRoutes: Route[] = [
         if (!checkAuth(req, res, rt)) return;
 
         const repo = req.params.repo;
-        const filePath = req.params[0];
+        // Try param first, then parse from URL for multi-segment paths
+        let filePath = req.params.filePath;
+        if (!filePath) {
+          // Fallback: extract everything after /api/sync/pull/<repo>/
+          const prefix = `/api/sync/pull/${repo}/`;
+          const urlPath = (req.url || req.originalUrl || '').split('?')[0];
+          const idx = urlPath.indexOf(prefix);
+          if (idx >= 0) filePath = urlPath.substring(idx + prefix.length);
+        }
+        // Decode URL-encoded slashes
+        if (filePath) filePath = decodeURIComponent(filePath);
 
         if (!repo || !filePath) {
           res.status(400).json({ error: 'repo and file path required' });
