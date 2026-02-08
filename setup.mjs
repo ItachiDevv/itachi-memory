@@ -441,6 +441,16 @@ async function bootstrapCredentials(passphrase) {
         writeFileSync(credFile, `SUPABASE_URL=${supaUrl}\nSUPABASE_SERVICE_ROLE_KEY=${supaKey}\n`);
         if (PLATFORM !== 'windows') { try { chmodSync(credFile, 0o600); } catch {} }
         log(`  Bootstrapped credentials to ${credFile}`, 'green');
+
+        // Extract ITACHI_API_KEY from bootstrap and add to api-keys file
+        if (config.ITACHI_API_KEY) {
+          const existingKeys = loadApiKeys();
+          if (!existingKeys.ITACHI_API_KEY) {
+            existingKeys.ITACHI_API_KEY = config.ITACHI_API_KEY;
+            saveApiKeys(existingKeys);
+            log(`  Set ITACHI_API_KEY from bootstrap`, 'green');
+          }
+        }
       } else {
         throw new Error('No encrypted_config');
       }
