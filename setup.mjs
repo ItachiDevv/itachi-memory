@@ -13,15 +13,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmod
 import { join, dirname, basename, resolve } from 'path';
 import { homedir, hostname, platform as osPlatform } from 'os';
 import { fileURLToPath } from 'url';
-import { request as undiciRequest } from 'undici';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ============ Config ============
 const API_URL = 'https://itachisbrainserver.online';
-const API_HOST = new URL(API_URL).host;
-const API_ORIGIN = new URL(API_URL).origin;
 const PLATFORM = osPlatform() === 'win32' ? 'windows' : osPlatform() === 'darwin' ? 'macos' : 'linux';
 const HOME = homedir();
 const CLAUDE_DIR = join(HOME, '.claude');
@@ -119,36 +116,25 @@ function commandExists(cmd) {
 }
 
 async function httpGet(url) {
-  const u = new URL(url);
-  const headers = { host: API_HOST };
-  if (API_KEY) headers['authorization'] = `Bearer ${API_KEY}`;
-  const { statusCode, body } = await undiciRequest(API_ORIGIN, {
-    path: u.pathname + u.search,
-    method: 'GET',
-    headers,
-    headersTimeout: 10000,
-    bodyTimeout: 10000,
-  });
-  const text = await body.text();
-  if (statusCode >= 400) throw new Error(`HTTP ${statusCode}: ${text}`);
+  const headers = {};
+  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
   try { return JSON.parse(text); } catch { return text; }
 }
 
 async function httpPost(url, postBody) {
-  const u = new URL(url);
-  const data = JSON.stringify(postBody);
-  const headers = { host: API_HOST, 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) };
-  if (API_KEY) headers['authorization'] = `Bearer ${API_KEY}`;
-  const { statusCode, body } = await undiciRequest(API_ORIGIN, {
-    path: u.pathname + u.search,
+  const headers = { 'Content-Type': 'application/json' };
+  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+  const res = await fetch(url, {
     method: 'POST',
     headers,
-    body: data,
-    headersTimeout: 15000,
-    bodyTimeout: 15000,
+    body: JSON.stringify(postBody),
+    signal: AbortSignal.timeout(15000),
   });
-  const text = await body.text();
-  if (statusCode >= 400) throw new Error(`HTTP ${statusCode}: ${text}`);
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
   try { return JSON.parse(text); } catch { return text; }
 }
 
