@@ -616,8 +616,8 @@ async function pullGlobalSync(passphrase) {
     }
     if (synced > 0) log(`  Synced ${synced} global file(s)`, 'green');
     else log('  All global files up to date', 'gray');
-  } catch {
-    log('  Sync skipped (server unreachable or no data)', 'gray');
+  } catch (e) {
+    log(`  Sync failed: ${e.message}`, 'red');
   }
 }
 
@@ -718,8 +718,8 @@ async function setupApiKeys(passphrase) {
     const keyCount = Object.keys(merged).length;
     log(`  Pulled ${keyCount} API key(s) from remote sync.`, 'green');
     pulledFromRemote = keyCount > 0;
-  } catch {
-    log('  No remote API keys available (first machine or server unreachable).', 'gray');
+  } catch (e) {
+    log(`  API keys sync failed: ${e.message}`, 'red');
   }
 
   // Step 2: If sync worked, we're done. Only prompt on first machine (no sync data).
