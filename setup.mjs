@@ -350,16 +350,12 @@ async function ensureClaudeAuth(passphrase) {
       }
 
       log('  Claude Code is installed but not authenticated.', 'yellow');
-      log('  (Follow the prompts in the browser to complete authentication)', 'gray');
+      log('  Please run this command in a separate terminal to authenticate:', 'yellow');
       log('');
-      try {
-        execSync('claude login', { stdio: 'inherit', timeout: 120000 });
-        log('  Claude authenticated.', 'green');
-        // Push credentials to sync for other machines
-        await pushAuthCredentials(passphrase);
-      } catch {
-        log('  Authentication skipped. You can run "claude login" later.', 'yellow');
-      }
+      log('    claude', 'cyan');
+      log('');
+      log('  Complete the login flow, then close Claude and re-run setup.', 'yellow');
+      log('  (Skipping auth for now — setup will continue)', 'gray');
     } else {
       log('  Claude Code is authenticated.', 'green');
       // Ensure credentials are synced
@@ -374,8 +370,8 @@ async function ensureCodexAuth(passphrase) {
   log('\n[auth] Checking Codex CLI authentication...', 'yellow');
   try {
     if (!commandExists('codex')) {
-      log('  Codex CLI not installed. Installing...', 'yellow');
-      execSync('npm install -g @openai/codex', { stdio: 'inherit' });
+      log('  Codex CLI not installed. Skipping (install later: npm install -g @openai/codex)', 'gray');
+      return;
     }
 
     if (!findCodexCredentials()) {
@@ -386,17 +382,8 @@ async function ensureCodexAuth(passphrase) {
         return;
       }
 
-      log('  Codex CLI is installed but not authenticated.', 'yellow');
-      log('  (Follow the prompts in the browser to complete authentication)', 'gray');
-      log('');
-      try {
-        execSync('codex login', { stdio: 'inherit', timeout: 120000 });
-        log('  Codex authenticated.', 'green');
-        // Push credentials to sync for other machines
-        await pushAuthCredentials(passphrase);
-      } catch {
-        log('  Authentication skipped. You can run "codex login" later.', 'yellow');
-      }
+      log('  Codex CLI is installed but not authenticated.', 'gray');
+      log('  Run "codex login" later to authenticate. Skipping.', 'gray');
     } else {
       log('  Codex CLI is authenticated.', 'green');
       // Ensure credentials are synced
