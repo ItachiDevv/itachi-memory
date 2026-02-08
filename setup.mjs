@@ -13,13 +13,17 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmod
 import { join, dirname, basename, resolve } from 'path';
 import { homedir, hostname, platform as osPlatform } from 'os';
 import { fileURLToPath } from 'url';
-// Node 18+ built-in fetch used for HTTP requests (consistent cross-platform behavior)
+import { request as undiciRequest } from 'undici';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ============ Config ============
 const API_URL = 'http://swoo0o4okwk8ocww4g4ks084.77.42.84.38.sslip.io';
+// Bypass DNS: connect directly to IP embedded in sslip.io domain, set Host header for Traefik routing
+const API_HOST = new URL(API_URL).host;
+const API_IP_MATCH = new URL(API_URL).hostname.match(/(\d+\.\d+\.\d+\.\d+)\.sslip\.io$/);
+const API_ORIGIN = API_IP_MATCH ? `${new URL(API_URL).protocol}//${API_IP_MATCH[1]}` : new URL(API_URL).origin;
 const PLATFORM = osPlatform() === 'win32' ? 'windows' : osPlatform() === 'darwin' ? 'macos' : 'linux';
 const HOME = homedir();
 const CLAUDE_DIR = join(HOME, '.claude');
@@ -117,53 +121,37 @@ function commandExists(cmd) {
 }
 
 async function httpGet(url) {
-  // Try fetch first, fall back to curl if it fails (fixes Mac/Node DNS issues)
-  try {
-    const headers = {};
-    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
-    try { return JSON.parse(text); } catch { return text; }
-  } catch (fetchErr) {
-    // Fallback: use curl (works on Mac/Linux where Node fetch may fail)
-    try {
-      const authArg = API_KEY ? ` -H "Authorization: Bearer ${API_KEY}"` : '';
-      const result = execSync(`curl -sf --max-time 10${authArg} "${url}"`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-      try { return JSON.parse(result); } catch { return result; }
-    } catch {
-      throw fetchErr; // curl also failed, throw the original fetch error
-    }
-  }
+  const u = new URL(url);
+  const headers = { host: API_HOST };
+  if (API_KEY) headers['authorization'] = `Bearer ${API_KEY}`;
+  const { statusCode, body } = await undiciRequest(API_ORIGIN, {
+    path: u.pathname + u.search,
+    method: 'GET',
+    headers,
+    headersTimeout: 10000,
+    bodyTimeout: 10000,
+  });
+  const text = await body.text();
+  if (statusCode >= 400) throw new Error(`HTTP ${statusCode}: ${text}`);
+  try { return JSON.parse(text); } catch { return text; }
 }
 
-async function httpPost(url, body) {
-  // Try fetch first, fall back to curl if it fails
-  try {
-    const headers = { 'Content-Type': 'application/json' };
-    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
-    try { return JSON.parse(text); } catch { return text; }
-  } catch (fetchErr) {
-    // Fallback: use curl (stdin avoids shell escaping issues)
-    try {
-      const authArg = API_KEY ? ` -H "Authorization: Bearer ${API_KEY}"` : '';
-      const result = execSync(
-        `curl -sf --max-time 15 -X POST -H "Content-Type: application/json"${authArg} -d @- "${url}"`,
-        { encoding: 'utf8', input: JSON.stringify(body), stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-      try { return JSON.parse(result); } catch { return result; }
-    } catch {
-      throw fetchErr;
-    }
-  }
+async function httpPost(url, postBody) {
+  const u = new URL(url);
+  const data = JSON.stringify(postBody);
+  const headers = { host: API_HOST, 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) };
+  if (API_KEY) headers['authorization'] = `Bearer ${API_KEY}`;
+  const { statusCode, body } = await undiciRequest(API_ORIGIN, {
+    path: u.pathname + u.search,
+    method: 'POST',
+    headers,
+    body: data,
+    headersTimeout: 15000,
+    bodyTimeout: 15000,
+  });
+  const text = await body.text();
+  if (statusCode >= 400) throw new Error(`HTTP ${statusCode}: ${text}`);
+  try { return JSON.parse(text); } catch { return text; }
 }
 
 function decrypt(encB64, saltB64, passphrase) {
