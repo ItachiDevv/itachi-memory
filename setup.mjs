@@ -13,8 +13,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmod
 import { join, dirname, basename, resolve } from 'path';
 import { homedir, hostname, platform as osPlatform } from 'os';
 import { fileURLToPath } from 'url';
-import https from 'https';
-import http from 'http';
+// Node 18+ built-in fetch used for HTTP requests (consistent cross-platform behavior)
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -117,46 +116,27 @@ function commandExists(cmd) {
   } catch { return false; }
 }
 
-function httpGet(url) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const mod = u.protocol === 'https:' ? https : http;
-    const headers = {};
-    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-    mod.get(u, { rejectUnauthorized: false, timeout: 10000, headers }, (res) => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        if (res.statusCode >= 400) reject(new Error(`HTTP ${res.statusCode}: ${d}`));
-        else { try { resolve(JSON.parse(d)); } catch { resolve(d); } }
-      });
-    }).on('error', reject);
-  });
+async function httpGet(url) {
+  const headers = {};
+  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+  try { return JSON.parse(text); } catch { return text; }
 }
 
-function httpPost(url, body) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const mod = u.protocol === 'https:' ? https : http;
-    const data = JSON.stringify(body);
-    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) };
-    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
-    const req = mod.request(u, {
-      method: 'POST',
-      headers,
-      timeout: 15000, rejectUnauthorized: false,
-    }, (res) => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        if (res.statusCode >= 400) reject(new Error(`HTTP ${res.statusCode}: ${d}`));
-        else { try { resolve(JSON.parse(d)); } catch { resolve(d); } }
-      });
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
+async function httpPost(url, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
   });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+  try { return JSON.parse(text); } catch { return text; }
 }
 
 function decrypt(encB64, saltB64, passphrase) {
