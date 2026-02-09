@@ -49,7 +49,13 @@ const CREDENTIALS = [
 const MACHINE_KEYS = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS', 'ITACHI_MACHINE_ID', 'ITACHI_MACHINE_NAME'];
 
 // All skills to install
-const ALL_SKILLS = ['itachi-init', 'itachi-env', 'github', 'vercel', 'supabase', 'x-api'];
+const ALL_SKILLS = [
+  'itachi-init', 'itachi-env', 'github', 'vercel', 'supabase', 'x-api',
+  'elizaos', 'google-gemini', 'polymarket-api', 'tamagotchi-sprites',
+  'threejs-animation', 'threejs-fundamentals', 'threejs-geometry', 'threejs-interaction',
+  'threejs-lighting', 'threejs-loaders', 'threejs-materials', 'threejs-postprocessing',
+  'threejs-shaders', 'threejs-textures',
+];
 
 // ============ State ============
 let API_KEY = ''; // Set after bootstrap, used for auth on all subsequent requests
