@@ -9,7 +9,7 @@
   // ── Configuration ─────────────────────────────────────────
   // Priority: URL params > localStorage > window.__ITACHI_ENV__ > hardcoded
   const HARDCODED_DEFAULTS = {
-    apiUrl: '',
+    apiUrl: 'https://itachisbrainserver.online',
     apiKey: '',
     refreshInterval: 10,
     orchestratorUrl: 'http://localhost:3001',

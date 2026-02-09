@@ -18,11 +18,11 @@
       <div class="modal-body">
         <label class="form-label" for="api-url-input">API Base URL</label>
         <input type="text" id="api-url-input" class="form-input" placeholder="https://itachisbrainserver.online">
-        <p class="form-hint">Leave empty for relative URLs (same origin).</p>
+        <p class="form-hint">Default: https://itachisbrainserver.online</p>
 
         <label class="form-label" for="api-key-input">API Key (x-api-key)</label>
         <input type="password" id="api-key-input" class="form-input" placeholder="Enter ITACHI_API_KEY">
-        <p class="form-hint">Sent as x-api-key header with every request.</p>
+        <p class="form-hint">Sent as x-api-key header. Injected at build time via ITACHI_API_KEY env var.</p>
 
         <label class="form-label" for="refresh-input">Auto-Refresh Interval (seconds)</label>
         <input type="number" id="refresh-input" class="form-input" min="3" max="120" value="10">
