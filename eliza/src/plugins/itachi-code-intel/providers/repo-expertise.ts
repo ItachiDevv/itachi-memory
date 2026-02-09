@@ -14,12 +14,12 @@ export const repoExpertiseProvider: Provider = {
   get: async (runtime: IAgentRuntime, message: Memory, _state?: State): Promise<string> => {
     try {
       const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
-      if (!codeIntel) return '';
+      if (!codeIntel) return '## Repo Expertise\nCode intelligence service unavailable. Do NOT guess about project architecture or patterns.';
 
       // Determine which project the user is asking about
       const messageText = message.content?.text || '';
       const project = extractProjectName(messageText, runtime);
-      if (!project) return '';
+      if (!project) return '## Repo Expertise\nNo project detected in this message. Do NOT invent project details — ask the user which project they mean.';
 
       const supabase = codeIntel.getSupabase();
 
@@ -32,11 +32,11 @@ export const repoExpertiseProvider: Provider = {
         .limit(1)
         .single();
 
-      if (!data?.content) return '';
+      if (!data?.content) return `## Repo Expertise (${project})\nNo expertise data found for this project yet.`;
 
       return `## Project Expertise: ${project}\n${data.content}`;
     } catch {
-      return '';
+      return '## Repo Expertise\nFailed to load expertise data. Do NOT make up project details.';
     }
   },
 };

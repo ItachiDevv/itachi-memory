@@ -14,7 +14,7 @@ export const activeTasksProvider: Provider = {
   ): Promise<ProviderResult> => {
     try {
       const taskService = runtime.getService<TaskService>('itachi-tasks');
-      if (!taskService) return { text: '', values: {}, data: {} };
+      if (!taskService) return { text: '## Active Tasks\nTask service unavailable. Do NOT guess about task statuses.', values: {}, data: {} };
 
       const tasks = await taskService.getActiveTasks();
       if (tasks.length === 0) {
@@ -41,7 +41,7 @@ export const activeTasksProvider: Provider = {
       };
     } catch (error) {
       runtime.logger.error('activeTasksProvider error:', error);
-      return { text: '', values: {}, data: {} };
+      return { text: '## Active Tasks\nFailed to load task data. Do NOT make up task statuses.', values: {}, data: {} };
     }
   },
 };

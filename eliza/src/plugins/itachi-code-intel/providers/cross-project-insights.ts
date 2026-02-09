@@ -13,10 +13,10 @@ export const crossProjectInsightsProvider: Provider = {
   get: async (runtime: IAgentRuntime, _message: Memory, _state?: State): Promise<string> => {
     try {
       const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
-      if (!codeIntel) return '';
+      if (!codeIntel) return '## Cross-Project Insights\nNo cross-project data available.';
 
       const insights = await codeIntel.getCrossProjectInsights(5);
-      if (insights.length === 0) return '';
+      if (insights.length === 0) return '## Cross-Project Insights\nNo cross-project patterns detected yet.';
 
       const lines: string[] = ['## Cross-Project Insights'];
       for (const insight of insights) {
@@ -28,7 +28,7 @@ export const crossProjectInsightsProvider: Provider = {
 
       return lines.join('\n');
     } catch {
-      return '';
+      return '## Cross-Project Insights\nFailed to load cross-project data.';
     }
   },
 };

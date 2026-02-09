@@ -13,7 +13,7 @@ export const lessonsProvider: Provider = {
   ): Promise<ProviderResult> => {
     try {
       const query = message.content?.text || '';
-      if (query.length < 5) return { text: '', values: {}, data: {} };
+      if (query.length < 5) return { text: '## Past Management Lessons\nMessage too short to search for relevant lessons.', values: {}, data: {} };
 
       // Search for relevant lessons
       const results = await runtime.searchMemories({
@@ -28,7 +28,7 @@ export const lessonsProvider: Provider = {
         (m) => m.metadata?.type === 'management-lesson'
       );
 
-      if (lessons.length === 0) return { text: '', values: {}, data: {} };
+      if (lessons.length === 0) return { text: '## Past Management Lessons\nNo relevant lessons found for this topic.', values: {}, data: {} };
 
       // Also look for strategy documents (higher-level synthesized lessons)
       const strategies = results.filter(
@@ -60,7 +60,7 @@ export const lessonsProvider: Provider = {
       };
     } catch (error) {
       runtime.logger.error('lessonsProvider error:', error);
-      return { text: '', values: {}, data: {} };
+      return { text: '## Past Management Lessons\nFailed to load lessons.', values: {}, data: {} };
     }
   },
 };

@@ -14,7 +14,7 @@ export const machineStatusProvider: Provider = {
   ): Promise<ProviderResult> => {
     try {
       const registry = runtime.getService<MachineRegistryService>('machine-registry');
-      if (!registry) return { text: '', values: {}, data: {} };
+      if (!registry) return { text: '## Orchestrator Machines\nMachine registry unavailable. Do NOT guess about machine status.', values: {}, data: {} };
 
       const machines = await registry.getAllMachines();
       if (machines.length === 0) {
@@ -46,7 +46,7 @@ export const machineStatusProvider: Provider = {
       };
     } catch (error) {
       runtime.logger.error('machineStatusProvider error:', error);
-      return { text: '', values: {}, data: {} };
+      return { text: '## Orchestrator Machines\nFailed to load machine data. Do NOT make up machine statuses.', values: {}, data: {} };
     }
   },
 };

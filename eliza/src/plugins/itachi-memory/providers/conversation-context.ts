@@ -14,7 +14,7 @@ export const conversationContextProvider: Provider = {
   ): Promise<ProviderResult> => {
     try {
       const memoryService = runtime.getService<MemoryService>('itachi-memory');
-      if (!memoryService) return { text: '', values: {}, data: {} };
+      if (!memoryService) return { text: '## Recent Conversations\nMemory service unavailable.', values: {}, data: {} };
 
       // Fetch recent conversation memories from last 24h
       const supabase = memoryService.getSupabase();
@@ -28,7 +28,7 @@ export const conversationContextProvider: Provider = {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      if (error || !memories?.length) return { text: '', values: {}, data: {} };
+      if (error || !memories?.length) return { text: '## Recent Conversations\nNo conversation memories from the last 24 hours. Do NOT reference previous conversations unless shown here.', values: {}, data: {} };
 
       // Filter out low-significance memories
       const significant = memories.filter((m) => {
@@ -36,7 +36,7 @@ export const conversationContextProvider: Provider = {
         return typeof sig !== 'number' || sig >= 0.3;
       });
 
-      if (significant.length === 0) return { text: '', values: {}, data: {} };
+      if (significant.length === 0) return { text: '## Recent Conversations\nNo significant conversations in the last 24 hours.', values: {}, data: {} };
 
       const parts = ['## Recent Conversations'];
       for (const m of significant) {
@@ -53,7 +53,7 @@ export const conversationContextProvider: Provider = {
       };
     } catch (error) {
       runtime.logger.error('conversationContextProvider error:', error);
-      return { text: '', values: {}, data: {} };
+      return { text: '## Recent Conversations\nFailed to load conversation history.', values: {}, data: {} };
     }
   },
 };
