@@ -216,61 +216,44 @@ Write-Host "  Set as user environment variables" -ForegroundColor Gray
 
 # Encrypt and push to sync API if passphrase exists
 if ((Test-Path $itachiKeyFile) -and $changed) {
-    $pushScript = @"
-const crypto = require('crypto');
-const fs = require('fs');
-const https = require('https');
-const http = require('http');
-const os = require('os');
-
-const keyFile = process.argv[1];
-const syncApi = process.argv[2];
-const apiKeysFile = process.argv[3];
-
-try {
-    const passphrase = fs.readFileSync(keyFile, 'utf8').trim();
-    const content = fs.readFileSync(apiKeysFile, 'utf8');
-    const contentHash = crypto.createHash('sha256').update(content).digest('hex');
-
-    const salt = crypto.randomBytes(16);
-    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()]);
-    const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);
-
-    const body = JSON.stringify({
-        repo_name: '_global',
-        file_path: 'api-keys',
-        encrypted_data: packed.toString('base64'),
-        salt: salt.toString('base64'),
-        content_hash: contentHash,
-        updated_by: os.hostname()
-    });
-
-    const url = new URL(syncApi + '/push');
-    const mod = url.protocol === 'https:' ? https : http;
-    const req = mod.request(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-        timeout: 15000,
-        rejectUnauthorized: false
-    }, (res) => {
-        let d = ''; res.on('data', c => d += c);
-        res.on('end', () => { try { const r = JSON.parse(d); console.log('v' + (r.version || '?')); } catch { console.log('ok'); } });
-    });
-    req.on('error', (e) => { console.log('error: ' + e.message); });
-    req.write(body);
-    req.end();
-} catch(e) { console.log('error: ' + e.message); }
-"@
-    $syncResult = node -e $pushScript $itachiKeyFile "$ApiUrl/api/sync" $apiKeysFile 2>$null
+    $tmpJs = Join-Path $env:TEMP "itachi-push-sync.js"
+    $pushLines = @(
+        "const crypto = require('crypto');"
+        "const fs = require('fs');"
+        "const https = require('https');"
+        "const http = require('http');"
+        "const os = require('os');"
+        "const keyFile = process.argv[1];"
+        "const syncApi = process.argv[2];"
+        "const apiKeysFile = process.argv[3];"
+        "try {"
+        "    const passphrase = fs.readFileSync(keyFile, 'utf8').trim();"
+        "    const content = fs.readFileSync(apiKeysFile, 'utf8');"
+        "    const contentHash = crypto.createHash('sha256').update(content).digest('hex');"
+        "    const salt = crypto.randomBytes(16);"
+        "    const key = crypto.pbkdf2Sync(passphrase, salt, 100000, 32, 'sha256');"
+        "    const iv = crypto.randomBytes(12);"
+        "    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);"
+        "    const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()]);"
+        "    const packed = Buffer.concat([iv, cipher.getAuthTag(), ct]);"
+        "    const body = JSON.stringify({ repo_name: '_global', file_path: 'api-keys', encrypted_data: packed.toString('base64'), salt: salt.toString('base64'), content_hash: contentHash, updated_by: os.hostname() });"
+        "    const url = new URL(syncApi + '/push');"
+        "    const mod = url.protocol === 'https:' ? https : http;"
+        "    const req = mod.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 15000, rejectUnauthorized: false }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { const r = JSON.parse(d); console.log('v' + (r.version || '?')); } catch { console.log('ok'); } }); });"
+        "    req.on('error', (e) => { console.log('error: ' + e.message); });"
+        "    req.write(body);"
+        "    req.end();"
+        "} catch(e) { console.log('error: ' + e.message); }"
+    )
+    $pushLines -join "`n" | Set-Content $tmpJs -Encoding UTF8
+    $syncResult = node $tmpJs $itachiKeyFile "$ApiUrl/api/sync" $apiKeysFile 2>$null
+    Remove-Item $tmpJs -Force -ErrorAction SilentlyContinue
     if ($syncResult) {
         Write-Host "  Encrypted + synced to remote ($syncResult)" -ForegroundColor Gray
     }
 }
 elseif (-not (Test-Path $itachiKeyFile)) {
-    Write-Host "  NOTE: ~/.itachi-key not found — keys saved locally only (not synced)" -ForegroundColor Yellow
+    Write-Host "  NOTE: ~/.itachi-key not found - keys saved locally only (not synced)" -ForegroundColor Yellow
 }
 
 # Step 8: Test API connectivity
@@ -283,7 +266,7 @@ try {
 catch {
     Write-Host "  WARNING: Could not reach API at $ApiUrl" -ForegroundColor Red
     Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "  Hooks are installed but won't work until the API is reachable." -ForegroundColor Red
+    Write-Host "  Hooks are installed but will not work until the API is reachable." -ForegroundColor Red
 }
 
 Write-Host ""
