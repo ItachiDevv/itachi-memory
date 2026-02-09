@@ -848,8 +848,12 @@ async function setupOrchestrator(supaUrl, supaKey, passphrase) {
             const pullChoice = await ask('    Pull it? (y/n): ');
             if (pullChoice.toLowerCase() === 'y') {
               execSync(`node "${secretsJs}" pull orchestrator-env --out "${orchEnv}"`, { env, stdio: 'pipe' });
-              useSecrets = true;
-              log('    Pulled .env from itachi-secrets', 'green');
+              if (existsSync(orchEnv)) {
+                useSecrets = true;
+                log('    Pulled .env from itachi-secrets', 'green');
+              } else {
+                log('    itachi-secrets pull did not create .env file', 'yellow');
+              }
             }
           }
         } catch { log('    Could not check itachi-secrets', 'gray'); }
@@ -861,20 +865,18 @@ async function setupOrchestrator(supaUrl, supaKey, passphrase) {
   }
 
   const defaultId = hostname().toLowerCase().replace(/ /g, '-').replace(/[^a-z0-9-]/g, '');
-  const orchId = (await ask(`    Orchestrator ID [${defaultId}]: `)) || defaultId;
+  const machineId = (await ask(`    Machine ID [${defaultId}]: `)) || defaultId;
+  const machineName = (await ask(`    Display name [${machineId}]: `)) || machineId;
   const defaultWs = join(HOME, 'itachi-workspaces');
   const wsDir = (await ask(`    Workspace directory [${defaultWs}]: `)) || defaultWs;
   ensureDir(wsDir);
 
-  const machineId = (await ask(`    Machine ID [${defaultId}]: `)) || defaultId;
-  const machineName = (await ask(`    Machine display name [${machineId}]: `)) || machineId;
-
   // Machine-specific orchestrator keys (not synced)
   const ORCH_MACHINE_KEYS = ['ITACHI_MACHINE_ID', 'ITACHI_MACHINE_NAME', 'ITACHI_WORKSPACE_DIR', 'ITACHI_ORCHESTRATOR_ID', 'ITACHI_PROJECT_PATHS', 'ITACHI_PROJECT_FILTER'];
 
-  if (useSecrets) {
+  if (useSecrets && existsSync(orchEnv)) {
     let content = readFileSync(orchEnv, 'utf8');
-    content = content.replace(/ITACHI_ORCHESTRATOR_ID=.+/, `ITACHI_ORCHESTRATOR_ID=${orchId}`);
+    content = content.replace(/ITACHI_ORCHESTRATOR_ID=.+/, `ITACHI_ORCHESTRATOR_ID=${machineId}`);
     content = content.replace(/ITACHI_WORKSPACE_DIR=.+/, `ITACHI_WORKSPACE_DIR=${wsDir}`);
     content = content.replace(/ITACHI_PROJECT_PATHS=\{.+\}/, 'ITACHI_PROJECT_PATHS={}');
     if (!content.includes('ITACHI_MACHINE_ID=')) content += `\nITACHI_MACHINE_ID=${machineId}`;
@@ -890,7 +892,7 @@ async function setupOrchestrator(supaUrl, supaKey, passphrase) {
     const maxConc = (await ask('    Max concurrent sessions [5]: ')) || '5';
     const envLines = [
       `SUPABASE_URL=${supaUrl || ''}`, `SUPABASE_SERVICE_ROLE_KEY=${supaKey || ''}`,
-      `ITACHI_ORCHESTRATOR_ID=${orchId}`, `ITACHI_MAX_CONCURRENT=${maxConc}`,
+      `ITACHI_ORCHESTRATOR_ID=${machineId}`, `ITACHI_MAX_CONCURRENT=${maxConc}`,
       `ITACHI_WORKSPACE_DIR=${wsDir}`, `ITACHI_TASK_TIMEOUT_MS=600000`,
       `ITACHI_DEFAULT_MODEL=opus`, `ITACHI_DEFAULT_BUDGET=5.00`,
       `ITACHI_POLL_INTERVAL_MS=5000`, `ITACHI_PROJECT_PATHS={}`,
