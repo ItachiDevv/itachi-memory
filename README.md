@@ -1,142 +1,248 @@
 # Itachi Memory System
 
-Persistent memory for Claude Code sessions. Automatically tracks file changes, stores them in Supabase with OpenAI embeddings, and retrieves relevant context at session start.
+AI-powered project manager with persistent memory, task orchestration, and multi-machine dispatch. Built on ElizaOS with 5 custom plugins, managed via Telegram.
 
 ## Architecture
 
 ```
-Claude Code Session
+Claude Code Sessions (Windows/Mac/Linux)
     |
-    |-- SessionStart hook --> GET /api/memory/recent --> display context
-    |-- PostToolUse hook  --> POST /api/memory/code-change --> store memory
-    |-- SessionEnd hook   --> POST /api/memory/code-change --> log session end
+    |-- session-start hook --> GET /api/session/briefing   --> context injection
+    |-- after-edit hook    --> POST /api/session/edit       --> store edits + code intel
+    |-- session-end hook   --> POST /api/session/complete   --> session summary
     |
     v
-Railway Server (Express)
-    |
-    +--> Supabase (pgvector) -- memories table with embeddings
-    +--> OpenAI API -- text-embedding-3-small for semantic search
-    +--> Telegram Bot (optional) -- /recall, /recent, chat
+ElizaOS Agent (Hetzner/Coolify)                     Orchestrator (per-machine)
+    |                                                     |
+    +-- itachi-memory     (store/search memories)         +-- task-classifier (Sonnet)
+    +-- itachi-code-intel (repo expertise, sessions)      +-- session-manager (Claude/Codex CLI)
+    +-- itachi-tasks      (task queue, dispatch)          +-- result-reporter
+    +-- itachi-sync       (cross-machine sync)            +-- workspace-manager
+    +-- itachi-self-improve (lesson extraction)           |
+    |                                                     +-- heartbeat --> /api/machines
+    +-- Supabase (pgvector) -- memories, sessions, tasks
+    +-- OpenAI API -- text-embedding-3-small (1536 dims)
+    +-- Telegram Bot -- chat, /task, /status, /recall, forum topics
+    +-- MCP Server -- native tool access for Claude Code
 ```
 
-## Quick Start (Windows)
+### Data Flow
+
+1. **Hooks** capture every file edit, session start/end from Claude Code
+2. **Workers** (background) analyze edits, synthesize sessions, extract repo expertise
+3. **Providers** inject relevant context into every Telegram LLM call
+4. **Orchestrator** spawns Claude/Codex sessions for queued tasks, streams output to Telegram forum topics
+5. **MCP Server** gives Claude Code direct tool access to memories, tasks, and sessions mid-conversation
+
+## Quick Start
+
+### Windows
 
 ```powershell
-git clone <repo-url> itachi-memory
+git clone https://github.com/ItachiDevv/itachi-memory.git
 cd itachi-memory
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-## Quick Start (Mac/Linux)
+### Mac/Linux
 
 ```bash
-git clone <repo-url> itachi-memory
+git clone https://github.com/ItachiDevv/itachi-memory.git
 cd itachi-memory
 bash install.sh
 ```
 
-## What the Installer Does
+### Advanced Setup (multi-machine, orchestrator, full sync)
 
-1. Copies `.ps1` (Windows) or `.sh` (Unix) hook scripts to `~/.claude/hooks/`
-2. Copies `/recall` and `/recent` commands to `~/.claude/commands/`
-3. Copies the `itachi-init` skill to `~/.claude/skills/`
-4. Updates `~/.claude/settings.json` with PowerShell/bash hook references
-5. Removes conflicting bash hooks from `~/.claude/settings.local.json`
-6. Tests API connectivity
+```bash
+node setup.mjs
+```
 
-## Commands
+The unified setup handles: credential bootstrapping, hook installation, settings merge, API key management, cross-machine sync, orchestrator configuration, and the `itachi` CLI wrapper.
+
+## What Gets Installed
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Hook scripts | `~/.claude/hooks/` | Capture edits, briefings, session summaries |
+| Skills | `~/.claude/skills/` | itachi-init, itachi-env, github, vercel, supabase, x-api |
+| MCP Server | `~/.claude/settings.json` | Native tool access (memory_search, task_create, etc.) |
+| API keys | `~/.itachi-api-keys` | Encrypted, synced across machines |
+| CLI wrapper | `bin/itachi` | Loads env vars + launches Claude Code |
+| Scheduled task | Daily 3AM | Skill sync across machines |
+
+## Telegram Commands
 
 | Command | Description |
 |---------|-------------|
+| `/task <description>` | Queue a new coding task |
+| `/status <id>` | Check task status |
+| `/queue` | Show active/queued tasks |
+| `/cancel <id>` | Cancel a task |
 | `/recall <query>` | Semantic search across all memories |
-| `/recent [limit]` | Show recent changes (default: 10) |
-| `/itachi-init` | Add memory system docs to project CLAUDE.md |
+| `/repos` | List known projects |
+| `/machines` | Show orchestrator machine status |
 
-## Memory Categories
+Tasks create forum topics in the Telegram supergroup with live streaming output from Claude/Codex sessions.
 
-Changes are auto-categorized based on filename:
+## MCP Tools
 
-| Category | Matches |
-|----------|---------|
-| `code_change` | Default for all code files |
-| `test` | `*.test.*`, `*.spec.*`, `test_*` |
-| `documentation` | `*.md`, `*.rst`, `README*` |
-| `dependencies` | `package.json`, `requirements.txt`, `Cargo.toml`, etc. |
+When the MCP server is configured, Claude Code gets these tools natively:
 
-## Server Setup
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Semantic search across project memories |
+| `memory_recent` | Recent changes for a project |
+| `memory_store` | Store a new memory |
+| `session_briefing` | Get session context for current project |
+| `project_hot_files` | Most frequently edited files |
+| `task_list` | View queued/active tasks |
+| `task_create` | Create a new task |
+| `sync_list` | List synced files |
 
-The memory API server runs on Railway. To self-host:
+## ElizaOS Plugins
 
-1. Copy `server/` contents to your server
-2. Copy `server/.env.example` to `.env` and fill in credentials
-3. Run `schema/supabase-init.sql` in your Supabase SQL editor
-4. `npm install && npm start`
+### itachi-memory
+Persistent memory storage with OpenAI embeddings. Stores code changes, decisions, preferences. Semantic vector search via Supabase pgvector.
 
-### Required Services
+### itachi-code-intel
+Deep code intelligence pipeline. Workers analyze edits (15m), synthesize sessions (5m), extract repo expertise (daily), coding style (weekly), and cross-project insights (weekly). Providers inject session briefings, repo expertise, and cross-project insights into every LLM call.
 
-- **Supabase** with pgvector extension enabled
-- **OpenAI API** key (for embeddings)
-- **Railway** or any Node.js host (port 3000)
+### itachi-tasks
+Task queue with multi-machine dispatch. Machine registry with heartbeat monitoring. Telegram forum topics for per-task streaming output. Task dispatcher assigns work based on project affinity and load balancing.
 
-### Optional
+### itachi-sync
+Cross-machine synchronization. Encrypted push/pull of API keys, settings hooks, and skills. Project-scoped file sync with content hashing and versioning.
 
-- **Telegram Bot Token** for `server-telegram.js` (chat + recall via Telegram)
-- **Anthropic API Key** for Claude-powered Telegram chat
+### itachi-self-improve
+Lesson extraction evaluator. Learns from user feedback and conversation patterns. Stores lessons as searchable memories.
+
+## Orchestrator
+
+Each machine runs an orchestrator that:
+
+1. Registers with ElizaOS via `/api/machines/register`
+2. Heartbeats every 30s with capacity info
+3. Claims tasks assigned to it by the dispatcher
+4. Classifies task difficulty (trivial/simple/medium/complex/major) via Anthropic API
+5. Spawns Claude CLI or Codex CLI sessions with appropriate model/budget
+6. Streams output to Telegram forum topics in real-time
+7. Reports results (summary, PR URL, files changed) back to ElizaOS
+
+For `major` tasks, enables Claude Code agent teams for parallel work.
+
+## Deployment
+
+### Docker (Combined ElizaOS + Orchestrator)
+
+```bash
+docker build -t itachi-memory .
+docker run -p 3000:3000 -p 3001:3001 \
+  -e TELEGRAM_BOT_TOKEN=... \
+  -e SUPABASE_URL=... \
+  -e SUPABASE_SERVICE_ROLE_KEY=... \
+  -e OPENAI_API_KEY=... \
+  -e ANTHROPIC_API_KEY=... \
+  -e ITACHI_MACHINE_ID=my-server \
+  itachi-memory
+```
+
+### Coolify
+
+Push to `master` branch -- Coolify auto-deploys from the root `Dockerfile`.
+
+- Port 3000: ElizaOS API
+- Port 3001: Orchestrator health
+
+## Database
+
+Uses Supabase with pgvector. Key tables:
+
+| Table | Purpose |
+|-------|---------|
+| `itachi_memories` | Memories with 1536-dim embeddings |
+| `session_edits` | Per-edit data from hooks |
+| `session_summaries` | LLM-enriched session summaries |
+| `itachi_tasks` | Task queue with machine assignment |
+| `machine_registry` | Orchestrator machines + heartbeats |
+| `project_registry` | Project configuration |
+| `cross_project_insights` | Weekly cross-project correlations |
+
+Schema: `supabase/migrations/20260206000000_full_schema.sql`
 
 ## Project Structure
 
 ```
 itachi-memory/
-├── server/                    # API server (deployed to Railway)
-│   ├── server-supabase.js     # Core server (Express + Supabase + OpenAI)
-│   ├── server-telegram.js     # Extended server with Telegram bot
-│   ├── package.json
-│   └── .env.example
-├── schema/
-│   └── supabase-init.sql      # Database schema + vector search function
+├── eliza/                      # ElizaOS agent
+│   └── src/
+│       ├── character.ts        # Itachi personality + credentials
+│       ├── index.ts            # Project entry point
+│       └── plugins/
+│           ├── itachi-memory/      # Memory storage + search
+│           ├── itachi-code-intel/  # Code intelligence pipeline
+│           ├── itachi-tasks/       # Task queue + dispatch + Telegram
+│           ├── itachi-sync/        # Cross-machine sync
+│           └── itachi-self-improve/# Lesson extraction
+├── orchestrator/               # Task execution engine
+│   └── src/
+│       ├── task-classifier.ts  # LLM-based difficulty classification
+│       ├── session-manager.ts  # Claude/Codex CLI spawner
+│       ├── task-runner.ts      # Task lifecycle management
+│       └── result-reporter.ts  # Result reporting to ElizaOS
+├── mcp/                        # MCP server (stdio, local)
+│   └── index.js                # 9 tools for Claude Code
 ├── hooks/
-│   ├── windows/               # PowerShell hooks (.ps1)
-│   │   ├── after-edit.ps1
-│   │   ├── session-start.ps1
-│   │   └── session-end.ps1
-│   └── unix/                  # Bash hooks (.sh) - uses node for JSON
-│       ├── after-edit.sh
-│       ├── session-start.sh
-│       └── session-end.sh
-├── commands/                  # Claude Code slash commands
-│   ├── recall.md
-│   └── recent.md
-├── skills/
-│   └── itachi-init/
-│       └── SKILL.md
-├── config/
-│   └── settings-hooks.json    # Template hook configuration
-├── install.ps1                # Windows installer
-├── install.sh                 # Mac/Linux installer
-├── README.md
-├── LICENSE
-└── .gitignore
+│   ├── windows/                # PowerShell hooks (.ps1)
+│   └── unix/                   # Bash hooks (.sh)
+├── skills/                     # Claude Code skills (synced daily)
+├── schema/                     # Legacy SQL migrations
+├── supabase/migrations/        # Current DB schema
+├── config/                     # Settings hook templates
+├── setup.mjs                   # Unified setup (Windows + Mac/Linux)
+├── install.ps1                 # Quick Windows installer
+├── install.sh                  # Quick Mac/Linux installer
+├── Dockerfile                  # Combined ElizaOS + Orchestrator
+├── docker-entrypoint.sh        # Startup script
+└── docs/                       # Architecture docs, setup guides
 ```
 
 ## Troubleshooting
 
 ### Hooks not firing
 - Check `~/.claude/settings.json` has the `hooks` key with correct paths
-- Ensure `~/.claude/settings.local.json` does NOT have a `hooks` key (it overrides settings.json)
+- Ensure `~/.claude/settings.local.json` does NOT have a `hooks` key (overrides settings.json)
 - On Windows: verify PowerShell execution policy allows scripts
+- Opt-out per session: `ITACHI_DISABLED=1`
 
 ### API not reachable
 - Test: `curl https://itachisbrainserver.online/health`
-- On Windows with TLS issues, use PowerShell: `Invoke-RestMethod -Uri 'https://itachisbrainserver.online/health'`
+- Check `ITACHI_API_URL` env var or `~/.itachi-api-keys`
 
-### Memories not appearing
-- Check the API URL in hook scripts matches your deployment
-- Verify Supabase credentials are correct
-- Check Railway deployment logs for errors
+### Tasks stuck in queued
+- Check orchestrator machines: `/machines` in Telegram or `GET /api/machines`
+- Stale heartbeat (>60s) means machine is offline
+- Restart orchestrator on the target machine
 
-## Disable for a Project
+### MCP tools not available
+- Verify `itachi` entry in `~/.claude/settings.json` under `mcpServers`
+- Run `npm install --omit=dev` in the `mcp/` directory
+- Check that `ITACHI_API_URL` is set in your environment
 
-Create a `.no-memory` file in the project root (feature planned for future hooks).
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ITACHI_API_URL` | Yes | ElizaOS API base URL |
+| `ITACHI_API_KEY` | Yes | Auth key for hook/orchestrator API calls |
+| `TELEGRAM_BOT_TOKEN` | Yes | Telegram bot token |
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key |
+| `OPENAI_API_KEY` | Yes | For embeddings (text-embedding-3-small) |
+| `ANTHROPIC_API_KEY` | Optional | For task classifier + Telegram chat |
+| `ITACHI_MACHINE_ID` | Orchestrator | Unique machine identifier |
+| `ITACHI_LOCAL_PROJECTS` | Orchestrator | JSON array of local project names |
+| `ITACHI_DISABLED` | Optional | Set to `1` to disable hooks |
 
 ## License
 
