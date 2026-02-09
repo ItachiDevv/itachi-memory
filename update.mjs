@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { platform, homedir } from 'os';
 
 const ROOT = new URL('.', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
 const IS_WIN = platform() === 'win32';
+const HOME = homedir();
 
 function run(cmd, opts = {}) {
   console.log(`\n> ${cmd}`);
@@ -19,8 +20,29 @@ function commandExists(cmd) {
   } catch { return false; }
 }
 
+// 0. Load ~/.itachi-api-keys into process.env so PM2 inherits them
+const keysFile = join(HOME, '.itachi-api-keys');
+if (existsSync(keysFile)) {
+  const content = readFileSync(keysFile, 'utf8');
+  let loaded = 0;
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq > 0) {
+      const key = trimmed.substring(0, eq);
+      const val = trimmed.substring(eq + 1);
+      process.env[key] = val;
+      loaded++;
+    }
+  }
+  console.log(`=== Loaded ${loaded} env vars from ~/.itachi-api-keys ===`);
+} else {
+  console.log('=== WARNING: ~/.itachi-api-keys not found — PM2 may lack required env vars ===');
+}
+
 // 1. Git pull
-console.log('=== Pulling latest changes ===');
+console.log('\n=== Pulling latest changes ===');
 run('git pull');
 
 // 2. Ensure bun is installed
@@ -30,8 +52,7 @@ if (!commandExists('bun')) {
     run('npm install -g bun');
   } else {
     run('curl -fsSL https://bun.sh/install | bash');
-    // Add bun to PATH for this process
-    const bunBin = join(homedir(), '.bun', 'bin');
+    const bunBin = join(HOME, '.bun', 'bin');
     process.env.PATH = `${bunBin}:${process.env.PATH}`;
   }
 }
