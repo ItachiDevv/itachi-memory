@@ -11,9 +11,9 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "cd eliza && npm install && npm run build && cd ../orchestrator && npm install && npm run build",
+    "build": "cd eliza && bun install && bun run build && cd ../orchestrator && npm install && npm run build",
     "restart": "cd orchestrator && npm install && npm run build && (pm2 restart itachi-orchestrator || pm2 start dist/index.js --name itachi-orchestrator)",
-    "update": "git pull && cd eliza && npm install && npm run build && cd ../orchestrator && npm install && npm run build && (pm2 restart itachi-orchestrator || pm2 start dist/index.js --name itachi-orchestrator)"
+    "update": "git pull && cd eliza && bun install && bun run build && cd ../orchestrator && npm install && npm run build && (pm2 restart itachi-orchestrator || pm2 start dist/index.js --name itachi-orchestrator)"
   },
   "repository": {
     "type": "git",
