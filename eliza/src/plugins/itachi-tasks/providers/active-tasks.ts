@@ -26,12 +26,16 @@ export const activeTasksProvider: Provider = {
       }
 
       const lines = tasks.map((t, i) => {
-        const runner = t.orchestrator_id ? ` [${t.orchestrator_id}]` : '';
-        return `${i + 1}. [${t.status}]${runner} ${t.project}: ${t.description.substring(0, 60)}`;
+        const id = t.id.substring(0, 8);
+        const runner = t.orchestrator_id ? ` runner:${t.orchestrator_id}` : '';
+        const machine = t.assigned_machine ? ` machine:${t.assigned_machine}` : ' machine:unassigned';
+        const age = t.created_at ? ` created:${new Date(t.created_at).toISOString()}` : '';
+        const started = t.started_at ? ` started:${new Date(t.started_at).toISOString()}` : '';
+        return `${i + 1}. [${t.status}] ${id} | ${t.project}: ${t.description.substring(0, 60)}${machine}${runner}${age}${started}`;
       });
 
       return {
-        text: `## Active Tasks (${tasks.length})\n${lines.join('\n')}`,
+        text: `## Active Tasks (${tasks.length})\nIMPORTANT: These are the REAL task statuses from the database. Never guess or make up task progress — only report what is shown here.\n${lines.join('\n')}`,
         values: { activeTaskCount: String(tasks.length) },
         data: { tasks },
       };
