@@ -1,6 +1,7 @@
 #!/bin/bash
 # Itachi Memory System — Zero-prerequisite installer for Mac/Linux
 # Usage: bash bootstrap.sh
+#   or:  bash bootstrap.sh --uninstall [--force]
 #   or:  curl -fsSL https://raw.githubusercontent.com/ItachiDevv/itachi-memory/master/bootstrap.sh | bash
 set -e
 

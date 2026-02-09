@@ -8,11 +8,13 @@
 //   node install.mjs --full             # Full setup: + auth sync, orchestrator, CLI wrapper
 //   node install.mjs --api-url <url>    # Override API URL
 //   node install.mjs --no-cron          # Skip scheduled task registration
+//   node install.mjs --uninstall        # Remove all Itachi components
+//   node install.mjs --uninstall --force  # Uninstall without confirmation prompt
 //
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
 import { createHash, pbkdf2Sync, createDecipheriv, randomBytes, createCipheriv } from 'crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, readdirSync, unlinkSync, renameSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, readdirSync, unlinkSync, renameSync, rmSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import { homedir, hostname, platform as osPlatform } from 'os';
 import { fileURLToPath } from 'url';
@@ -32,12 +34,14 @@ const ITACHI_KEY_FILE = join(HOME, '.itachi-key');
 // Parse CLI args
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { apiUrl: 'https://itachisbrainserver.online', noCron: false, full: false, update: false };
+  const opts = { apiUrl: 'https://itachisbrainserver.online', noCron: false, full: false, update: false, uninstall: false, force: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--api-url' && args[i + 1]) opts.apiUrl = args[++i];
     if (args[i] === '--no-cron') opts.noCron = true;
     if (args[i] === '--full') opts.full = true;
     if (args[i] === '--update' || args[i] === '-u') opts.update = true;
+    if (args[i] === '--uninstall') opts.uninstall = true;
+    if (args[i] === '--force') opts.force = true;
   }
   if (process.env.ITACHI_API_URL) opts.apiUrl = process.env.ITACHI_API_URL;
   return opts;
@@ -802,7 +806,7 @@ claude @args
 
 // ── Full Mode: Orchestrator Setup ───────────────────────
 
-async function setupOrchestrator(supaUrl, supaKey) {
+async function setupOrchestrator(supaUrl, supaKey, passphrase) {
   log('\n  === Orchestrator (Task Runner) ===', 'cyan');
   const ORCH_DIR = join(__dirname, 'orchestrator');
 
@@ -815,26 +819,41 @@ async function setupOrchestrator(supaUrl, supaKey) {
   let useSecrets = false;
 
   if (!existsSync(orchEnv)) {
-    // Check itachi-secrets for shared config
-    const secretsJs = join(__dirname, 'tools', 'dist', 'itachi-secrets.js');
-    if (!existsSync(secretsJs)) {
-      try { execSync('npm install && npx tsc', { cwd: join(__dirname, 'tools'), stdio: 'pipe' }); } catch {}
+    // Try pulling from encrypted sync first
+    if (passphrase) {
+      try {
+        const fileData = await httpGet(`${API_URL}/api/sync/pull/_global/${encodeURIComponent('orchestrator-env')}`);
+        const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+        writeFileSync(orchEnv, remoteContent);
+        useSecrets = true;
+        log('    Pulled .env from encrypted sync', 'green');
+      } catch {
+        // Not found or decrypt failed — fall through to other methods
+      }
     }
 
-    if (existsSync(secretsJs) && supaUrl && supaKey) {
-      try {
-        const env = { ...process.env, SUPABASE_URL: supaUrl, SUPABASE_SERVICE_ROLE_KEY: supaKey };
-        const listOutput = execSync(`node "${secretsJs}" list`, { encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'] });
-        if (listOutput.includes('orchestrator-env')) {
-          log('    Found shared orchestrator config in itachi-secrets.', 'green');
-          const pullChoice = await ask('    Pull it? (y/n): ');
-          if (pullChoice.toLowerCase() === 'y') {
-            execSync(`node "${secretsJs}" pull orchestrator-env --out "${orchEnv}"`, { env, stdio: 'pipe' });
-            useSecrets = true;
-            log('    Pulled .env from itachi-secrets', 'green');
+    if (!useSecrets) {
+      // Check itachi-secrets for shared config
+      const secretsJs = join(__dirname, 'tools', 'dist', 'itachi-secrets.js');
+      if (!existsSync(secretsJs)) {
+        try { execSync('npm install && npx tsc', { cwd: join(__dirname, 'tools'), stdio: 'pipe' }); } catch {}
+      }
+
+      if (existsSync(secretsJs) && supaUrl && supaKey) {
+        try {
+          const env = { ...process.env, SUPABASE_URL: supaUrl, SUPABASE_SERVICE_ROLE_KEY: supaKey };
+          const listOutput = execSync(`node "${secretsJs}" list`, { encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'] });
+          if (listOutput.includes('orchestrator-env')) {
+            log('    Found shared orchestrator config in itachi-secrets.', 'green');
+            const pullChoice = await ask('    Pull it? (y/n): ');
+            if (pullChoice.toLowerCase() === 'y') {
+              execSync(`node "${secretsJs}" pull orchestrator-env --out "${orchEnv}"`, { env, stdio: 'pipe' });
+              useSecrets = true;
+              log('    Pulled .env from itachi-secrets', 'green');
+            }
           }
-        }
-      } catch { log('    Could not check itachi-secrets', 'gray'); }
+        } catch { log('    Could not check itachi-secrets', 'gray'); }
+      }
     }
   } else {
     log(`    Found existing .env at ${orchEnv}`, 'gray');
@@ -850,6 +869,9 @@ async function setupOrchestrator(supaUrl, supaKey) {
   const machineId = (await ask(`    Machine ID [${defaultId}]: `)) || defaultId;
   const machineName = (await ask(`    Machine display name [${machineId}]: `)) || machineId;
 
+  // Machine-specific orchestrator keys (not synced)
+  const ORCH_MACHINE_KEYS = ['ITACHI_MACHINE_ID', 'ITACHI_MACHINE_NAME', 'ITACHI_WORKSPACE_DIR', 'ITACHI_ORCHESTRATOR_ID', 'ITACHI_PROJECT_PATHS', 'ITACHI_PROJECT_FILTER'];
+
   if (useSecrets) {
     let content = readFileSync(orchEnv, 'utf8');
     content = content.replace(/ITACHI_ORCHESTRATOR_ID=.+/, `ITACHI_ORCHESTRATOR_ID=${orchId}`);
@@ -859,18 +881,41 @@ async function setupOrchestrator(supaUrl, supaKey) {
     else content = content.replace(/ITACHI_MACHINE_ID=.+/, `ITACHI_MACHINE_ID=${machineId}`);
     if (!content.includes('ITACHI_MACHINE_NAME=')) content += `\nITACHI_MACHINE_NAME=${machineName}`;
     else content = content.replace(/ITACHI_MACHINE_NAME=.+/, `ITACHI_MACHINE_NAME=${machineName}`);
+    if (passphrase) {
+      if (!content.includes('ITACHI_SYNC_PASSPHRASE=')) content += `\nITACHI_SYNC_PASSPHRASE=${passphrase}`;
+      else content = content.replace(/ITACHI_SYNC_PASSPHRASE=.+/, `ITACHI_SYNC_PASSPHRASE=${passphrase}`);
+    }
     writeFileSync(orchEnv, content);
   } else {
     const maxConc = (await ask('    Max concurrent sessions [5]: ')) || '5';
-    writeFileSync(orchEnv, [
+    const envLines = [
       `SUPABASE_URL=${supaUrl || ''}`, `SUPABASE_SERVICE_ROLE_KEY=${supaKey || ''}`,
       `ITACHI_ORCHESTRATOR_ID=${orchId}`, `ITACHI_MAX_CONCURRENT=${maxConc}`,
       `ITACHI_WORKSPACE_DIR=${wsDir}`, `ITACHI_TASK_TIMEOUT_MS=600000`,
-      `ITACHI_DEFAULT_MODEL=sonnet`, `ITACHI_DEFAULT_BUDGET=5.00`,
+      `ITACHI_DEFAULT_MODEL=opus`, `ITACHI_DEFAULT_BUDGET=5.00`,
       `ITACHI_POLL_INTERVAL_MS=5000`, `ITACHI_PROJECT_PATHS={}`,
       `ITACHI_API_URL=${API_URL}`, `ITACHI_DEFAULT_ENGINE=claude`,
       `ITACHI_MACHINE_ID=${machineId}`, `ITACHI_MACHINE_NAME=${machineName}`,
-    ].join('\n') + '\n');
+    ];
+    if (passphrase) envLines.push(`ITACHI_SYNC_PASSPHRASE=${passphrase}`);
+    writeFileSync(orchEnv, envLines.join('\n') + '\n');
+  }
+
+  // Push orchestrator .env to encrypted sync (strip machine-specific keys)
+  if (passphrase) {
+    try {
+      const envContent = readFileSync(orchEnv, 'utf8');
+      const sharedContent = envContent.split('\n')
+        .filter(line => {
+          const key = line.split('=')[0];
+          return !ORCH_MACHINE_KEYS.includes(key);
+        })
+        .join('\n');
+      await encryptAndPush(sharedContent, passphrase, '_global', 'orchestrator-env');
+      log('    Pushed .env to encrypted sync', 'gray');
+    } catch {
+      log('    Could not push .env to sync', 'gray');
+    }
   }
 
   log('\n    Building orchestrator...', 'yellow');
@@ -911,6 +956,195 @@ async function setupOrchestrator(supaUrl, supaKey) {
   }
 }
 
+// ── Uninstall ───────────────────────────────────────────
+
+async function uninstall() {
+  log(`\n  ${C.bold}Itachi Memory System — Uninstaller${C.reset}\n`);
+
+  const items = [];
+
+  // Credential files
+  const credFiles = [ITACHI_KEY_FILE, API_KEYS_FILE, join(HOME, '.supabase-credentials')];
+  for (const f of credFiles) {
+    if (existsSync(f)) items.push({ type: 'file', path: f });
+  }
+
+  // Hook files
+  const hookExt = PLATFORM === 'windows' ? '.ps1' : '.sh';
+  const hookNames = ['after-edit', 'session-start', 'session-end', 'user-prompt-submit', 'skill-sync'];
+  for (const h of hookNames) {
+    const p = join(HOOKS_DIR, `${h}${hookExt}`);
+    if (existsSync(p)) items.push({ type: 'file', path: p });
+  }
+
+  // Skill directories
+  for (const skill of ALL_SKILLS) {
+    const p = join(SKILLS_DIR, skill);
+    if (existsSync(p)) items.push({ type: 'dir', path: p });
+  }
+
+  // Settings.json modifications
+  const settingsPath = join(CLAUDE_DIR, 'settings.json');
+  if (existsSync(settingsPath)) items.push({ type: 'settings', path: settingsPath });
+
+  // Shell rc files (Unix)
+  if (PLATFORM !== 'windows') {
+    for (const rc of ['.zshrc', '.bashrc']) {
+      const rcPath = join(HOME, rc);
+      if (existsSync(rcPath)) {
+        const content = readFileSync(rcPath, 'utf8');
+        if (content.includes('itachi-api-keys') || content.includes('Itachi Memory System')) {
+          items.push({ type: 'rc', path: rcPath });
+        }
+      }
+    }
+  }
+
+  // PM2
+  if (commandExists('pm2')) items.push({ type: 'pm2' });
+
+  // Scheduled task / cron
+  if (PLATFORM === 'windows') {
+    items.push({ type: 'schtask' });
+  } else {
+    items.push({ type: 'cron' });
+  }
+
+  // Orchestrator artifacts
+  const orchDir = join(__dirname, 'orchestrator');
+  for (const sub of ['.env', 'dist', 'node_modules']) {
+    const p = join(orchDir, sub);
+    if (existsSync(p)) items.push({ type: existsSync(p) && sub === '.env' ? 'file' : 'dir', path: p });
+  }
+
+  // Workspace directory
+  const wsDir = process.env.ITACHI_WORKSPACE_DIR || join(HOME, 'itachi-workspaces');
+  if (existsSync(wsDir)) items.push({ type: 'dir', path: wsDir });
+
+  // Itachi CLI wrapper
+  const globalBin = getNpmGlobalBin();
+  if (PLATFORM === 'windows') {
+    const p = join(globalBin, 'itachi.cmd');
+    if (existsSync(p)) items.push({ type: 'file', path: p });
+  } else {
+    const p = join(globalBin, 'itachi');
+    if (existsSync(p)) items.push({ type: 'file', path: p });
+  }
+
+  if (items.length === 0) {
+    log('  Nothing to uninstall.', 'gray');
+    return;
+  }
+
+  log('  The following will be removed:', 'yellow');
+  for (const item of items) {
+    if (item.type === 'pm2') log('    - PM2 process: itachi-orchestrator', 'gray');
+    else if (item.type === 'schtask') log('    - Scheduled task: ItachiSkillSync', 'gray');
+    else if (item.type === 'cron') log('    - Cron entry: skill-sync', 'gray');
+    else if (item.type === 'settings') log(`    - Settings entries in ${item.path}`, 'gray');
+    else if (item.type === 'rc') log(`    - Itachi block in ${item.path}`, 'gray');
+    else if (item.type === 'dir') log(`    - Directory: ${item.path}`, 'gray');
+    else log(`    - File: ${item.path}`, 'gray');
+  }
+  log('');
+
+  if (!OPTS.force) {
+    const confirm = await ask('  Proceed with uninstall? (yes/no): ');
+    if (confirm.toLowerCase() !== 'yes' && confirm.toLowerCase() !== 'y') {
+      log('  Aborted.', 'yellow');
+      return;
+    }
+  }
+
+  let removed = 0;
+  for (const item of items) {
+    try {
+      switch (item.type) {
+        case 'file':
+          unlinkSync(item.path);
+          removed++;
+          break;
+        case 'dir':
+          rmSync(item.path, { recursive: true, force: true });
+          removed++;
+          break;
+        case 'settings': {
+          const settings = JSON.parse(readFileSync(item.path, 'utf8'));
+          // Remove itachi MCP entry
+          if (settings.mcpServers?.itachi) { delete settings.mcpServers.itachi; }
+          // Remove Itachi hooks
+          const itachiMarkers = ['session-start', 'after-edit', 'session-end', 'user-prompt-submit'];
+          const isItachiHook = (cmd) => itachiMarkers.some(m => cmd?.toLowerCase().includes(m));
+          if (settings.hooks) {
+            for (const event of Object.keys(settings.hooks)) {
+              settings.hooks[event] = (settings.hooks[event] || []).filter(entry => {
+                if (!entry.hooks) return true;
+                return !entry.hooks.some(h => isItachiHook(h.command));
+              });
+              if (settings.hooks[event].length === 0) delete settings.hooks[event];
+            }
+            if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+          }
+          writeFileSync(item.path, JSON.stringify(settings, null, 2));
+          removed++;
+          break;
+        }
+        case 'rc': {
+          const content = readFileSync(item.path, 'utf8');
+          const lines = content.split('\n');
+          const filtered = [];
+          let inItachiBlock = false;
+          for (const line of lines) {
+            if (line.includes('# Itachi Memory System')) { inItachiBlock = true; continue; }
+            if (inItachiBlock && (line.includes('itachi-api-keys') || line.includes('ITACHI_API_URL'))) {
+              inItachiBlock = false; continue;
+            }
+            if (inItachiBlock && line.trim() === '') { continue; }
+            inItachiBlock = false;
+            filtered.push(line);
+          }
+          writeFileSync(item.path, filtered.join('\n'));
+          removed++;
+          break;
+        }
+        case 'pm2':
+          try {
+            execSync('pm2 stop itachi-orchestrator', { stdio: 'pipe' });
+            execSync('pm2 delete itachi-orchestrator', { stdio: 'pipe' });
+            execSync('pm2 save', { stdio: 'pipe' });
+            removed++;
+          } catch { /* not running */ }
+          break;
+        case 'schtask':
+          try {
+            execSync('powershell -NoProfile -Command "Unregister-ScheduledTask -TaskName ItachiSkillSync -Confirm:$false"', { stdio: 'pipe' });
+            removed++;
+          } catch { /* not registered */ }
+          break;
+        case 'cron':
+          try {
+            execSync('(crontab -l 2>/dev/null | grep -v "skill-sync") | crontab -', { stdio: 'pipe', shell: '/bin/sh' });
+            removed++;
+          } catch { /* no crontab */ }
+          break;
+      }
+    } catch (e) {
+      log(`    Failed to remove ${item.path || item.type}: ${e.message}`, 'red');
+    }
+  }
+
+  // Remove Windows env vars
+  if (PLATFORM === 'windows') {
+    const envKeys = ['ITACHI_API_URL', 'ITACHI_API_KEY', 'ITACHI_DISABLED'];
+    for (const k of envKeys) {
+      try { execSync(`powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('${k}', $null, 'User')"`, { stdio: 'pipe' }); } catch {}
+    }
+  }
+
+  log(`\n  Uninstall complete. Removed ${removed} items.`, 'green');
+  log('  Note: The itachi-memory repo itself was NOT removed.', 'gray');
+}
+
 // ── Main ────────────────────────────────────────────────
 async function main() {
   try {
@@ -941,6 +1175,12 @@ async function main() {
       process.exit(0);
     }
 
+    if (OPTS.uninstall) {
+      await uninstall();
+      rl.close();
+      process.exit(0);
+    }
+
     step1_detectPlatform();
 
     const passphrase = await step2_loadOrCreatePassphrase();
@@ -961,7 +1201,7 @@ async function main() {
       const { supaUrl, supaKey } = await bootstrapSupabase(passphrase);
       setEnvVarsFull();
       installWrapper();
-      await setupOrchestrator(supaUrl, supaKey);
+      await setupOrchestrator(supaUrl, supaKey, passphrase);
     }
 
     log('');

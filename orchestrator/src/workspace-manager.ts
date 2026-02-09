@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { config } from './config';
+import { decrypt } from './crypto';
 import type { Task } from './types';
 
 // Fetch repo_url from the Itachi API when not available locally
@@ -96,7 +97,40 @@ export async function setupWorkspace(task: Task): Promise<string> {
         }
     }
 
+    await pullProjectEnv(workspacePath, task);
+
     return workspacePath;
+}
+
+async function pullProjectEnv(workspacePath: string, task: Task): Promise<void> {
+    if (!config.syncPassphrase) return;
+
+    try {
+        const headers: Record<string, string> = {};
+        if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
+
+        const res = await fetch(
+            `${config.apiUrl}/api/sync/pull/${encodeURIComponent(task.project)}/${encodeURIComponent('.env')}`,
+            { headers }
+        );
+
+        if (!res.ok) {
+            console.log(`[workspace] No synced .env for ${task.project} (continuing without)`);
+            return;
+        }
+
+        const data = await res.json() as { encrypted_data?: string; salt?: string };
+        if (!data.encrypted_data || !data.salt) {
+            console.log(`[workspace] No synced .env for ${task.project} (continuing without)`);
+            return;
+        }
+
+        const envContent = decrypt(data.encrypted_data, data.salt, config.syncPassphrase);
+        fs.writeFileSync(path.join(workspacePath, '.env'), envContent, 'utf8');
+        console.log(`[workspace] Wrote synced .env for ${task.project}`);
+    } catch (err) {
+        console.log(`[workspace] No synced .env for ${task.project} (continuing without)`);
+    }
 }
 
 export async function getFilesChanged(workspacePath: string): Promise<string[]> {

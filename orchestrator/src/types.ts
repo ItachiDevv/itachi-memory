@@ -126,6 +126,7 @@ export interface Config {
     projectPaths: Record<string, string>;
     projectFilter?: string;
     apiUrl: string;
+    syncPassphrase: string;
     machineId: string;
     machineDisplayName: string;
 }

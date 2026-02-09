@@ -1,6 +1,7 @@
 @echo off
 REM Itachi Memory System — Zero-prerequisite installer for Windows
 REM Usage: bootstrap.cmd
+REM   or:  bootstrap.cmd --uninstall [--force]
 setlocal
 
 echo.

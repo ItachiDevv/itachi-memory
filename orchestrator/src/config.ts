@@ -27,7 +27,7 @@ const machineId = required('ITACHI_MACHINE_ID');
 
 export const config: Config = {
     supabaseUrl: required('SUPABASE_URL'),
-    supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || required('SUPABASE_KEY'),
+    supabaseKey: required('SUPABASE_SERVICE_ROLE_KEY'),
     orchestratorId: process.env.ITACHI_ORCHESTRATOR_ID || 'default-orchestrator',
     maxConcurrent: parseInt(process.env.ITACHI_MAX_CONCURRENT || '2', 10),
     workspaceDir: process.env.ITACHI_WORKSPACE_DIR || path.join(require('os').homedir(), 'itachi-workspaces'),
@@ -38,6 +38,7 @@ export const config: Config = {
     projectPaths: parseProjectPaths(process.env.ITACHI_PROJECT_PATHS || '{}'),
     projectFilter: process.env.ITACHI_PROJECT_FILTER || undefined,
     apiUrl: process.env.ITACHI_API_URL || 'https://itachisbrainserver.online',
+    syncPassphrase: process.env.ITACHI_SYNC_PASSPHRASE || '',
     defaultEngine: (process.env.ITACHI_DEFAULT_ENGINE || 'claude') as Engine,
     machineId,
     machineDisplayName: process.env.ITACHI_MACHINE_NAME || machineId,
