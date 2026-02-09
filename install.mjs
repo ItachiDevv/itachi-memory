@@ -386,7 +386,7 @@ function step4_installHooks() {
 
   const hookSubdir = PLATFORM === 'windows' ? 'windows' : 'unix';
   const hookExt = PLATFORM === 'windows' ? '.ps1' : '.sh';
-  const hookFiles = ['after-edit', 'session-start', 'session-end', 'skill-sync'];
+  const hookFiles = ['after-edit', 'session-start', 'session-end', 'user-prompt-submit', 'skill-sync'];
   let count = 0;
 
   for (const hook of hookFiles) {
@@ -456,7 +456,7 @@ function step7_configureSettings() {
   if (!settings.hooks) settings.hooks = {};
 
   // Remove existing Itachi hooks
-  const itachiMarkers = ['session-start', 'after-edit', 'session-end'];
+  const itachiMarkers = ['session-start', 'after-edit', 'session-end', 'user-prompt-submit'];
   const isItachiHook = (cmd) => itachiMarkers.some(m => cmd?.toLowerCase().includes(m));
 
   for (const event of Object.keys(settings.hooks)) {
@@ -474,6 +474,8 @@ function step7_configureSettings() {
       { hooks: [{ type: 'command', command: ps('session-start.ps1'), timeout: 30 }] }];
     settings.hooks.PostToolUse = [...(settings.hooks.PostToolUse || []),
       { matcher: 'Write|Edit', hooks: [{ type: 'command', command: ps('after-edit.ps1'), timeout: 30 }] }];
+    settings.hooks.UserPromptSubmit = [...(settings.hooks.UserPromptSubmit || []),
+      { hooks: [{ type: 'command', command: ps('user-prompt-submit.ps1'), timeout: 8 }] }];
     settings.hooks.SessionEnd = [...(settings.hooks.SessionEnd || []),
       { hooks: [{ type: 'command', command: ps('session-end.ps1'), timeout: 30 }] }];
   } else {
@@ -482,6 +484,8 @@ function step7_configureSettings() {
       { hooks: [{ type: 'command', command: sh('session-start.sh'), timeout: 30 }] }];
     settings.hooks.PostToolUse = [...(settings.hooks.PostToolUse || []),
       { matcher: 'Write|Edit', hooks: [{ type: 'command', command: sh('after-edit.sh'), timeout: 30 }] }];
+    settings.hooks.UserPromptSubmit = [...(settings.hooks.UserPromptSubmit || []),
+      { hooks: [{ type: 'command', command: sh('user-prompt-submit.sh'), timeout: 8 }] }];
     settings.hooks.SessionEnd = [...(settings.hooks.SessionEnd || []),
       { hooks: [{ type: 'command', command: sh('session-end.sh'), timeout: 30 }] }];
   }

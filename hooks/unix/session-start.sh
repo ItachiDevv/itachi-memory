@@ -3,6 +3,7 @@
 # 1) Pulls + decrypts synced .env/.md files from remote
 # 2) Fetches session briefing from code-intel API
 # 3) Fetches recent memories for context
+# 4) Writes briefing data to auto-memory MEMORY.md for persistent context
 
 BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 MEMORY_API="$BASE_API/api/memory"
@@ -287,7 +288,7 @@ function decrypt(encB64, saltB64, passphrase) {
         }
         if (!settings.hooks) settings.hooks = {};
 
-        const itachiMarkers = ['session-start', 'after-edit', 'session-end'];
+        const itachiMarkers = ['session-start', 'after-edit', 'session-end', 'user-prompt-submit'];
         const isItachiHook = (cmd) => itachiMarkers.some(m => cmd && cmd.toLowerCase().includes(m));
 
         for (const [event, templateEntries] of Object.entries(template.hooks)) {
@@ -479,6 +480,120 @@ try {
     if [ -n "$OUTPUT" ]; then
         echo "$OUTPUT"
     fi
+fi
+
+# ============ Fetch Project Learnings (Rules) ============
+LEARNINGS=$(curl -s -k -H "$AUTH_HEADER" "${BASE_API}/api/project/learnings?project=${PROJECT_NAME}&limit=15" --max-time 10 2>/dev/null)
+
+# ============ Write Briefing to Auto-Memory MEMORY.md ============
+if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ]; then
+    node -e "
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const cwd = process.argv[1];
+const briefingJson = process.argv[2];
+const learningsJson = process.argv[3];
+
+function encodeCwd(p) {
+    return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+\$/g, '');
+}
+
+try {
+    const encodedCwd = encodeCwd(cwd);
+    const memoryDir = path.join(os.homedir(), '.claude', 'projects', encodedCwd, 'memory');
+    const memoryFile = path.join(memoryDir, 'MEMORY.md');
+
+    const briefing = briefingJson ? JSON.parse(briefingJson) : null;
+    let learnings = null;
+    try { learnings = learningsJson ? JSON.parse(learningsJson) : null; } catch {}
+
+    // Exit early if nothing to write
+    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0)) return;
+
+    const lines = [];
+    lines.push('## Itachi Session Context');
+    lines.push('<!-- auto-updated by itachi session-start hook -->');
+    lines.push('');
+
+    if (briefing) {
+        if (briefing.hotFiles && briefing.hotFiles.length > 0) {
+            const hotStr = briefing.hotFiles.slice(0, 5).map(f => f.path + ' (' + f.editCount + ' edits)').join(', ');
+            lines.push('**Hot files**: ' + hotStr);
+        }
+
+        if (briefing.activePatterns && briefing.activePatterns.length > 0) {
+            lines.push('**Active patterns**: ' + briefing.activePatterns.join(', '));
+        }
+
+        if (briefing.stylePreferences && Object.keys(briefing.stylePreferences).length > 0) {
+            const styleStr = Object.entries(briefing.stylePreferences).map(([k,v]) => k + '=' + v).join(', ');
+            lines.push('**Style**: ' + styleStr);
+        }
+
+        if (briefing.recentSessions && briefing.recentSessions.length > 0) {
+            const decisions = briefing.recentSessions
+                .filter(s => s.summary && s.summary.length > 10)
+                .slice(0, 3)
+                .map(s => s.summary);
+            if (decisions.length > 0) {
+                lines.push('**Recent decisions**: ' + decisions.join('; '));
+            }
+        }
+
+        if (briefing.activeTasks && briefing.activeTasks.length > 0) {
+            const tasksStr = briefing.activeTasks.map(t => '[' + t.status + '] ' + t.description).join('; ');
+            lines.push('**Active tasks**: ' + tasksStr);
+        }
+    }
+
+    fs.mkdirSync(memoryDir, { recursive: true });
+    let existing = '';
+    if (fs.existsSync(memoryFile)) {
+        existing = fs.readFileSync(memoryFile, 'utf8');
+    }
+
+    // Helper: replace or append a ## section in the file content
+    function upsertSection(content, sectionHeading, sectionBody) {
+        const startIdx = content.indexOf(sectionHeading);
+        if (startIdx !== -1) {
+            const afterStart = content.substring(startIdx + sectionHeading.length);
+            const nextHeadingMatch = afterStart.match(/\n## /);
+            const endIdx = nextHeadingMatch
+                ? startIdx + sectionHeading.length + nextHeadingMatch.index
+                : content.length;
+            return content.substring(0, startIdx) + sectionBody + content.substring(endIdx);
+        } else {
+            const separator = content.length > 0 && !content.endsWith('\n\n') ? '\n\n' : (content.length > 0 && !content.endsWith('\n') ? '\n' : '');
+            return content + separator + sectionBody;
+        }
+    }
+
+    // Write Itachi Session Context section (only if briefing has content)
+    if (lines.length > 3) {
+        lines.push('');
+        const sectionContent = lines.join('\n');
+        existing = upsertSection(existing, '## Itachi Session Context', sectionContent);
+    }
+
+    // Build and write Project Rules section from learnings
+    if (learnings && learnings.rules && learnings.rules.length > 0) {
+        const ruleLines = [];
+        ruleLines.push('## Project Rules');
+        ruleLines.push('<!-- auto-updated by itachi session-start hook -->');
+        ruleLines.push('');
+        for (const r of learnings.rules) {
+            const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
+            ruleLines.push('- ' + r.rule + reinforced);
+        }
+        ruleLines.push('');
+        existing = upsertSection(existing, '## Project Rules', ruleLines.join('\n'));
+    }
+
+    fs.writeFileSync(memoryFile, existing);
+} catch(e) {}
+" "$PWD" "$BRIEFING" "$LEARNINGS" 2>/dev/null
 fi
 
 exit 0

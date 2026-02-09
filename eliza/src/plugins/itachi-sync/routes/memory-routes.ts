@@ -12,7 +12,7 @@ export const memoryRoutes: Route[] = [
         const rt = runtime as IAgentRuntime;
         if (!checkAuth(req, res, rt)) return;
 
-        const { files = [], summary, diff = '', category, project, branch, task_id } = req.body;
+        const { files = [], summary, diff = '', category, project, branch, task_id, metadata } = req.body;
         if (!summary) {
           res.status(400).json({ error: 'Summary required' });
           return;
@@ -47,6 +47,7 @@ export const memoryRoutes: Route[] = [
           files: safeFiles,
           branch: branch ? truncate(branch, MAX_LENGTHS.branch) : undefined,
           task_id,
+          metadata: metadata || undefined,
         });
 
         rt.logger.info(

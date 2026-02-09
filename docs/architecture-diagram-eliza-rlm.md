@@ -27,7 +27,8 @@
   │  │  │  │  ├─ /api/tasks/*      itachi-self-improve         │ │        │  │  │
   │  │  │  │  ├─ /api/repos/*      ├─ lesson-extractor  ──┐   │ │        │  │  │
   │  │  │  │  ├─ /api/sync/*       ├─ lessons provider  ◄─┤   │ │        │  │  │
-  │  │  │  │  └─ /api/bootstrap    └─ reflection worker ◄─┘   │ │        │  │  │
+  │  │  │  │  ├─ /api/project/*    └─ reflection worker ◄─┘   │ │        │  │  │
+  │  │  │  │  └─ /api/bootstrap                             │ │        │  │  │
   │  │  │  │                                                   │ │        │  │  │
   │  │  │  └───────────────────────────────────────────────────┘ │        │  │  │
   │  │  └────────────────────────────────────────────────────────┘        │  │  │
@@ -56,16 +57,21 @@
             ┌────────────────────────┼────────────────────────┐
             │                        │                        │
             ▼                        ▼                        ▼
-  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐
-  │   Claude Code    │  │   Claude Code    │  │  Claude Code Hooks   │
-  │   Hooks (push)   │  │   Hooks (pull)   │  │  (skill-sync cron)   │
-  │                  │  │                  │  │                      │
-  │ after-edit ──────┼──┼→ POST /api/      │  │ session-start ───────│──→ GET /api/sync/pull
-  │   pushes code    │  │   memory/        │  │   pulls context      │
-  │   changes as     │  │   code-change    │  │                      │
-  │   memories       │  │                  │  │ after-edit ──────────│──→ POST /api/memory/
-  │                  │  │                  │  │   pushes changes     │     code-change
-  └──────────────────┘  └──────────────────┘  └──────────────────────┘
+  ┌────────────────────────┐  ┌──────────────────────────────────────────┐
+  │  Claude Code Hooks     │  │  Claude Code Hooks (new/enhanced)        │
+  │  (existing)            │  │                                          │
+  │                        │  │ user-prompt-submit ─→ GET /api/memory/   │
+  │ session-start ─────────│──│   search → additionalContext injection   │
+  │   sync + briefing      │  │                                          │
+  │                        │  │ session-start (enhanced) ─→ writes       │
+  │ after-edit ────────────│──│   MEMORY.md with briefing + project rules│
+  │   POST /api/memory/    │  │                                          │
+  │   code-change          │  │ session-end (enhanced) ─→ POST /api/     │
+  │                        │  │   session/extract-insights               │
+  │ session-end ───────────│──│   → LLM analysis → itachi_memories       │
+  │   POST /api/session/   │  │   → RLM bridge (significance >= 0.7)    │
+  │   complete             │  │                                          │
+  └────────────────────────┘  └──────────────────────────────────────────┘
 
   Message Flow
 
@@ -186,6 +192,45 @@
   │                    memory in ElizaOS                             │
   │                                                                 │
   │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │       SESSION INSIGHTS BRIDGE (extract-insights API)      │   │
+  │  │                                                           │   │
+  │  │  Manual Claude Code sessions post transcripts on end.     │   │
+  │  │  LLM scores significance and extracts categorized         │   │
+  │  │  insights. When significance >= 0.7:                      │   │
+  │  │                                                           │   │
+  │  │  Session insight     Mapped to RLM category               │   │
+  │  │  ─────────────────   ──────────────────────               │   │
+  │  │  preference      --> user-preference                      │   │
+  │  │  learning        --> error-handling                       │   │
+  │  │  decision        --> project-selection                    │   │
+  │  │                                                           │   │
+  │  │  Stored as CUSTOM memory (type: management-lesson)        │   │
+  │  │  so the Lessons Provider picks them up ──────────────────┘   │
+  │  │                                                           │   │
+  │  │  Excluded: pattern, architecture, bugfix (stay in         │   │
+  │  │  itachi_memories only — project context, not lessons)     │   │
+  │  └──────────────────────────────────────────────────────────┘   │
+  │                                                                 │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │       PROJECT RULES (Compaction-Resistant Learning)       │   │
+  │  │                                                           │   │
+  │  │  Prescriptive project-specific rules extracted from       │   │
+  │  │  session insights. Stored in itachi_memories with         │   │
+  │  │  category='project_rule' and metadata:                    │   │
+  │  │    { confidence, times_reinforced, source, first_seen }   │   │
+  │  │                                                           │   │
+  │  │  Capture: extract-insights also produces a `rules` array  │   │
+  │  │  Dedup: semantic search (>0.85 similarity) → reinforce    │   │
+  │  │  Delivery: session-start hook fetches GET /api/project/   │   │
+  │  │    learnings → writes ## Project Rules to MEMORY.md       │   │
+  │  │                                                           │   │
+  │  │  Rules survive context compaction because MEMORY.md is    │   │
+  │  │  always loaded into Claude Code's system prompt.          │   │
+  │  └──────────────────────────────────────────────────────────┘   │
+  │                                                                 │
+  │  See: docs/session-memory-utilization.md                        │
+  │                                                                 │
+  │  ┌──────────────────────────────────────────────────────────┐   │
   │  │           WEEKLY: Reflection Worker                       │   │
   │  │                                                           │   │
   │  │  1. Queries all lessons from past 7 days                  │   │
@@ -214,7 +259,8 @@
   │  ├─ DOCUMENT (strategy docs)     │  ├─ fact                         │
   │  ├─ CUSTOM   (lessons)           │  ├─ conversation                 │
   │  ├─ FRAGMENT (knowledge chunks)  │  ├─ decision                     │
-  │  └─ DESCRIPTION (entity info)    │  └─ test                         │
+  │  └─ DESCRIPTION (entity info)    │  ├─ project_rule                 │
+  │                                  │  └─ test                         │
   │                                  │                                  │
   │  Used for:                       │  Used for:                       │
   │  • Chat history persistence      │  • Code change tracking          │
