@@ -303,7 +303,7 @@ try {
     const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
     if (!settings.hooks) process.exit(0);
 
-    const itachiMarkers = ['session-start', 'after-edit', 'session-end'];
+    const itachiMarkers = ['session-start', 'after-edit', 'session-end', 'user-prompt-submit'];
     const isItachiHook = (cmd) => itachiMarkers.some(m => cmd && cmd.toLowerCase().includes(m));
 
     // Build template: extract Itachi hooks and replace paths with __HOOKS_DIR__

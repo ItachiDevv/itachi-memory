@@ -26,6 +26,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"C:\\Users\\newma\\.claude\\hooks\\user-prompt-submit.ps1\"",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [

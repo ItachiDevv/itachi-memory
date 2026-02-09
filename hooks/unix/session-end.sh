@@ -2,6 +2,7 @@
 # Itachi Memory - SessionEnd Hook
 # 1) Logs session end to memory API
 # 2) Posts session complete to code-intel API
+# 3) Extracts conversation insights from transcript (background)
 
 BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 MEMORY_API="$BASE_API/api/memory"
@@ -114,5 +115,140 @@ try {
     req.end();
 } catch(e) {}
 " "$SESSION_ID" "$PROJECT_NAME" "$REASON" "$BRANCH" "$TASK_ID" "$SESSION_API" 2>/dev/null &
+
+# ============ Extract Insights from Transcript (background) ============
+# Get files changed and summary from the session complete data
+FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+SESSION_SUMMARY=""
+DURATION_MS="0"
+
+# Try to read sessions-index.json for metadata
+SESSIONS_INDEX="$HOME/.claude/sessions-index.json"
+if [ -f "$SESSIONS_INDEX" ]; then
+    META=$(node -e "
+try {
+    const fs = require('fs');
+    const sessions = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+    if (Array.isArray(sessions) && sessions.length > 0) {
+        const latest = sessions.sort((a, b) => (b.modified || '').localeCompare(a.modified || ''))[0];
+        const summary = latest.summary || '';
+        let duration = 0;
+        if (latest.created && latest.modified) {
+            duration = new Date(latest.modified).getTime() - new Date(latest.created).getTime();
+        }
+        console.log(JSON.stringify({ summary, duration }));
+    }
+} catch(e) {}
+" "$SESSIONS_INDEX" 2>/dev/null)
+
+    if [ -n "$META" ]; then
+        SESSION_SUMMARY=$(node -e "try{console.log(JSON.parse(process.argv[1]).summary||'')}catch(e){}" "$META" 2>/dev/null)
+        DURATION_MS=$(node -e "try{console.log(JSON.parse(process.argv[1]).duration||0)}catch(e){console.log(0)}" "$META" 2>/dev/null)
+    fi
+fi
+
+node -e "
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const https = require('https');
+const http = require('http');
+
+const sessionId = process.argv[1];
+const project = process.argv[2];
+const cwd = process.argv[3];
+const sessionApi = process.argv[4];
+const summary = process.argv[5] || '';
+const durationMs = parseInt(process.argv[6]) || 0;
+const filesChanged = process.argv[7] ? process.argv[7].split(',').filter(Boolean) : [];
+
+function encodeCwd(p) {
+    return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+\$/g, '');
+}
+
+function httpPost(url, body) {
+    return new Promise((resolve, reject) => {
+        const jsonBody = JSON.stringify(body);
+        const u = new URL(url);
+        const mod = u.protocol === 'https:' ? https : http;
+        const req = mod.request(u, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(jsonBody),
+                'Authorization': 'Bearer ' + (process.env.ITACHI_API_KEY || '')
+            },
+            timeout: 30000,
+            rejectUnauthorized: false
+        }, (res) => {
+            let d = '';
+            res.on('data', c => d += c);
+            res.on('end', () => {
+                if (res.statusCode >= 400) reject(new Error(d));
+                else { try { resolve(JSON.parse(d)); } catch { resolve(d); } }
+            });
+        });
+        req.on('error', reject);
+        req.write(jsonBody);
+        req.end();
+    });
+}
+
+(async () => {
+    try {
+        const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+        const encodedCwd = encodeCwd(cwd);
+        const projectDir = path.join(claudeDir, encodedCwd);
+        if (!fs.existsSync(projectDir)) return;
+
+        let transcriptPath = null;
+        const directPath = path.join(projectDir, sessionId + '.jsonl');
+        if (fs.existsSync(directPath)) {
+            transcriptPath = directPath;
+        } else {
+            const files = fs.readdirSync(projectDir)
+                .filter(f => f.endsWith('.jsonl'))
+                .map(f => ({ name: f, mtime: fs.statSync(path.join(projectDir, f)).mtimeMs }))
+                .sort((a, b) => b.mtime - a.mtime);
+            if (files.length > 0) {
+                transcriptPath = path.join(projectDir, files[0].name);
+            }
+        }
+
+        if (!transcriptPath) return;
+
+        const content = fs.readFileSync(transcriptPath, 'utf8');
+        const lines = content.split('\n').filter(Boolean);
+        const assistantTexts = [];
+
+        for (const line of lines) {
+            try {
+                const entry = JSON.parse(line);
+                if (entry.type === 'assistant' && entry.message && entry.message.content) {
+                    const textParts = Array.isArray(entry.message.content)
+                        ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                        : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                    if (textParts.length > 50) {
+                        assistantTexts.push(textParts);
+                    }
+                }
+            } catch {}
+        }
+
+        if (assistantTexts.length === 0) return;
+
+        const conversationText = assistantTexts.join('\n---\n').substring(0, 4000);
+
+        await httpPost(sessionApi + '/extract-insights', {
+            session_id: sessionId,
+            project: project,
+            conversation_text: conversationText,
+            files_changed: filesChanged,
+            summary: summary,
+            duration_ms: durationMs
+        });
+    } catch(e) {}
+})();
+" "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" 2>/dev/null &
 
 exit 0

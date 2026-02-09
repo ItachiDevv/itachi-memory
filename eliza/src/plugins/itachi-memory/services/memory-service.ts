@@ -230,6 +230,44 @@ export class MemoryService extends Service {
     return data as ItachiMemory;
   }
 
+  /** Reinforce an existing memory by incrementing times_reinforced and merging metadata */
+  async reinforceMemory(
+    memoryId: string,
+    newMetadata: Record<string, unknown>
+  ): Promise<void> {
+    const { data: existing } = await this.supabase
+      .from('itachi_memories')
+      .select('metadata')
+      .eq('id', memoryId)
+      .single();
+
+    const merged = {
+      ...(existing?.metadata as Record<string, unknown> || {}),
+      ...newMetadata,
+      times_reinforced: ((existing?.metadata as Record<string, unknown>)?.times_reinforced as number || 1) + 1,
+      last_reinforced: new Date().toISOString(),
+    };
+
+    await this.supabase
+      .from('itachi_memories')
+      .update({ metadata: merged })
+      .eq('id', memoryId);
+  }
+
+  /** Update the summary of an existing memory (for rule refinement) */
+  async updateMemorySummary(
+    memoryId: string,
+    newSummary: string
+  ): Promise<void> {
+    const contextText = `Category: project_rule\nSummary: ${newSummary}`;
+    const embedding = await this.getEmbedding(contextText);
+
+    await this.supabase
+      .from('itachi_memories')
+      .update({ summary: newSummary, content: newSummary, embedding })
+      .eq('id', memoryId);
+  }
+
   getSupabase(): SupabaseClient {
     return this.supabase;
   }

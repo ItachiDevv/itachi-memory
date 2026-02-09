@@ -7,9 +7,11 @@ AI-powered project manager with persistent memory, task orchestration, and multi
 ```
 Claude Code Sessions (Windows/Mac/Linux)
     |
-    |-- session-start hook --> GET /api/session/briefing   --> context injection
-    |-- after-edit hook    --> POST /api/session/edit       --> store edits + code intel
-    |-- session-end hook   --> POST /api/session/complete   --> session summary
+    |-- session-start hook    --> GET /api/session/briefing      --> context injection + MEMORY.md
+    |-- user-prompt-submit    --> GET /api/memory/search         --> per-prompt memory injection
+    |-- after-edit hook       --> POST /api/session/edit         --> store edits + code intel
+    |-- session-end hook      --> POST /api/session/complete     --> session summary
+    |                         --> POST /api/session/extract-insights --> RLM bridge
     |
     v
 ElizaOS Agent (Hetzner/Coolify)                     Orchestrator (per-machine)
@@ -28,11 +30,15 @@ ElizaOS Agent (Hetzner/Coolify)                     Orchestrator (per-machine)
 
 ### Data Flow
 
-1. **Hooks** capture every file edit, session start/end from Claude Code
-2. **Workers** (background) analyze edits, synthesize sessions, extract repo expertise
-3. **Providers** inject relevant context into every Telegram LLM call
-4. **Orchestrator** spawns Claude/Codex sessions for queued tasks, streams output to Telegram forum topics
-5. **MCP Server** gives Claude Code direct tool access to memories, tasks, and sessions mid-conversation
+1. **Hooks** capture every file edit, session start/end, and user prompt from Claude Code
+2. **UserPromptSubmit hook** searches semantic memory per-prompt and injects relevant context automatically
+3. **Session-start hook** writes hot files, patterns, and decisions to Claude's auto-memory (`MEMORY.md`)
+4. **Session-end hook** extracts transcript insights via LLM, stores them in both memory systems
+5. **Workers** (background) analyze edits, synthesize sessions, extract repo expertise
+6. **Providers** inject relevant context into every Telegram LLM call
+7. **RLM bridge** promotes high-significance session insights into ElizaOS native memories for the lessons provider
+8. **Orchestrator** spawns Claude/Codex sessions for queued tasks, streams output to Telegram forum topics
+9. **MCP Server** gives Claude Code direct tool access to memories, tasks, and sessions mid-conversation
 
 ## Quick Start
 
@@ -80,7 +86,8 @@ The `--full` flag adds: auth credential sync, Supabase bootstrap, orchestrator c
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| Hook scripts | `~/.claude/hooks/` | Capture edits, briefings, session summaries |
+| Hook scripts | `~/.claude/hooks/` | Capture edits, briefings, prompts, session summaries |
+| Auto-memory | `~/.claude/projects/*/memory/MEMORY.md` | Persistent session context (hot files, patterns, decisions) |
 | Skills | `~/.claude/skills/` | itachi-init, itachi-env, github, vercel, supabase, x-api |
 | MCP Server | `~/.claude/settings.json` | Native tool access (memory_search, task_create, etc.) |
 | API keys | `~/.itachi-api-keys` | Encrypted, synced across machines |
@@ -122,7 +129,7 @@ When the MCP server is configured, Claude Code gets these tools natively:
 Persistent memory storage with OpenAI embeddings. Stores code changes, decisions, preferences. Semantic vector search via Supabase pgvector.
 
 ### itachi-code-intel
-Deep code intelligence pipeline. Workers analyze edits (15m), synthesize sessions (5m), extract repo expertise (daily), coding style (weekly), and cross-project insights (weekly). Providers inject session briefings, repo expertise, and cross-project insights into every LLM call.
+Deep code intelligence pipeline. Workers analyze edits (15m), synthesize sessions (5m), extract repo expertise (daily), coding style (weekly), and cross-project insights (weekly). Providers inject session briefings, repo expertise, and cross-project insights into every LLM call. The `extract-insights` endpoint scores session transcripts for significance and bridges high-value insights into the RLM (see below).
 
 ### itachi-tasks
 Task queue with multi-machine dispatch. Machine registry with heartbeat monitoring. Telegram forum topics for per-task streaming output. Task dispatcher assigns work based on project affinity and load balancing.
@@ -131,7 +138,7 @@ Task queue with multi-machine dispatch. Machine registry with heartbeat monitori
 Cross-machine synchronization. Encrypted push/pull of API keys, settings hooks, and skills. Project-scoped file sync with content hashing and versioning.
 
 ### itachi-self-improve
-Lesson extraction evaluator. Learns from user feedback and conversation patterns. Stores lessons as searchable memories.
+Recursive Learning Model (RLM). Lesson extraction evaluator learns from user feedback, task outcomes, and session insights. Reflection worker synthesizes weekly strategy documents. Lessons provider injects past lessons into every Telegram LLM call. Session insights from manual Claude Code sessions are bridged into the RLM when significance >= 0.7 and category is `preference`, `learning`, or `decision`.
 
 ## Updating
 
@@ -220,7 +227,11 @@ itachi-memory/
 │   └── index.js                # 9 tools for Claude Code
 ├── hooks/
 │   ├── windows/                # PowerShell hooks (.ps1)
-│   └── unix/                   # Bash hooks (.sh)
+│   │   ├── session-start.ps1   #   Sync, briefing, MEMORY.md write
+│   │   ├── user-prompt-submit.ps1 # Per-prompt memory search + injection
+│   │   ├── after-edit.ps1      #   Code change capture
+│   │   └── session-end.ps1     #   Summary + transcript insight extraction
+│   └── unix/                   # Bash hooks (.sh) — same as above
 ├── skills/                     # Claude Code skills (synced daily)
 ├── schema/                     # Legacy SQL migrations
 ├── supabase/migrations/        # Current DB schema
