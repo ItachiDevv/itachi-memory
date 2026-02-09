@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-API_URL="${ITACHI_API_URL:-}"
+API_URL="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 API_KEY="${ITACHI_API_KEY:-}"
 REFRESH_INTERVAL="${ITACHI_REFRESH_INTERVAL:-10}"
 ORCHESTRATOR_URL="${ITACHI_ORCHESTRATOR_URL:-http://localhost:3001}"
