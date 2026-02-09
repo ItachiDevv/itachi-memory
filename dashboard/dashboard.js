@@ -239,6 +239,7 @@
     const headers = { ...options.headers };
     if (config.apiKey) {
       headers['x-api-key'] = config.apiKey;
+      headers['Authorization'] = `Bearer ${config.apiKey}`;
     }
     return fetch(apiUrl(path), {
       ...options,
@@ -257,6 +258,7 @@
     const results = await Promise.allSettled([
       refreshHealth(),
       refreshTasks(),
+      refreshMachines(),
       refreshMemoryFeed(),
       refreshMemoryStats(),
       refreshRepos(),
@@ -283,7 +285,8 @@
       dom.dotHealth.className = 'status-dot green';
       dom.valHealth.textContent = data.status || 'OK';
       dom.valMemories.textContent = formatNumber(data.memories);
-      dom.valActiveTasks.textContent = formatNumber(data.active_tasks);
+      const taskLabel = data.queued_tasks ? `${data.active_tasks || 0} / ${data.queued_tasks}q` : formatNumber(data.active_tasks);
+      dom.valActiveTasks.textContent = taskLabel;
       dom.valTelegram.textContent = data.telegram ? 'Connected' : 'Offline';
     } catch (e) {
       dom.dotHealth.className = 'status-dot red';
@@ -299,7 +302,6 @@
       allTasks = data.tasks || [];
       populateProjectFilter();
       renderTaskBoard();
-      renderMachines();
       renderTaskResultsChart();
     } catch (e) {
       allTasks = [];
@@ -373,6 +375,9 @@
     const priorityClass = task.priority >= 8 ? 'priority-high' : task.priority >= 4 ? 'priority-medium' : 'priority-low';
 
     let extraHtml = '';
+    if (task.assigned_machine) {
+      extraHtml += `<span class="task-card-machine">${escapeHtml(task.assigned_machine)}</span>`;
+    }
     if (task.status === 'running' && task.started_at) {
       extraHtml += `<span class="task-card-elapsed" data-started="${task.started_at}"></span>`;
     }
@@ -429,10 +434,15 @@
       ['Priority', `P${task.priority ?? '?'}`],
       ['Model', escapeHtml(task.model || '--')],
       ['Orchestrator', `<code>${escapeHtml(task.orchestrator_id || '--')}</code>`],
+      ['Assigned Machine', `<code>${escapeHtml(task.assigned_machine || '--')}</code>`],
       ['Created', formatDate(task.created_at)],
       ['Started', formatDate(task.started_at)],
       ['Completed', formatDate(task.completed_at)],
     ];
+
+    if (task.telegram_topic_id) {
+      rows.push(['Telegram Topic', `<code>${task.telegram_topic_id}</code>`]);
+    }
 
     if (task.files_changed) {
       const files = Array.isArray(task.files_changed) ? task.files_changed : [task.files_changed];
@@ -460,22 +470,95 @@
     `;
   }
 
-  // ── Connected machines ────────────────────────────────────
-  function renderMachines() {
-    const machineMap = new Map();
+  // ── Connected machines (from /api/machines) ──────────────
+  let allMachines = [];
 
+  async function refreshMachines() {
+    try {
+      const data = await fetchApi('/api/machines');
+      allMachines = data.machines || [];
+      renderMachines();
+    } catch (e) {
+      // Fallback: infer from tasks if machines endpoint unavailable
+      allMachines = [];
+      renderMachinesFromTasks();
+      throw e;
+    }
+  }
+
+  function renderMachines() {
+    if (allMachines.length === 0) {
+      renderMachinesFromTasks();
+      return;
+    }
+
+    dom.machineCount.textContent = allMachines.length;
+    dom.machinesList.innerHTML = '';
+
+    allMachines.forEach((m) => {
+      const now = Date.now();
+      const heartbeatAge = m.last_heartbeat ? now - new Date(m.last_heartbeat).getTime() : Infinity;
+
+      let statusClass, statusLabel;
+      if (m.status === 'online' && m.active_tasks > 0) {
+        statusClass = 'green';
+        statusLabel = 'Active';
+      } else if (m.status === 'online' || (m.status === 'busy' && heartbeatAge < 120000)) {
+        statusClass = 'amber';
+        statusLabel = 'Online';
+      } else {
+        statusClass = 'red';
+        statusLabel = 'Offline';
+      }
+
+      const projectTags = (m.projects || []).map((p) =>
+        `<span class="machine-project-tag" style="background:${projectColor(p)}22;color:${projectColor(p)}">${escapeHtml(p)}</span>`
+      ).join(' ');
+
+      const osIcon = m.os === 'darwin' ? '\uD83C\uDF4E' : m.os === 'win32' ? '\uD83E\uDE9F' : m.os === 'linux' ? '\uD83D\uDC27' : '\uD83D\uDDA5';
+
+      const card = document.createElement('div');
+      card.className = 'machine-card';
+      card.innerHTML = `
+        <div class="machine-card-header">
+          <span class="status-dot ${statusClass}"></span>
+          <span class="machine-id">${osIcon} ${escapeHtml(m.display_name || m.machine_id)}</span>
+          <span class="machine-id-sub">${escapeHtml(m.machine_id)}</span>
+        </div>
+        <div class="machine-stat">
+          <span>Status</span>
+          <span class="machine-stat-value">${statusLabel}</span>
+        </div>
+        <div class="machine-stat">
+          <span>Tasks</span>
+          <span class="machine-stat-value">${m.active_tasks} / ${m.max_concurrent} max</span>
+        </div>
+        <div class="machine-stat">
+          <span>Heartbeat</span>
+          <span class="machine-stat-value">${m.last_heartbeat ? timeAgo(new Date(m.last_heartbeat).getTime()) : '--'}</span>
+        </div>
+        ${(m.projects || []).length > 0 ? `
+        <div class="machine-stat">
+          <span>Projects</span>
+          <span class="machine-stat-value machine-projects">${projectTags}</span>
+        </div>` : ''}
+      `;
+      dom.machinesList.appendChild(card);
+    });
+  }
+
+  // Fallback: infer machines from task orchestrator_id (legacy behavior)
+  function renderMachinesFromTasks() {
+    const machineMap = new Map();
     allTasks.forEach((task) => {
-      const oid = task.orchestrator_id;
+      const oid = task.orchestrator_id || task.assigned_machine;
       if (!oid) return;
       if (!machineMap.has(oid)) {
-        machineMap.set(oid, { id: oid, activeTasks: 0, totalTasks: 0, lastActivity: null, taskIds: [] });
+        machineMap.set(oid, { id: oid, activeTasks: 0, totalTasks: 0, lastActivity: null });
       }
       const m = machineMap.get(oid);
       m.totalTasks++;
-      if (task.status === 'running' || task.status === 'claimed') {
-        m.activeTasks++;
-        m.taskIds.push(task.id?.slice(0, 8));
-      }
+      if (task.status === 'running' || task.status === 'claimed') m.activeTasks++;
       const ts = task.completed_at || task.started_at || task.created_at;
       if (ts) {
         const d = new Date(ts).getTime();
@@ -493,43 +576,16 @@
 
     dom.machinesList.innerHTML = '';
     machines.forEach((m) => {
-      const now = Date.now();
-      const idle = m.lastActivity ? (now - m.lastActivity) : Infinity;
-      let statusClass, statusLabel;
-      if (m.activeTasks > 0) {
-        statusClass = 'green';
-        statusLabel = 'Active';
-      } else if (idle < 10 * 60 * 1000) {
-        statusClass = 'amber';
-        statusLabel = 'Idle';
-      } else {
-        statusClass = 'red';
-        statusLabel = 'Offline';
-      }
-
       const card = document.createElement('div');
       card.className = 'machine-card';
       card.innerHTML = `
         <div class="machine-card-header">
-          <span class="status-dot ${statusClass}"></span>
+          <span class="status-dot ${m.activeTasks > 0 ? 'green' : 'amber'}"></span>
           <span class="machine-id">${escapeHtml(m.id)}</span>
         </div>
-        <div class="machine-stat">
-          <span>Status</span>
-          <span class="machine-stat-value">${statusLabel}</span>
-        </div>
-        <div class="machine-stat">
-          <span>Active Tasks</span>
-          <span class="machine-stat-value">${m.activeTasks}</span>
-        </div>
-        <div class="machine-stat">
-          <span>Total Tasks</span>
-          <span class="machine-stat-value">${m.totalTasks}</span>
-        </div>
-        <div class="machine-stat">
-          <span>Last Activity</span>
-          <span class="machine-stat-value">${m.lastActivity ? timeAgo(m.lastActivity) : '--'}</span>
-        </div>
+        <div class="machine-stat"><span>Active</span><span class="machine-stat-value">${m.activeTasks}</span></div>
+        <div class="machine-stat"><span>Total</span><span class="machine-stat-value">${m.totalTasks}</span></div>
+        <div class="machine-stat"><span>Last seen</span><span class="machine-stat-value">${m.lastActivity ? timeAgo(m.lastActivity) : '--'}</span></div>
       `;
       dom.machinesList.appendChild(card);
     });

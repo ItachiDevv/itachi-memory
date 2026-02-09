@@ -370,6 +370,12 @@ body {
   color: var(--text-primary);
   word-break: break-all;
 }
+.machine-id-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
 .machine-stat {
   display: flex;
   justify-content: space-between;
@@ -380,6 +386,27 @@ body {
 .machine-stat-value {
   font-family: var(--font-mono);
   color: var(--text-secondary);
+}
+.machine-projects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.machine-project-tag {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.task-card-machine {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-panel);
 }
 
 /* ============================================================
