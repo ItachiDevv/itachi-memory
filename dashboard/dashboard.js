@@ -131,6 +131,9 @@
     if (legacyKey && !config.apiKey) {
       config.apiKey = legacyKey;
     }
+    // Build-time env vars always win over stale localStorage for core settings
+    if (ENV.apiUrl) config.apiUrl = ENV.apiUrl;
+    if (ENV.apiKey) config.apiKey = ENV.apiKey;
   }
 
   function saveConfig() {
