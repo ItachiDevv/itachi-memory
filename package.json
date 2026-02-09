@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Persistent memory for Claude Code sessions. Automatically tracks file changes, stores them in Supabase with OpenAI embeddings, and retrieves relevant context at session start.",
   "main": "index.js",
+  "bin": {
+    "itachi-memory": "./install.mjs"
+  },
   "directories": {
     "doc": "docs"
   },

@@ -36,29 +36,45 @@ ElizaOS Agent (Hetzner/Coolify)                     Orchestrator (per-machine)
 
 ## Quick Start
 
-### Windows
+### Option 1: Zero prerequisites (installs Node + Git for you)
 
-```powershell
-git clone https://github.com/ItachiDevv/itachi-memory.git
-cd itachi-memory
-powershell -ExecutionPolicy Bypass -File install.ps1
+**Mac/Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/ItachiDevv/itachi-memory/master/bootstrap.sh | bash
 ```
 
-### Mac/Linux
+**Windows:**
+```cmd
+git clone https://github.com/ItachiDevv/itachi-memory.git
+cd itachi-memory
+bootstrap.cmd
+```
+
+### Option 2: Already have Node.js + Git
 
 ```bash
 git clone https://github.com/ItachiDevv/itachi-memory.git
 cd itachi-memory
-bash install.sh
+node install.mjs
 ```
 
-### Advanced Setup (multi-machine, orchestrator, full sync)
+### Option 3: npx (no clone needed)
+
+```bash
+npx github:ItachiDevv/itachi-memory
+```
+
+### Second machine? Enter your passphrase and you're done.
+
+The installer pulls all API keys from encrypted sync — no need to re-enter 11 credentials.
+
+### Advanced Setup (orchestrator, multi-machine dispatch)
 
 ```bash
 node setup.mjs
 ```
 
-The unified setup handles: credential bootstrapping, hook installation, settings merge, API key management, cross-machine sync, orchestrator configuration, and the `itachi` CLI wrapper.
+The advanced setup adds: orchestrator configuration, machine registration, and the `itachi` CLI wrapper.
 
 ## What Gets Installed
 
@@ -199,9 +215,10 @@ itachi-memory/
 ├── schema/                     # Legacy SQL migrations
 ├── supabase/migrations/        # Current DB schema
 ├── config/                     # Settings hook templates
-├── setup.mjs                   # Unified setup (Windows + Mac/Linux)
-├── install.ps1                 # Quick Windows installer
-├── install.sh                  # Quick Mac/Linux installer
+├── install.mjs                 # Unified installer (all platforms)
+├── bootstrap.sh                # Zero-prerequisite entry (Mac/Linux)
+├── bootstrap.cmd               # Zero-prerequisite entry (Windows)
+├── setup.mjs                   # Advanced setup (orchestrator + wrapper)
 ├── Dockerfile                  # Combined ElizaOS + Orchestrator
 ├── docker-entrypoint.sh        # Startup script
 └── docs/                       # Architecture docs, setup guides
