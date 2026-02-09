@@ -1,125 +1,69 @@
 # Mac Setup Guide (from scratch)
 
-## 1. Install prerequisites
+## 1. Prerequisites
 
 ```bash
 brew install node gh
 gh auth login
-npm install -g @anthropic-ai/claude-code
+npm install -g @anthropic-ai/claude-code pm2
+claude   # run once to authenticate
 ```
 
-> **Note:** On macOS 12 (Monterey) or older, `brew install` compiles from source and can take over an hour. This is normal.
-
-## 2. Clone the repo
+## 2. Clone and build
 
 ```bash
-cd ~/Documents
+cd ~/itachi
 git clone https://github.com/ItachiDevv/itachi-memory.git
-cd itachi-memory
-```
-
-## 3. Set up Supabase credentials
-
-Create the credentials file that all tools read from:
-
-```bash
-cat > ~/.supabase-credentials << 'EOF'
-SUPABASE_URL=<paste your Supabase URL>
-SUPABASE_KEY=<paste your Supabase key>
-EOF
-```
-
-Or pull them from a device that already has them (via Tailscale, AirDrop, password manager, etc.)
-
-## 4. Pull encrypted .env from Supabase
-
-The orchestrator `.env` was pushed from the Windows PC using `itachi-secrets`. Pull and decrypt it:
-
-```bash
-cd ~/Documents/itachi-memory/tools
+cd itachi-memory/orchestrator
 npm install
-npx tsc
-cd ..
-node tools/dist/itachi-secrets.js pull orchestrator-env --out orchestrator/.env
+cp .env.example .env
 ```
 
-Enter the same passphrase that was used when pushing.
-
-Then edit `orchestrator/.env` to set Mac-specific values:
+## 3. Edit .env
 
 ```bash
-nano orchestrator/.env
+nano .env
 ```
 
-Change these two lines:
+Fill in the required values:
 ```
-ITACHI_ORCHESTRATOR_ID=macbook
+SUPABASE_SERVICE_ROLE_KEY=<paste from Supabase dashboard or another machine>
+ITACHI_MACHINE_ID=mac-air
+ITACHI_MACHINE_NAME=air
 ITACHI_WORKSPACE_DIR=/Users/itachisan/itachi-workspaces
 ```
 
-## 5. Create workspace directory
+The rest of the defaults in `.env.example` are fine.
+
+## 4. Build and run
 
 ```bash
 mkdir -p ~/itachi-workspaces
-```
-
-## 6. Build the orchestrator
-
-```bash
-cd ~/Documents/itachi-memory/orchestrator
-npm install
 npm run build
+node dist/index.js   # test foreground first
 ```
 
-## 7. Run it
-
-### Foreground (for testing)
-```bash
-node dist/index.js
+You should see:
+```
+[machine] Registered as "air"
+[runner] Starting ...
+[health] Listening on http://localhost:3001/health
+[main] Orchestrator running. Press Ctrl+C to stop.
 ```
 
-### Background with PM2 (recommended)
-
-PM2 keeps it running after you close the terminal, restarts on crash, and auto-starts on boot.
+Once that works, Ctrl+C and switch to PM2:
 
 ```bash
-npm install -g pm2
-cd ~/Documents/itachi-memory/orchestrator
 pm2 start dist/index.js --name itachi-orchestrator
 pm2 save
-pm2 startup
-# ^ Copy and run the command it prints
+pm2 startup   # follow the printed command
 ```
 
-Useful PM2 commands:
-```bash
-pm2 status                    # See running processes
-pm2 logs itachi-orchestrator  # Tail logs
-pm2 restart itachi-orchestrator
-pm2 stop itachi-orchestrator
-```
-
-## 8. Verify
+## 5. Verify
 
 ```bash
-# Health check
 curl http://localhost:3001/health
-
-# Or send a task from Telegram:
-# /task itachi-memory Add a test file
-# Watch the orchestrator logs pick it up
+pm2 logs itachi-orchestrator --lines 20
 ```
 
-## 9. Install hooks (optional)
-
-If you'll also run Claude Code manually on this Mac:
-
-```bash
-mkdir -p ~/.claude/hooks
-cp ~/Documents/itachi-memory/hooks/unix/after-edit.sh ~/.claude/hooks/
-cp ~/Documents/itachi-memory/hooks/unix/session-start.sh ~/.claude/hooks/
-cp ~/Documents/itachi-memory/hooks/unix/session-end.sh ~/.claude/hooks/
-chmod +x ~/.claude/hooks/*.sh
-```
-
-Then merge the hook config from `config/settings-hooks.json` into `~/.claude/settings.json`.
+Send a test task from Telegram and watch the logs.
