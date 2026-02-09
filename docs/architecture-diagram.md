@@ -733,35 +733,32 @@ User (Telegram)                    ElizaOS                          Orchestrator
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  setup.mjs (921+ lines, Node ESM)                                │
-│  Entry: node setup.mjs [--hooks-only]                            │
-│  Wrappers: setup.ps1 (Win), setup.sh (Unix) → delegate          │
+│  install.mjs (Node ESM, built-in modules only)                   │
+│  Entry: node install.mjs [--full] [--update]                     │
+│  Bootstrap: bootstrap.sh (Mac/Linux), bootstrap.cmd (Windows)    │
 │                                                                  │
-│  Phase 1: Bootstrap                                              │
-│  ├─ detectPlatform() — windows/macos/linux                       │
-│  ├─ checkPrerequisites() — node, npm, git, gh, claude CLI        │
-│  ├─ ensureClaudeAuth() — pull from sync or prompt manual auth    │
-│  └─ setupPassphrase() — ~/.itachi-key for AES-256-GCM            │
+│  Default Install:                                                │
+│  ├─ detectPlatform() — windows/macos/linux, check git + claude   │
+│  ├─ loadOrCreatePassphrase() — ~/.itachi-key for AES-256-GCM     │
+│  ├─ syncKeys() — pull from sync (2nd machine auto), or prompt    │
+│  │   for 11 keys + push to sync                                  │
+│  ├─ installHooks() — copy 4 hooks to ~/.claude/hooks/            │
+│  ├─ installSkills() — copy 20 skills to ~/.claude/skills/        │
+│  ├─ installMCP() — npm install in mcp/                            │
+│  ├─ configureSettings() — atomic merge of settings.json          │
+│  │   (hooks + MCP, preserves non-Itachi config)                  │
+│  ├─ testConnectivity() — GET /health                              │
+│  ├─ addShellSource() — ITACHI_API_URL to shell rc / setx         │
+│  └─ registerSkillSync() — Windows schtasks or Unix cron (3AM)    │
 │                                                                  │
-│  Phase 2: Credentials                                            │
-│  └─ bootstrapCredentials() — pull from sync first (2nd machine   │
-│     gets free), then prompt for 11 keys: ITACHI_API_KEY,         │
-│     GITHUB_TOKEN, VERCEL_TOKEN, SUPABASE_ACCESS_TOKEN,           │
-│     OPENAI_API_KEY, GEMINI_API_KEY, X_API_* (5 keys)             │
+│  --full adds:                                                    │
+│  ├─ syncAuthCredentials() — push/pull Claude + Codex auth        │
+│  ├─ bootstrapSupabase() — decrypt Supabase creds from server     │
+│  ├─ setEnvVarsFull() — setx all keys on Windows                  │
+│  ├─ installWrapper() — bin/itachi (loads keys → exec claude)     │
+│  └─ setupOrchestrator() — MACHINE_ID, workspace, PM2/foreground  │
 │                                                                  │
-│  Phase 3: Hooks & Sync                                           │
-│  ├─ installHooks() — copy 3 hooks + npm install mcp/             │
-│  ├─ registerSkillSync() — Windows schtasks or Unix cron (3AM)    │
-│  ├─ pullGlobalSync() — initial pull of skills, commands, etc.    │
-│  ├─ mergeSettings() — add itachi MCP, remove old lotitachi,      │
-│  │   merge hooks from template (additive, preserves non-Itachi)  │
-│  ├─ setupApiKeys() — merge with remote                           │
-│  ├─ setEnvVars() — ITACHI_API_URL to shell profile               │
-│  └─ installItachiWrapper() — bin/itachi (loads keys → exec claude)│
-│                                                                  │
-│  Phase 4: Orchestrator (skip with --hooks-only)                  │
-│  └─ setupOrchestrator() — MACHINE_ID, LOCAL_PROJECTS, workspace, │
-│     npm install, show run instructions                           │
+│  --update: git pull + re-exec self                                │
 │                                                                  │
 │  20 Skills Installed:                                            │
 │  itachi-init, itachi-env, github, vercel, supabase, x-api,      │
@@ -818,7 +815,7 @@ Port 3000 only. No orchestrator. For API + Telegram only.
 ### Model 3: Hooks-only (local machine)
 
 ```
-node setup.mjs --hooks-only
+node install.mjs
 Hooks → ElizaOS API (remote). No orchestrator. Cheapest option.
 ```
 
@@ -908,7 +905,7 @@ Credential Loading:
 | Windows Hooks | `hooks/windows/` | after-edit.ps1, session-start.ps1, session-end.ps1, skill-sync.ps1 |
 | Unix Hooks | `hooks/unix/` | after-edit.sh, session-start.sh, session-end.sh, skill-sync.sh |
 | Dashboard | `dashboard/` | index.html, dashboard.js, dashboard.css, env-config.js, vercel.json |
-| Setup | `setup.mjs` | Unified cross-platform installer (921+ lines) |
+| Setup | `install.mjs` | Unified cross-platform installer (--full for orchestrator) |
 | Schema | `schema/` | supabase-init.sql, 7 migrations (v1-v7), sync-files |
 | Config | `config/settings-hooks-template.json` | Cross-platform hook template with `__HOOKS_DIR__` placeholder |
 | Docker | `Dockerfile` (root), `eliza/Dockerfile`, `docker-entrypoint.sh` | Combined and ElizaOS-only deployment |

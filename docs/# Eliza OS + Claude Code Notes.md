@@ -82,16 +82,12 @@
   ---
   4. Setup script + new dependencies
 
-  The install scripts (install.ps1 / install.sh) are client-side only — they install hooks,
-  commands, and skills onto machines running Claude Code. They don't install the ElizaOS
-  server (that's Railway).
+  The installer (`install.mjs`) is client-side only — it installs hooks,
+  skills, and MCP onto machines running Claude Code. It doesn't install the ElizaOS
+  server (that's Coolify/Hetzner).
 
-  They're mostly up to date since they copy the hook files (which now include auth headers).
-  But there's one gap: the ITACHI_API_KEY isn't in the credentials prompt. The install scripts
-   prompt for GITHUB_TOKEN, VERCEL_TOKEN, ANTHROPIC_API_KEY, etc. but not ITACHI_API_KEY.
-  After the security hardening, every machine needs this env var or hooks will get 401s.
-
-  I should add it to both install scripts. Want me to do that now?
+  `install.mjs` prompts for all credentials including ITACHI_API_KEY (required for auth).
+  Second machine pulls all keys from encrypted sync automatically — enter passphrase only.
 
   ---
   5. Hook on context compaction

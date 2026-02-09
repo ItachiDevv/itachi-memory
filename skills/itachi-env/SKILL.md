@@ -402,6 +402,6 @@ async function diffRepo(repoName, baseDir, label) {
 
 ## Error Handling
 
-- If `~/.itachi-key` doesn't exist, tell the user: "No passphrase found. Run setup.sh/setup.ps1 or create ~/.itachi-key manually."
+- If `~/.itachi-key` doesn't exist, tell the user: "No passphrase found. Run `node install.mjs` or create ~/.itachi-key manually."
 - If API returns errors, display the error message.
 - If decryption fails, likely wrong passphrase — tell the user.
