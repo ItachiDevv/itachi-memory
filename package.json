@@ -10,7 +10,10 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "cd eliza && bun run build && cd ../orchestrator && npm run build",
+    "restart": "cd orchestrator && npm run build && pm2 restart itachi-orchestrator",
+    "update": "git pull && cd eliza && bun run build && cd ../orchestrator && npm run build && pm2 restart itachi-orchestrator"
   },
   "repository": {
     "type": "git",

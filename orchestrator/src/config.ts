@@ -32,7 +32,7 @@ export const config: Config = {
     maxConcurrent: parseInt(process.env.ITACHI_MAX_CONCURRENT || '2', 10),
     workspaceDir: process.env.ITACHI_WORKSPACE_DIR || path.join(require('os').homedir(), 'itachi-workspaces'),
     taskTimeoutMs: parseInt(process.env.ITACHI_TASK_TIMEOUT_MS || '600000', 10),
-    defaultModel: process.env.ITACHI_DEFAULT_MODEL || 'sonnet',
+    defaultModel: process.env.ITACHI_DEFAULT_MODEL || 'opus',
     defaultBudget: parseFloat(process.env.ITACHI_DEFAULT_BUDGET || '5.00'),
     pollIntervalMs: parseInt(process.env.ITACHI_POLL_INTERVAL_MS || '5000', 10),
     projectPaths: parseProjectPaths(process.env.ITACHI_PROJECT_PATHS || '{}'),

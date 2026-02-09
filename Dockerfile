@@ -58,5 +58,8 @@ EXPOSE 3001
 ENV NODE_ENV=production
 # Default orchestrator workspace inside container
 ENV ITACHI_WORKSPACE_DIR=/root/itachi-workspaces
+# Force Telegram bot to use Opus 4.5 for all model calls
+ENV ANTHROPIC_LARGE_MODEL=claude-opus-4-5-20251101
+ENV ANTHROPIC_SMALL_MODEL=claude-opus-4-5-20251101
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

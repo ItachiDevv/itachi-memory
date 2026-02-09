@@ -7,9 +7,9 @@ const DIFFICULTY_MAP: Record<TaskClassification['difficulty'], {
     useTeams: boolean;
     teamSize: number;
 }> = {
-    trivial: { model: 'haiku', budget: 0.50, useTeams: false, teamSize: 1 },
-    simple: { model: 'sonnet', budget: 2.00, useTeams: false, teamSize: 1 },
-    medium: { model: 'sonnet', budget: 5.00, useTeams: false, teamSize: 1 },
+    trivial: { model: 'opus', budget: 0.50, useTeams: false, teamSize: 1 },
+    simple: { model: 'opus', budget: 2.00, useTeams: false, teamSize: 1 },
+    medium: { model: 'opus', budget: 5.00, useTeams: false, teamSize: 1 },
     complex: { model: 'opus', budget: 10.00, useTeams: false, teamSize: 1 },
     major: { model: 'opus', budget: 25.00, useTeams: true, teamSize: 3 },
 };
@@ -53,7 +53,7 @@ Also include an "engine" field: "claude" or "codex".
 const DEFAULT_CLASSIFICATION: TaskClassification = {
     difficulty: 'medium',
     reasoning: 'Classification unavailable, defaulting to medium',
-    suggestedModel: 'sonnet',
+    suggestedModel: 'opus',
     engine: 'claude',
     useAgentTeams: false,
     teamSize: 1,
