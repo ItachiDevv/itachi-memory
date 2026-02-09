@@ -4,6 +4,7 @@
 //
 // Usage:
 //   node install.mjs                    # Install hooks, skills, MCP, settings
+//   node install.mjs --update           # git pull + re-install
 //   node install.mjs --full             # Full setup: + auth sync, orchestrator, CLI wrapper
 //   node install.mjs --api-url <url>    # Override API URL
 //   node install.mjs --no-cron          # Skip scheduled task registration
@@ -31,11 +32,12 @@ const ITACHI_KEY_FILE = join(HOME, '.itachi-key');
 // Parse CLI args
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { apiUrl: 'https://itachisbrainserver.online', noCron: false, full: false };
+  const opts = { apiUrl: 'https://itachisbrainserver.online', noCron: false, full: false, update: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--api-url' && args[i + 1]) opts.apiUrl = args[++i];
     if (args[i] === '--no-cron') opts.noCron = true;
     if (args[i] === '--full') opts.full = true;
+    if (args[i] === '--update' || args[i] === '-u') opts.update = true;
   }
   if (process.env.ITACHI_API_URL) opts.apiUrl = process.env.ITACHI_API_URL;
   return opts;
@@ -908,6 +910,33 @@ async function setupOrchestrator(supaUrl, supaKey) {
 // ── Main ────────────────────────────────────────────────
 async function main() {
   try {
+    // Self-update: git pull then re-exec without --update flag
+    if (OPTS.update) {
+      log('\n  Updating itachi-memory...', 'yellow');
+      try {
+        const output = execSync('git pull --ff-only', { cwd: __dirname, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        if (output.includes('Already up to date')) {
+          log('  Already up to date.', 'gray');
+        } else {
+          log('  Pulled latest changes.', 'green');
+        }
+      } catch (e) {
+        // Try regular pull if ff-only fails (diverged)
+        try {
+          execSync('git pull', { cwd: __dirname, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+          log('  Pulled latest changes.', 'green');
+        } catch {
+          log(`  git pull failed: ${e.message}`, 'red');
+          log('  Continuing with current version.', 'yellow');
+        }
+      }
+      // Re-exec self without --update to avoid infinite loop
+      const args = process.argv.slice(2).filter(a => a !== '--update' && a !== '-u');
+      const { execFileSync } = await import('child_process');
+      execFileSync(process.execPath, [__filename, ...args], { stdio: 'inherit', cwd: process.cwd() });
+      process.exit(0);
+    }
+
     step1_detectPlatform();
 
     const passphrase = await step2_loadOrCreatePassphrase();
