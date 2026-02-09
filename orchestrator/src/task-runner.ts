@@ -1,7 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { config } from './config';
 import { claimNextTask, updateTask, recoverStuckTasks } from './supabase-client';
-import { spawnSession } from './session-manager';
+import { spawnSession, streamToEliza } from './session-manager';
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
@@ -25,10 +25,19 @@ async function runTask(task: Task): Promise<void> {
     try {
         workspacePath = await setupWorkspace(task);
     } catch (err) {
-        console.error(`[runner] Workspace setup failed for ${shortId}:`, err);
+        const errorMsg = `Workspace setup failed: ${err instanceof Error ? err.message : String(err)}`;
+        console.error(`[runner] ${errorMsg} (task ${shortId})`);
+
+        // Stream error to ElizaOS so a forum topic gets created with the error
+        streamToEliza(task.id, { type: 'text', text: `Error: ${errorMsg}` });
+        streamToEliza(task.id, {
+            type: 'result',
+            result: { summary: errorMsg, cost_usd: 0, duration_ms: 0, is_error: true },
+        });
+
         await updateTask(task.id, {
             status: 'failed',
-            error_message: `Workspace setup failed: ${err instanceof Error ? err.message : String(err)}`,
+            error_message: errorMsg,
             completed_at: new Date().toISOString(),
         });
         return;
