@@ -80,7 +80,21 @@ The installer pulls all API keys from encrypted sync — no need to re-enter 11 
 node install.mjs --full
 ```
 
-The `--full` flag adds: auth credential sync, Supabase bootstrap, orchestrator configuration, machine registration, persistent env vars, and the `itachi` CLI wrapper.
+The `--full` flag adds: auth credential sync, Supabase bootstrap, orchestrator configuration (with encrypted .env sync across machines), machine registration, persistent env vars, and the `itachi` CLI wrapper.
+
+### Uninstall
+
+Remove all Itachi components (hooks, skills, MCP, credentials, PM2, cron, env vars, workspaces):
+
+```bash
+node install.mjs --uninstall          # interactive confirmation
+node install.mjs --uninstall --force  # no confirmation prompt
+```
+
+Or one-liner without cloning:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ItachiDevv/itachi-memory/master/bootstrap.sh | bash -s -- --uninstall
+```
 
 ## What Gets Installed
 
@@ -219,6 +233,7 @@ itachi-memory/
 │           └── itachi-self-improve/# Lesson extraction
 ├── orchestrator/               # Task execution engine
 │   └── src/
+│       ├── crypto.ts           # AES-256-GCM decrypt for .env sync
 │       ├── task-classifier.ts  # LLM-based difficulty classification
 │       ├── session-manager.ts  # Claude/Codex CLI spawner
 │       ├── task-runner.ts      # Task lifecycle management
@@ -236,7 +251,7 @@ itachi-memory/
 ├── schema/                     # Legacy SQL migrations
 ├── supabase/migrations/        # Current DB schema
 ├── config/                     # Settings hook templates
-├── install.mjs                 # Unified installer (all platforms, --full for orchestrator)
+├── install.mjs                 # Unified installer (--full for orchestrator, --uninstall to remove)
 ├── bootstrap.sh                # Zero-prerequisite entry (Mac/Linux)
 ├── bootstrap.cmd               # Zero-prerequisite entry (Windows)
 ├── Dockerfile                  # Combined ElizaOS + Orchestrator
@@ -279,6 +294,7 @@ itachi-memory/
 | `ANTHROPIC_API_KEY` | Optional | For task classifier + Telegram chat |
 | `ITACHI_MACHINE_ID` | Orchestrator | Unique machine identifier |
 | `ITACHI_LOCAL_PROJECTS` | Orchestrator | JSON array of local project names |
+| `ITACHI_SYNC_PASSPHRASE` | Orchestrator | Passphrase for decrypting synced project .env files |
 | `ITACHI_DISABLED` | Optional | Set to `1` to disable hooks |
 
 ## License
