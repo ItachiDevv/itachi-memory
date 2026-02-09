@@ -137,6 +137,52 @@ This makes Itachi respond to **all** Telegram messages in the configured group �
 
 Actions filter messages via their `validate()` functions to prevent responding to irrelevant messages.
 
+## Conversation Memory
+
+Telegram conversations are automatically bridged into `itachi_memories` for long-term recall via `/recall` and MCP tools. This uses the **scored** strategy (Branch 2).
+
+### Timing
+
+| Component | Frequency | Description |
+|-----------|-----------|-------------|
+| Chat responses | Real-time | ElizaOS plugin-telegram uses long polling; responses within seconds |
+| Memory storage | Every response | `conversationMemoryEvaluator` fires after each Telegram response > 30 chars |
+| Significance scoring | Every response | Haiku scores 0.0–1.0, adds ~1-2s background processing (non-blocking) |
+| Task streaming | Every 1.5s | `TelegramTopicsService` flushes buffer to forum topic (or at 3500 chars) |
+| Context injection | Every response | `conversationContextProvider` (position 11) queries last-24h memories |
+
+### How It Works
+
+1. **Evaluator** (`evaluators/conversation-memory.ts`, `alwaysRun: true`):
+   - Triggers on every Telegram response from Itachi (text > 30 chars)
+   - Sends last 6 messages + current response to haiku for scoring
+   - Scores: 0.0–0.2 (greetings), 0.3–0.5 (general), 0.6–0.8 (decisions), 0.9–1.0 (critical)
+   - Stores to `itachi_memories` with `category: "conversation"` and `metadata: { significance }`
+   - Cost: ~$0.001 per message
+
+2. **Provider** (`providers/conversation-context.ts`, position 11):
+   - Queries last 24h of conversation memories from Supabase
+   - Filters out significance < 0.3 (hides small talk)
+   - Injects "## Recent Conversations" section into every LLM call
+   - Gives Itachi awareness of what was discussed recently
+
+3. **Weighted Search** (`services/memory-service.ts`):
+   - `searchMemoriesWeighted()` multiplies similarity score by significance
+   - `/recall` and MCP `memory_search` surface decisions over small talk
+   - Formula: `weighted = similarity * (0.5 + 0.5 * significance)`
+
+### Storage Volume
+
+- ~30-100 conversation memories per day (depending on chat activity)
+- Low-significance entries still stored and searchable, just ranked lower
+- Adjust the 0.3 threshold in `conversation-context.ts` to tune provider output
+
+### Alternative Strategies
+
+See `docs/conversation-memory-comparison.md` for the two alternative branches:
+- `feature/conv-memory-smart-filter` — LLM yes/no filter (~5-15 memories/day)
+- `feature/conv-memory-store-all` — store everything equally (~50-150 memories/day)
+
 ## Personality
 
 Itachi's Telegram personality is configured in `character.ts`:
@@ -169,3 +215,6 @@ Index on `telegram_topic_id` for efficient topic-reply lookups.
 | `eliza/src/plugins/itachi-tasks/services/telegram-topics.ts` | Topic CRUD + streaming buffer |
 | `eliza/src/plugins/itachi-tasks/routes/task-stream.ts` | Stream endpoint + pending inputs |
 | `orchestrator/src/session-manager.ts` | Streams events to ElizaOS |
+| `eliza/src/plugins/itachi-memory/evaluators/conversation-memory.ts` | Scores + stores conversation memories |
+| `eliza/src/plugins/itachi-memory/providers/conversation-context.ts` | Injects recent conversations into LLM context |
+| `eliza/src/plugins/itachi-memory/services/memory-service.ts` | `searchMemoriesWeighted()` for significance ranking |
