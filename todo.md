@@ -10,15 +10,15 @@
 - [ ] Run `node install.mjs` on local machine to reinstall hooks with new API URL
 - [ ] Test hooks end-to-end: edit a file, check session_edits table populates
 
-## Phase 2: Absorb Orchestrator Setup into install.mjs
-- [ ] Add `--full` flag to install.mjs that includes orchestrator setup
-- [ ] Move orchestrator config (ID, workspace, machine dispatch) from setup.mjs into install.mjs
-- [ ] Move itachi CLI wrapper installation into install.mjs
-- [ ] Move `setEnvVars()` (setx on Windows, shell rc on Unix) into install.mjs
-- [ ] Move Claude/Codex auth sync (pushAuthCredentials/pullAuthCredentials) into install.mjs
-- [ ] Move Supabase credential bootstrap into install.mjs
-- [ ] Delete setup.mjs after all functionality absorbed
-- [ ] Update README to remove setup.mjs references
+## Phase 2: Absorb Orchestrator Setup into install.mjs — DONE
+- [x] Add `--full` flag to install.mjs that includes orchestrator setup
+- [x] Move orchestrator config (ID, workspace, machine dispatch) from setup.mjs into install.mjs
+- [x] Move itachi CLI wrapper installation into install.mjs
+- [x] Move `setEnvVars()` (setx on Windows, shell rc on Unix) into install.mjs
+- [x] Move Claude/Codex auth sync (pushAuthCredentials/pullAuthCredentials) into install.mjs
+- [x] Move Supabase credential bootstrap into install.mjs
+- [x] Delete setup.mjs after all functionality absorbed
+- [x] Update README to remove setup.mjs references
 
 ## Phase 3: curl One-Liner Distribution
 - [ ] Publish to npm as `itachi-memory` package for `npx itachi-memory` support

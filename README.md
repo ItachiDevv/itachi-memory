@@ -68,13 +68,13 @@ npx github:ItachiDevv/itachi-memory
 
 The installer pulls all API keys from encrypted sync — no need to re-enter 11 credentials.
 
-### Advanced Setup (orchestrator, multi-machine dispatch)
+### Full Setup (orchestrator, multi-machine dispatch, CLI wrapper)
 
 ```bash
-node setup.mjs
+node install.mjs --full
 ```
 
-The advanced setup adds: orchestrator configuration, machine registration, and the `itachi` CLI wrapper.
+The `--full` flag adds: auth credential sync, Supabase bootstrap, orchestrator configuration, machine registration, persistent env vars, and the `itachi` CLI wrapper.
 
 ## What Gets Installed
 
@@ -215,10 +215,9 @@ itachi-memory/
 ├── schema/                     # Legacy SQL migrations
 ├── supabase/migrations/        # Current DB schema
 ├── config/                     # Settings hook templates
-├── install.mjs                 # Unified installer (all platforms)
+├── install.mjs                 # Unified installer (all platforms, --full for orchestrator)
 ├── bootstrap.sh                # Zero-prerequisite entry (Mac/Linux)
 ├── bootstrap.cmd               # Zero-prerequisite entry (Windows)
-├── setup.mjs                   # Advanced setup (orchestrator + wrapper)
 ├── Dockerfile                  # Combined ElizaOS + Orchestrator
 ├── docker-entrypoint.sh        # Startup script
 └── docs/                       # Architecture docs, setup guides

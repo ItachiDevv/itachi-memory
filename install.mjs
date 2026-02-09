@@ -3,7 +3,8 @@
 // One script, all platforms, built-in modules only.
 //
 // Usage:
-//   node install.mjs                    # Install (pulls keys from sync if available)
+//   node install.mjs                    # Install hooks, skills, MCP, settings
+//   node install.mjs --full             # Full setup: + auth sync, orchestrator, CLI wrapper
 //   node install.mjs --api-url <url>    # Override API URL
 //   node install.mjs --no-cron          # Skip scheduled task registration
 //
@@ -30,10 +31,11 @@ const ITACHI_KEY_FILE = join(HOME, '.itachi-key');
 // Parse CLI args
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { apiUrl: 'https://itachisbrainserver.online', noCron: false };
+  const opts = { apiUrl: 'https://itachisbrainserver.online', noCron: false, full: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--api-url' && args[i + 1]) opts.apiUrl = args[++i];
     if (args[i] === '--no-cron') opts.noCron = true;
+    if (args[i] === '--full') opts.full = true;
   }
   if (process.env.ITACHI_API_URL) opts.apiUrl = process.env.ITACHI_API_URL;
   return opts;
@@ -582,6 +584,327 @@ function step10_registerSkillSync() {
   }
 }
 
+// ── Full Mode: Auth Sync ────────────────────────────────
+
+function findClaudeCredentials() {
+  const locations = [
+    join(CLAUDE_DIR, '.credentials.json'),
+    join(PLATFORM === 'windows'
+      ? join(process.env.APPDATA || '', 'claude-code', 'credentials.json')
+      : join(HOME, '.config', 'claude-code', 'credentials.json')),
+  ];
+  return locations.find(p => existsSync(p)) || null;
+}
+
+function findCodexCredentials() {
+  const codexAuth = join(HOME, '.codex', 'auth.json');
+  return existsSync(codexAuth) ? codexAuth : null;
+}
+
+async function encryptAndPush(content, passphrase, repoName, filePath) {
+  const enc = encrypt(content, passphrase);
+  return httpPost(`${API_URL}/api/sync/push`, {
+    repo_name: repoName, file_path: filePath,
+    ...enc, updated_by: hostname(),
+  });
+}
+
+async function syncAuthCredentials(passphrase) {
+  log('\n  [auth] Syncing CLI credentials...', 'yellow');
+
+  // Claude auth
+  const claudeCreds = findClaudeCredentials();
+  if (claudeCreds) {
+    try {
+      await encryptAndPush(readFileSync(claudeCreds, 'utf8'), passphrase, '_global', 'claude-auth');
+      log('    Claude auth: pushed to sync', 'gray');
+    } catch { log('    Claude auth: push failed', 'gray'); }
+  } else {
+    // Try pulling from sync
+    try {
+      const fileData = await httpGet(`${API_URL}/api/sync/pull/_global/claude-auth`);
+      const content = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+      const credPath = join(CLAUDE_DIR, '.credentials.json');
+      ensureDir(dirname(credPath));
+      writeFileSync(credPath, content);
+      log('    Claude auth: pulled from sync', 'green');
+    } catch {
+      log('    Claude auth: not found (run "claude" to authenticate)', 'yellow');
+    }
+  }
+
+  // Codex auth
+  if (commandExists('codex')) {
+    const codexCreds = findCodexCredentials();
+    if (codexCreds) {
+      try {
+        await encryptAndPush(readFileSync(codexCreds, 'utf8'), passphrase, '_global', 'codex-auth');
+        log('    Codex auth: pushed to sync', 'gray');
+      } catch { log('    Codex auth: push failed', 'gray'); }
+    } else {
+      try {
+        const fileData = await httpGet(`${API_URL}/api/sync/pull/_global/codex-auth`);
+        const content = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
+        const codexDir = join(HOME, '.codex');
+        ensureDir(codexDir);
+        writeFileSync(join(codexDir, 'auth.json'), content);
+        log('    Codex auth: pulled from sync', 'green');
+      } catch {
+        log('    Codex auth: not found (run "codex login" to authenticate)', 'gray');
+      }
+    }
+  }
+}
+
+// ── Full Mode: Supabase Bootstrap ───────────────────────
+
+async function bootstrapSupabase(passphrase) {
+  log('\n  [supabase] Bootstrapping credentials...', 'yellow');
+  const credFile = join(HOME, '.supabase-credentials');
+  let supaUrl = null, supaKey = null;
+
+  if (existsSync(credFile)) {
+    const content = readFileSync(credFile, 'utf8');
+    const urlMatch = content.match(/SUPABASE_URL=(.+)/);
+    const keyMatch = content.match(/SUPABASE_SERVICE_ROLE_KEY=(.+)/) || content.match(/SUPABASE_KEY=(.+)/);
+    if (urlMatch) supaUrl = urlMatch[1].trim();
+    if (keyMatch) supaKey = keyMatch[1].trim();
+    if (supaUrl && supaKey) {
+      log(`    Found existing credentials at ${credFile}`, 'gray');
+      return { supaUrl, supaKey };
+    }
+  }
+
+  try {
+    const bootstrap = await httpGet(`${API_URL}/api/bootstrap`);
+    if (bootstrap.encrypted_config && bootstrap.salt) {
+      const config = JSON.parse(decrypt(bootstrap.encrypted_config, bootstrap.salt, passphrase));
+      supaUrl = config.SUPABASE_URL;
+      supaKey = config.SUPABASE_SERVICE_ROLE_KEY || config.SUPABASE_KEY;
+      writeFileSync(credFile, `SUPABASE_URL=${supaUrl}\nSUPABASE_SERVICE_ROLE_KEY=${supaKey}\n`);
+      if (PLATFORM !== 'windows') { try { chmodSync(credFile, 0o600); } catch {} }
+      log(`    Bootstrapped from server`, 'green');
+    }
+  } catch (e) {
+    if (e.message?.includes('Unsupported') || e.message?.includes('wrong final block')) {
+      log('    Bootstrap decryption failed — passphrase mismatch with bootstrap data', 'yellow');
+    }
+    log('    Bootstrap not available. Entering manually.', 'yellow');
+    supaUrl = await ask('    SUPABASE_URL: ');
+    supaKey = await ask('    SUPABASE_SERVICE_ROLE_KEY: ');
+    if (supaUrl && supaKey) {
+      writeFileSync(credFile, `SUPABASE_URL=${supaUrl}\nSUPABASE_SERVICE_ROLE_KEY=${supaKey}\n`);
+      if (PLATFORM !== 'windows') { try { chmodSync(credFile, 0o600); } catch {} }
+    }
+  }
+
+  return { supaUrl, supaKey };
+}
+
+// ── Full Mode: Persistent Env Vars ──────────────────────
+
+function setEnvVarsFull() {
+  log('\n  [env] Setting persistent environment variables...', 'yellow');
+  const keys = loadApiKeys();
+  keys['ITACHI_API_URL'] = API_URL;
+
+  if (PLATFORM === 'windows') {
+    let count = 0;
+    for (const [k, v] of Object.entries(keys)) {
+      if (MACHINE_KEYS.includes(k)) continue;
+      try { execSync(`setx ${k} "${v}"`, { stdio: 'pipe' }); count++; } catch {}
+    }
+    log(`    Set ${count} user env var(s) via setx`, 'gray');
+    log('    NOTE: Open a new terminal for changes to take effect.', 'yellow');
+  } else {
+    // Handled by step9_addShellSource already — this adds all keys via setx on Windows
+    log('    Shell rc already configured (source ~/.itachi-api-keys)', 'gray');
+  }
+}
+
+// ── Full Mode: Itachi CLI Wrapper ───────────────────────
+
+function getNpmGlobalBin() {
+  try {
+    return execSync('npm bin -g', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  } catch {
+    return PLATFORM === 'windows' ? join(process.env.APPDATA || '', 'npm') : '/usr/local/bin';
+  }
+}
+
+function installWrapper() {
+  log('\n  [wrapper] Installing itachi command...', 'yellow');
+  const binDir = join(__dirname, 'bin');
+  ensureDir(binDir);
+
+  const unixWrapper = `#!/bin/bash
+# Itachi Memory System - Claude Code wrapper
+ITACHI_KEYS_FILE="\${HOME}/.itachi-api-keys"
+if [ -f "\${ITACHI_KEYS_FILE}" ]; then set -a; source "\${ITACHI_KEYS_FILE}"; set +a; fi
+export ITACHI_API_URL="\${ITACHI_API_URL:-${API_URL}}"
+exec claude "$@"
+`;
+
+  const windowsCmd = `@echo off
+REM Itachi Memory System - Claude Code wrapper
+set "ITACHI_KEYS_FILE=%USERPROFILE%\\.itachi-api-keys"
+if exist "%ITACHI_KEYS_FILE%" (
+    for /f "usebackq tokens=1,* delims==" %%a in ("%ITACHI_KEYS_FILE%") do set "%%a=%%b"
+)
+if not defined ITACHI_API_URL set "ITACHI_API_URL=${API_URL}"
+claude %*
+`;
+
+  const windowsPs1 = `# Itachi Memory System - Claude Code wrapper
+$keysFile = Join-Path $env:USERPROFILE ".itachi-api-keys"
+if (Test-Path $keysFile) {
+    Get-Content $keysFile | ForEach-Object {
+        if ($_ -match '^([A-Za-z_][A-Za-z0-9_]*)=(.+)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
+    }
+}
+if (-not $env:ITACHI_API_URL) { $env:ITACHI_API_URL = "${API_URL}" }
+claude @args
+`;
+
+  writeFileSync(join(binDir, 'itachi'), unixWrapper);
+  writeFileSync(join(binDir, 'itachi.cmd'), windowsCmd);
+  writeFileSync(join(binDir, 'itachi.ps1'), windowsPs1);
+  if (PLATFORM !== 'windows') { try { chmodSync(join(binDir, 'itachi'), 0o755); } catch {} }
+
+  const globalBin = getNpmGlobalBin();
+  try {
+    if (PLATFORM === 'windows') {
+      copyFileSync(join(binDir, 'itachi.cmd'), join(globalBin, 'itachi.cmd'));
+    } else {
+      const target = join(globalBin, 'itachi');
+      copyFileSync(join(binDir, 'itachi'), target);
+      try { chmodSync(target, 0o755); } catch {}
+    }
+    log(`    Installed to ${globalBin}`, 'green');
+    log('    Use "itachi" instead of "claude" for full system integration.', 'green');
+  } catch (e) {
+    log(`    Could not install to ${globalBin}: ${e.message}`, 'yellow');
+    if (PLATFORM === 'windows') {
+      log(`    Copy "${join(binDir, 'itachi.cmd')}" to a directory in your PATH`, 'gray');
+    } else {
+      log(`    sudo cp "${join(binDir, 'itachi')}" /usr/local/bin/itachi`, 'gray');
+    }
+  }
+}
+
+// ── Full Mode: Orchestrator Setup ───────────────────────
+
+async function setupOrchestrator(supaUrl, supaKey) {
+  log('\n  === Orchestrator (Task Runner) ===', 'cyan');
+  const ORCH_DIR = join(__dirname, 'orchestrator');
+
+  if (!existsSync(ORCH_DIR)) {
+    log('    Orchestrator directory not found. Skipping.', 'yellow');
+    return;
+  }
+
+  const orchEnv = join(ORCH_DIR, '.env');
+  let useSecrets = false;
+
+  if (!existsSync(orchEnv)) {
+    // Check itachi-secrets for shared config
+    const secretsJs = join(__dirname, 'tools', 'dist', 'itachi-secrets.js');
+    if (!existsSync(secretsJs)) {
+      try { execSync('npm install && npx tsc', { cwd: join(__dirname, 'tools'), stdio: 'pipe' }); } catch {}
+    }
+
+    if (existsSync(secretsJs) && supaUrl && supaKey) {
+      try {
+        const env = { ...process.env, SUPABASE_URL: supaUrl, SUPABASE_SERVICE_ROLE_KEY: supaKey };
+        const listOutput = execSync(`node "${secretsJs}" list`, { encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'] });
+        if (listOutput.includes('orchestrator-env')) {
+          log('    Found shared orchestrator config in itachi-secrets.', 'green');
+          const pullChoice = await ask('    Pull it? (y/n): ');
+          if (pullChoice.toLowerCase() === 'y') {
+            execSync(`node "${secretsJs}" pull orchestrator-env --out "${orchEnv}"`, { env, stdio: 'pipe' });
+            useSecrets = true;
+            log('    Pulled .env from itachi-secrets', 'green');
+          }
+        }
+      } catch { log('    Could not check itachi-secrets', 'gray'); }
+    }
+  } else {
+    log(`    Found existing .env at ${orchEnv}`, 'gray');
+    useSecrets = true;
+  }
+
+  const defaultId = hostname().toLowerCase().replace(/ /g, '-').replace(/[^a-z0-9-]/g, '');
+  const orchId = (await ask(`    Orchestrator ID [${defaultId}]: `)) || defaultId;
+  const defaultWs = join(HOME, 'itachi-workspaces');
+  const wsDir = (await ask(`    Workspace directory [${defaultWs}]: `)) || defaultWs;
+  ensureDir(wsDir);
+
+  const machineId = (await ask(`    Machine ID [${defaultId}]: `)) || defaultId;
+  const machineName = (await ask(`    Machine display name [${machineId}]: `)) || machineId;
+
+  if (useSecrets) {
+    let content = readFileSync(orchEnv, 'utf8');
+    content = content.replace(/ITACHI_ORCHESTRATOR_ID=.+/, `ITACHI_ORCHESTRATOR_ID=${orchId}`);
+    content = content.replace(/ITACHI_WORKSPACE_DIR=.+/, `ITACHI_WORKSPACE_DIR=${wsDir}`);
+    content = content.replace(/ITACHI_PROJECT_PATHS=\{.+\}/, 'ITACHI_PROJECT_PATHS={}');
+    if (!content.includes('ITACHI_MACHINE_ID=')) content += `\nITACHI_MACHINE_ID=${machineId}`;
+    else content = content.replace(/ITACHI_MACHINE_ID=.+/, `ITACHI_MACHINE_ID=${machineId}`);
+    if (!content.includes('ITACHI_MACHINE_NAME=')) content += `\nITACHI_MACHINE_NAME=${machineName}`;
+    else content = content.replace(/ITACHI_MACHINE_NAME=.+/, `ITACHI_MACHINE_NAME=${machineName}`);
+    writeFileSync(orchEnv, content);
+  } else {
+    const maxConc = (await ask('    Max concurrent sessions [5]: ')) || '5';
+    writeFileSync(orchEnv, [
+      `SUPABASE_URL=${supaUrl || ''}`, `SUPABASE_SERVICE_ROLE_KEY=${supaKey || ''}`,
+      `ITACHI_ORCHESTRATOR_ID=${orchId}`, `ITACHI_MAX_CONCURRENT=${maxConc}`,
+      `ITACHI_WORKSPACE_DIR=${wsDir}`, `ITACHI_TASK_TIMEOUT_MS=600000`,
+      `ITACHI_DEFAULT_MODEL=sonnet`, `ITACHI_DEFAULT_BUDGET=5.00`,
+      `ITACHI_POLL_INTERVAL_MS=5000`, `ITACHI_PROJECT_PATHS={}`,
+      `ITACHI_API_URL=${API_URL}`, `ITACHI_DEFAULT_ENGINE=claude`,
+      `ITACHI_MACHINE_ID=${machineId}`, `ITACHI_MACHINE_NAME=${machineName}`,
+    ].join('\n') + '\n');
+  }
+
+  log('\n    Building orchestrator...', 'yellow');
+  try {
+    execSync('npm install', { cwd: ORCH_DIR, stdio: 'inherit' });
+    execSync('npm run build', { cwd: ORCH_DIR, stdio: 'inherit' });
+    log('    Build OK', 'green');
+  } catch (e) {
+    log(`    Build FAILED: ${e.message}`, 'red');
+    return;
+  }
+
+  log('');
+  log('    The orchestrator needs to run continuously to pick up tasks.', 'yellow');
+  log('      1) Start with PM2 (recommended)');
+  log('      2) Start in foreground (for testing)');
+  log('      3) Skip — I\'ll start it myself later');
+  log('');
+  const startChoice = await ask('    Choose [1/2/3]: ');
+  const indexJs = join(ORCH_DIR, 'dist', 'index.js');
+
+  switch (startChoice.trim()) {
+    case '1':
+      if (!commandExists('pm2')) { execSync('npm install -g pm2', { stdio: 'inherit' }); }
+      execSync(`pm2 start "${indexJs}" --name itachi-orchestrator`, { stdio: 'inherit' });
+      execSync('pm2 save', { stdio: 'inherit' });
+      log('\n    Started with PM2.', 'green');
+      if (PLATFORM !== 'windows') log('    Run "pm2 startup" to auto-start on boot.', 'gray');
+      log('    Logs: pm2 logs itachi-orchestrator', 'gray');
+      break;
+    case '2':
+      log('\n    Starting in foreground (Ctrl+C to stop)...', 'yellow');
+      rl.close();
+      execSync(`node "${indexJs}"`, { stdio: 'inherit' });
+      return;
+    default:
+      log(`\n    Skipped. Start later: node "${indexJs}"`, 'gray');
+  }
+}
+
 // ── Main ────────────────────────────────────────────────
 async function main() {
   try {
@@ -599,8 +922,18 @@ async function main() {
     step9_addShellSource();
     step10_registerSkillSync();
 
+    if (OPTS.full) {
+      log('\n  === Full Setup ===', 'cyan');
+      await syncAuthCredentials(passphrase);
+      const { supaUrl, supaKey } = await bootstrapSupabase(passphrase);
+      setEnvVarsFull();
+      installWrapper();
+      await setupOrchestrator(supaUrl, supaKey);
+    }
+
     log('');
     log('  Done! Start a new Claude Code session to verify.', 'green');
+    if (OPTS.full) log('  Use "itachi" instead of "claude" for full system integration.', 'green');
     log('');
   } catch (e) {
     log(`\n  ERROR: ${e.message}`, 'red');
