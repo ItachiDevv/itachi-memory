@@ -51,6 +51,7 @@ Orchestrator → POST /api/tasks/:id/stream → TelegramTopicsService → Forum 
 | `/recall <query>` | telegram-commands action | Search project memories |
 | `/recall <project>:<query>` | telegram-commands action | Search memories in a specific project |
 | `/repos` | telegram-commands action | List registered repositories |
+| `/machines` | telegram-commands action | Show orchestrator machines and status |
 
 ### Examples
 
@@ -61,6 +62,7 @@ Orchestrator → POST /api/tasks/:id/stream → TelegramTopicsService → Forum 
 /queue
 /cancel abc12345
 /repos
+/machines
 ```
 
 ## Forum Topics

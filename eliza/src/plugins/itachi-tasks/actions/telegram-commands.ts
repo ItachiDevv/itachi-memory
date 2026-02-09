@@ -1,16 +1,17 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
+import { MachineRegistryService } from '../services/machine-registry.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 /**
- * Handles /recall and /repos Telegram commands.
+ * Handles /recall, /repos, and /machines Telegram commands.
  * The other commands (/task, /status, /queue, /cancel) are already
  * covered by create-task, list-tasks, and cancel-task actions.
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /recall and /repos Telegram commands',
-  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories'],
+  description: 'Handle /recall, /repos, and /machines Telegram commands',
+  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines'],
   examples: [
     [
       { name: 'user', content: { text: '/recall auth middleware changes' } },
@@ -30,11 +31,20 @@ export const telegramCommandsAction: Action = {
         },
       },
     ],
+    [
+      { name: 'user', content: { text: '/machines' } },
+      {
+        name: 'Itachi',
+        content: {
+          text: 'Orchestrator machines:\n\n1. air (itachi-m1) — online | 0/3 tasks | projects: itachi-memory | darwin\n\n1 machine online, 0 tasks running.',
+        },
+      },
+    ],
   ],
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.trim() || '';
-    return text.startsWith('/recall ') || text === '/repos';
+    return text.startsWith('/recall ') || text === '/repos' || text === '/machines';
   },
 
   handler: async (
@@ -55,6 +65,11 @@ export const telegramCommandsAction: Action = {
       // /repos
       if (text === '/repos') {
         return await handleRepos(runtime, callback);
+      }
+
+      // /machines
+      if (text === '/machines') {
+        return await handleMachines(runtime, callback);
       }
 
       return { success: false, error: 'Unknown command' };
@@ -139,4 +154,35 @@ async function handleRepos(
 
   if (callback) await callback({ text: response });
   return { success: true, data: { repos } };
+}
+
+async function handleMachines(
+  runtime: IAgentRuntime,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const registry = runtime.getService<MachineRegistryService>('machine-registry');
+  if (!registry) {
+    if (callback) await callback({ text: 'Machine registry service not available.' });
+    return { success: false, error: 'Machine registry service not available' };
+  }
+
+  const machines = await registry.getAllMachines();
+
+  if (machines.length === 0) {
+    if (callback) await callback({ text: 'No orchestrator machines registered.' });
+    return { success: true, data: { machines: [] } };
+  }
+
+  const online = machines.filter(m => m.status === 'online' || m.status === 'busy');
+  let response = 'Orchestrator machines:\n\n';
+  machines.forEach((m, i) => {
+    const name = m.display_name || m.machine_id;
+    const projects = m.projects.length > 0 ? m.projects.join(', ') : 'any';
+    const icon = m.status === 'online' ? '🟢' : m.status === 'busy' ? '🟡' : '⚫';
+    response += `${i + 1}. ${icon} ${name} (${m.machine_id}) — ${m.status} | ${m.active_tasks}/${m.max_concurrent} tasks | projects: ${projects} | ${m.os || 'unknown'}\n`;
+  });
+  response += `\n${online.length} machine${online.length !== 1 ? 's' : ''} online, ${machines.reduce((sum, m) => sum + m.active_tasks, 0)} task${machines.reduce((sum, m) => sum + m.active_tasks, 0) !== 1 ? 's' : ''} running.`;
+
+  if (callback) await callback({ text: response });
+  return { success: true, data: { machines } };
 }
