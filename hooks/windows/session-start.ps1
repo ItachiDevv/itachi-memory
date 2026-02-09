@@ -46,6 +46,22 @@ try {
     try { $branchName = (git rev-parse --abbrev-ref HEAD 2>$null) } catch {}
     if (-not $branchName) { $branchName = "main" }
 
+    # ============ Auto-register repo URL ============
+    $repoUrl = $null
+    try { $repoUrl = git remote get-url origin 2>$null } catch {}
+    if ($repoUrl -and $project) {
+        try {
+            $regHeaders = @{ "Content-Type" = "application/json" }
+            if ($env:ITACHI_API_KEY) { $regHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
+            $regBody = (@{ name = $project; repo_url = $repoUrl } | ConvertTo-Json -Compress)
+            Invoke-RestMethod -Uri "$BASE_API/api/repos/register" `
+                -Method Post `
+                -Headers $regHeaders `
+                -Body $regBody `
+                -TimeoutSec 5 | Out-Null
+        } catch {}
+    }
+
     # ============ Encrypted File Sync (Pull) ============
     $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"
 

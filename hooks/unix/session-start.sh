@@ -33,6 +33,16 @@ fi
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 [ -z "$BRANCH" ] && BRANCH="main"
 
+# ============ Auto-register repo URL ============
+REPO_URL=$(git remote get-url origin 2>/dev/null)
+if [ -n "$REPO_URL" ] && [ -n "$PROJECT_NAME" ]; then
+    curl -s -k -X POST "${BASE_API}/api/repos/register" \
+      -H "Content-Type: application/json" \
+      -H "$AUTH_HEADER" \
+      -d "{\"name\":\"${PROJECT_NAME}\",\"repo_url\":\"${REPO_URL}\"}" \
+      --max-time 5 > /dev/null 2>&1 &
+fi
+
 # ============ Encrypted File Sync (Pull) ============
 ITACHI_KEY_FILE="$HOME/.itachi-key"
 

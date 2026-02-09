@@ -224,23 +224,27 @@ export class TaskService extends Service {
   // Repo management
 
   async getMergedRepos(): Promise<RepoInfo[]> {
-    // Primary source: project_registry table
+    // Merge project_registry + repos tables, repos table URLs take priority
     const { data: registry } = await this.supabase
       .from('project_registry')
       .select('name, repo_url')
       .eq('active', true);
 
-    if (registry && registry.length > 0) {
-      return registry
-        .sort((a: any, b: any) => a.name.localeCompare(b.name))
-        .map((r: any) => ({ name: r.name, repo_url: r.repo_url || null }));
+    const { data: reposData } = await this.supabase.from('repos').select('name, repo_url');
+
+    // Build map: repos table URLs override project_registry
+    const map = new Map<string, string | null>();
+    for (const r of (registry || []) as any[]) {
+      map.set(r.name, r.repo_url || null);
+    }
+    for (const r of (reposData || []) as any[]) {
+      if (r.repo_url) map.set(r.name, r.repo_url);
+      else if (!map.has(r.name)) map.set(r.name, null);
     }
 
-    // Fallback: legacy repos table (backward compat)
-    const { data: legacyData } = await this.supabase.from('repos').select('name, repo_url');
-    return (legacyData || [])
-      .sort((a: any, b: any) => a.name.localeCompare(b.name))
-      .map((r: any) => ({ name: r.name, repo_url: r.repo_url || null }));
+    return [...map.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, repo_url]) => ({ name, repo_url }));
   }
 
   async getMergedRepoNames(): Promise<string[]> {
