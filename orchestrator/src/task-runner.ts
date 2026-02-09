@@ -5,7 +5,7 @@ import { spawnSession, streamToEliza } from './session-manager';
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
-import type { Task, ActiveSession } from './types';
+import { NoRepoError, type Task, type ActiveSession } from './types';
 
 const activeSessions = new Map<string, ActiveSession & { process: ChildProcess }>();
 
@@ -25,22 +25,25 @@ async function runTask(task: Task): Promise<void> {
     try {
         workspacePath = await setupWorkspace(task);
     } catch (err) {
-        const errorMsg = `Workspace setup failed: ${err instanceof Error ? err.message : String(err)}`;
-        console.error(`[runner] ${errorMsg} (task ${shortId})`);
-
-        // Stream error to ElizaOS so a forum topic gets created with the error
-        streamToEliza(task.id, { type: 'text', text: `Error: ${errorMsg}` });
-        streamToEliza(task.id, {
-            type: 'result',
-            result: { summary: errorMsg, cost_usd: 0, duration_ms: 0, is_error: true },
-        });
-
-        await updateTask(task.id, {
-            status: 'failed',
-            error_message: errorMsg,
-            completed_at: new Date().toISOString(),
-        });
-        return;
+        // Handle missing repo — prompt user via Telegram
+        if (err instanceof NoRepoError) {
+            console.log(`[runner] No repo for "${err.project}" (task ${shortId}), prompting via Telegram`);
+            const resolved = await promptForRepo(task);
+            if (resolved) {
+                try {
+                    workspacePath = await setupWorkspace(task);
+                } catch (retryErr) {
+                    await failTask(task, `Workspace setup failed after repo creation: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
+                    return;
+                }
+            } else {
+                await failTask(task, `No repository configured for project "${task.project}" and user did not provide one.`);
+                return;
+            }
+        } else {
+            await failTask(task, `Workspace setup failed: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+        }
     }
 
     // Classify task to determine model, budget, and team configuration
@@ -143,4 +146,131 @@ export function stopRunner(): void {
         clearTimeout(session.timeoutHandle);
         session.process.kill('SIGTERM');
     }
+}
+
+// --- Helper functions for NoRepoError handling ---
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getApiHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
+    return headers;
+}
+
+async function failTask(task: Task, errorMsg: string): Promise<void> {
+    const shortId = task.id.substring(0, 8);
+    console.error(`[runner] ${errorMsg} (task ${shortId})`);
+
+    streamToEliza(task.id, { type: 'text', text: `Error: ${errorMsg}` });
+    streamToEliza(task.id, {
+        type: 'result',
+        result: { summary: errorMsg, cost_usd: 0, duration_ms: 0, is_error: true },
+    });
+
+    await updateTask(task.id, {
+        status: 'failed',
+        error_message: errorMsg,
+        completed_at: new Date().toISOString(),
+    });
+}
+
+async function fetchUserInput(taskId: string): Promise<string[]> {
+    try {
+        const res = await fetch(`${config.apiUrl}/api/tasks/${taskId}/input`, {
+            headers: getApiHeaders(),
+        });
+        if (!res.ok) return [];
+        const data = (await res.json()) as { inputs?: string[] };
+        return data.inputs || [];
+    } catch {
+        return [];
+    }
+}
+
+async function createRepoViaApi(name: string): Promise<{ repo_url: string; html_url: string } | null> {
+    try {
+        const res = await fetch(`${config.apiUrl}/api/repos/create`, {
+            method: 'POST',
+            headers: getApiHeaders(),
+            body: JSON.stringify({ name }),
+        });
+        if (!res.ok) return null;
+        const data = (await res.json()) as { success?: boolean; repo_url?: string; html_url?: string };
+        if (!data.success || !data.repo_url) return null;
+        return { repo_url: data.repo_url, html_url: data.html_url || '' };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Prompt the user via Telegram topic for a repo when none is found.
+ * Returns true if a repo was successfully created/configured.
+ */
+async function promptForRepo(task: Task): Promise<boolean> {
+    const shortId = task.id.substring(0, 8);
+
+    // Stream the prompt to the Telegram topic
+    streamToEliza(task.id, {
+        type: 'text',
+        text: `No repository found for project "${task.project}".\n\nReply "create" to make a new private repo, reply with a repo name (e.g. "my-project"), or "cancel".`,
+    });
+
+    // Poll for user input with 5-minute timeout
+    const maxWaitMs = 5 * 60 * 1000;
+    const pollIntervalMs = 30_000;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+        await sleep(pollIntervalMs);
+
+        const inputs = await fetchUserInput(task.id);
+        if (inputs.length === 0) continue;
+
+        const reply = inputs[0].trim().toLowerCase();
+
+        if (reply === 'cancel') {
+            console.log(`[runner] User cancelled repo prompt for task ${shortId}`);
+            return false;
+        }
+
+        // Determine repo name: "create" uses the project name, anything else is the custom name
+        const repoName = reply === 'create' ? task.project : inputs[0].trim();
+
+        streamToEliza(task.id, {
+            type: 'text',
+            text: `Creating private repo "${repoName}"...`,
+        });
+
+        const created = await createRepoViaApi(repoName);
+        if (!created) {
+            streamToEliza(task.id, {
+                type: 'text',
+                text: `Failed to create repo "${repoName}". Check GITHUB_TOKEN configuration.`,
+            });
+            return false;
+        }
+
+        // Update the task's repo_url so setupWorkspace can use it
+        task.repo_url = created.repo_url;
+
+        streamToEliza(task.id, {
+            type: 'text',
+            text: `Created private repo: ${created.html_url}\nContinuing with task...`,
+        });
+
+        console.log(`[runner] Created repo "${repoName}" for task ${shortId}: ${created.repo_url}`);
+        return true;
+    }
+
+    // Timeout
+    console.log(`[runner] Repo prompt timed out for task ${shortId}`);
+    streamToEliza(task.id, {
+        type: 'text',
+        text: 'Timed out waiting for repo configuration. Task will be marked as failed.',
+    });
+    return false;
 }

@@ -104,6 +104,13 @@ export interface CodexStreamEvent {
     };
 }
 
+export class NoRepoError extends Error {
+    constructor(public project: string) {
+        super(`No repo_url or local path configured for project "${project}".`);
+        this.name = 'NoRepoError';
+    }
+}
+
 export interface ActiveSession {
     task: Task;
     workspacePath: string;

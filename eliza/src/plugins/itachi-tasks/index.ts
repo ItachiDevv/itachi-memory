@@ -18,6 +18,7 @@ import { machineRoutes } from './routes/machine-routes.js';
 export { TelegramTopicsService } from './services/telegram-topics.js';
 export { MachineRegistryService } from './services/machine-registry.js';
 export { taskDispatcherWorker, registerTaskDispatcherTask } from './workers/task-dispatcher.js';
+export { githubRepoSyncWorker, registerGithubRepoSyncTask } from './workers/github-repo-sync.js';
 
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',

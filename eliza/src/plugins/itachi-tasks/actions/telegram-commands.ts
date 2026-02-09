@@ -2,6 +2,7 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import { TaskService } from '../services/task-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
+import { syncGitHubRepos } from '../services/github-sync.js';
 
 /**
  * Handles /recall, /repos, and /machines Telegram commands.
@@ -10,8 +11,8 @@ import { MemoryService } from '../../itachi-memory/services/memory-service.js';
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /recall, /repos, and /machines Telegram commands',
-  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines'],
+  description: 'Handle /recall, /repos, /machines, and /sync-repos Telegram commands',
+  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github'],
   examples: [
     [
       { name: 'user', content: { text: '/recall auth middleware changes' } },
@@ -44,7 +45,7 @@ export const telegramCommandsAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.trim() || '';
-    return text.startsWith('/recall ') || text === '/repos' || text === '/machines';
+    return text.startsWith('/recall ') || text === '/repos' || text === '/machines' || text === '/sync-repos';
   },
 
   handler: async (
@@ -70,6 +71,11 @@ export const telegramCommandsAction: Action = {
       // /machines
       if (text === '/machines') {
         return await handleMachines(runtime, callback);
+      }
+
+      // /sync-repos
+      if (text === '/sync-repos') {
+        return await handleSyncRepos(runtime, callback);
       }
 
       return { success: false, error: 'Unknown command' };
@@ -185,4 +191,21 @@ async function handleMachines(
 
   if (callback) await callback({ text: response });
   return { success: true, data: { machines } };
+}
+
+async function handleSyncRepos(
+  runtime: IAgentRuntime,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  if (callback) await callback({ text: 'Syncing GitHub repos...' });
+
+  const result = await syncGitHubRepos(runtime);
+
+  let response = `Synced ${result.synced}/${result.total} GitHub repos into project registry.`;
+  if (result.errors.length > 0) {
+    response += `\n\n${result.errors.length} error(s):\n${result.errors.slice(0, 3).join('\n')}`;
+  }
+
+  if (callback) await callback({ text: response });
+  return { success: true, data: result };
 }

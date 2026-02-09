@@ -7,8 +7,10 @@ import { getSupabase } from './supabase-client';
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3001', 10);
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const REPO_SYNC_INTERVAL_MS = 86_400_000; // 24 hours
 const startTime = Date.now();
 let heartbeatTimer: NodeJS.Timeout | null = null;
+let lastRepoSyncAt = 0;
 
 function getApiHeaders(): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -92,9 +94,29 @@ async function sendHeartbeat(activeTasks?: number): Promise<void> {
     }
 }
 
+async function triggerRepoSync(): Promise<void> {
+    const now = Date.now();
+    if (now - lastRepoSyncAt < REPO_SYNC_INTERVAL_MS) return;
+    lastRepoSyncAt = now;
+
+    try {
+        const res = await fetch(`${config.apiUrl}/api/repos/sync`, {
+            method: 'POST',
+            headers: getApiHeaders(),
+        });
+        if (res.ok) {
+            const data = (await res.json()) as { synced?: number; total?: number };
+            console.log(`[sync] GitHub repo sync: ${data.synced}/${data.total} repos`);
+        }
+    } catch {
+        // Best-effort, non-blocking
+    }
+}
+
 function startHeartbeat(): void {
     heartbeatTimer = setInterval(() => {
         sendHeartbeat().catch(() => {});
+        triggerRepoSync().catch(() => {});
     }, HEARTBEAT_INTERVAL_MS);
 }
 

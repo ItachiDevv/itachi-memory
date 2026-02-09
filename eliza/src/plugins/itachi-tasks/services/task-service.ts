@@ -260,14 +260,24 @@ export class TaskService extends Service {
   }
 
   async getRepo(name: string): Promise<RepoInfo | null> {
-    const { data, error } = await this.supabase
+    // Check repos table first (legacy, manual registrations)
+    const { data } = await this.supabase
       .from('repos')
       .select('name, repo_url, created_at')
       .eq('name', name)
       .single();
+    if (data?.repo_url) return data as RepoInfo;
 
-    if (error || !data) return null;
-    return data as RepoInfo;
+    // Fall back to project_registry (GitHub-synced repos)
+    const { data: reg } = await this.supabase
+      .from('project_registry')
+      .select('name, repo_url')
+      .eq('name', name)
+      .eq('active', true)
+      .single();
+    if (reg?.repo_url) return reg as RepoInfo;
+
+    return null;
   }
 
   getSupabase(): SupabaseClient {

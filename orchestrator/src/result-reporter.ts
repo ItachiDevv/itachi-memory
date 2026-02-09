@@ -1,5 +1,5 @@
 import { updateTask, notifyTaskCompletion } from './supabase-client';
-import { getFilesChanged, commitAndPush, createPR, cleanupWorkspace } from './workspace-manager';
+import { getFilesChanged, commitAndPush, createPR, pushProjectEnv, cleanupWorkspace } from './workspace-manager';
 import type { Task } from './types';
 import type { SessionResult } from './session-manager';
 import { streamToEliza } from './session-manager';
@@ -65,6 +65,13 @@ export async function reportResult(
 
         // Notify via Telegram
         await notifyTaskCompletion(task.id);
+
+        // Push .env files to Supabase (encrypted) before workspace cleanup
+        try {
+            await pushProjectEnv(workspacePath, task);
+        } catch (err) {
+            console.error(`[reporter] Env push error for task ${shortId}:`, err instanceof Error ? err.message : String(err));
+        }
 
     } catch (err) {
         console.error(`[reporter] Error reporting result for task ${shortId}:`, err);

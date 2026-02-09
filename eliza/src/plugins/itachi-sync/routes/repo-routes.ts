@@ -1,5 +1,6 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { TaskService } from '../../itachi-tasks/services/task-service.js';
+import { syncGitHubRepos, createGitHubRepo } from '../../itachi-tasks/services/github-sync.js';
 import { checkAuth, sanitizeError, truncate, MAX_LENGTHS } from '../utils.js';
 
 export const repoRoutes: Route[] = [
@@ -83,6 +84,54 @@ export const repoRoutes: Route[] = [
         }
 
         res.json(repo);
+      } catch (error) {
+        res.status(500).json({ error: sanitizeError(error) });
+      }
+    },
+  },
+
+  // Sync all GitHub repos into project_registry
+  {
+    type: 'POST',
+    path: '/api/repos/sync',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
+        const result = await syncGitHubRepos(rt);
+        res.json({ synced: result.synced, total: result.total, errors: result.errors.slice(0, 5) });
+      } catch (error) {
+        res.status(500).json({ error: sanitizeError(error) });
+      }
+    },
+  },
+
+  // Create a new private GitHub repo and register it
+  {
+    type: 'POST',
+    path: '/api/repos/create',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req, res, rt)) return;
+
+        const { name } = req.body;
+        if (!name) {
+          res.status(400).json({ error: 'name required' });
+          return;
+        }
+
+        const safeName = truncate(name, MAX_LENGTHS.project);
+        const result = await createGitHubRepo(rt, safeName);
+        if (!result) {
+          res.status(503).json({ error: 'GITHUB_TOKEN not configured' });
+          return;
+        }
+
+        res.json({ success: true, name: safeName, repo_url: result.repo_url, html_url: result.html_url });
       } catch (error) {
         res.status(500).json({ error: sanitizeError(error) });
       }
