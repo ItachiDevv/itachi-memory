@@ -14,7 +14,7 @@ Claude Code Sessions (Windows/Mac/Linux)
     v
 ElizaOS Agent (Hetzner/Coolify)                     Orchestrator (per-machine)
     |                                                     |
-    +-- itachi-memory     (store/search memories)         +-- task-classifier (Sonnet)
+    +-- itachi-memory     (store/search memories)         +-- task-classifier (Haiku) --> always assigns Opus
     +-- itachi-code-intel (repo expertise, sessions)      +-- session-manager (Claude/Codex CLI)
     +-- itachi-tasks      (task queue, dispatch)          +-- result-reporter
     +-- itachi-sync       (cross-machine sync)            +-- workspace-manager
@@ -133,6 +133,16 @@ Cross-machine synchronization. Encrypted push/pull of API keys, settings hooks, 
 ### itachi-self-improve
 Lesson extraction evaluator. Learns from user feedback and conversation patterns. Stores lessons as searchable memories.
 
+## Updating
+
+After pulling changes, from the repo root:
+
+```bash
+npm run update    # git pull + build eliza + build orchestrator + restart PM2
+npm run build     # rebuild both without restarting
+npm run restart   # rebuild orchestrator + restart PM2
+```
+
 ## Orchestrator
 
 Each machine runs an orchestrator that:
@@ -140,8 +150,8 @@ Each machine runs an orchestrator that:
 1. Registers with ElizaOS via `/api/machines/register`
 2. Heartbeats every 30s with capacity info
 3. Claims tasks assigned to it by the dispatcher
-4. Classifies task difficulty (trivial/simple/medium/complex/major) via Anthropic API
-5. Spawns Claude CLI or Codex CLI sessions with appropriate model/budget
+4. Classifies task difficulty (trivial/simple/medium/complex/major) via Haiku
+5. Spawns Claude CLI (always Opus) or Codex CLI sessions with difficulty-based budgets
 6. Streams output to Telegram forum topics in real-time
 7. Reports results (summary, PR URL, files changed) back to ElizaOS
 
