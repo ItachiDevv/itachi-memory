@@ -106,7 +106,7 @@ export const listTasksAction: Action = {
         let response = `Active queue (${tasks.length} tasks):\n\n`;
         tasks.forEach((t, i) => {
           const runner = t.orchestrator_id ? ` [${t.orchestrator_id}]` : '';
-          response += `${i + 1}. [${t.status}]${runner} ${t.project}: ${t.description.substring(0, 50)}\n`;
+          response += `${i + 1}. [${t.status}]${runner} ${t.project}: ${t.description.substring(0, 100)}\n`;
         });
 
         if (callback) await callback({ text: response });
@@ -128,7 +128,7 @@ export const listTasksAction: Action = {
       let response = 'Recent tasks:\n\n';
       for (const t of tasks) {
         const icon = statusIcon[t.status] || '??';
-        response += `[${icon}] ${t.id.substring(0, 8)} | ${t.project} | ${t.description.substring(0, 40)}\n`;
+        response += `[${icon}] ${t.id.substring(0, 8)} | ${t.project} | ${t.description.substring(0, 80)}\n`;
       }
 
       if (callback) await callback({ text: response });
