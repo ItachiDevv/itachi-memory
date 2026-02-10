@@ -4,6 +4,20 @@ import type { Task } from './types';
 import type { SessionResult } from './session-manager';
 import { streamToEliza } from './session-manager';
 
+export function formatDuration(ms: number): string {
+    if (ms <= 0) return '0s';
+    const totalSeconds = Math.round(ms / 1000);
+    if (totalSeconds < 1) return '0s';
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts: string[] = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+    return parts.join(' ');
+}
+
 export async function reportResult(
     task: Task,
     result: SessionResult,
@@ -40,6 +54,7 @@ export async function reportResult(
             result_json: {
                 cost_usd: result.costUsd,
                 duration_ms: result.durationMs,
+                duration_formatted: formatDuration(result.durationMs),
                 exit_code: result.exitCode,
             },
             error_message: result.isError ? result.resultText.substring(0, 500) : undefined,
@@ -48,7 +63,7 @@ export async function reportResult(
             completed_at: new Date().toISOString(),
         });
 
-        console.log(`[reporter] Task ${shortId}: ${result.isError ? 'FAILED' : 'COMPLETED'} (${filesChanged.length} files, $${result.costUsd.toFixed(2)})`);
+        console.log(`[reporter] Task ${shortId}: ${result.isError ? 'FAILED' : 'COMPLETED'} (${filesChanged.length} files, $${result.costUsd.toFixed(2)}, ${formatDuration(result.durationMs)})`);
 
         // Stream final result to ElizaOS
         streamToEliza(task.id, {
