@@ -116,3 +116,5 @@ ITACHI_PROJECT_PATHS={"itachi-memory":"/Users/you/itachi-memory","my-app":"/User
 | PR creation fails | `gh auth status` — must be authenticated |
 | No tasks claimed | Check `curl localhost:3001/health`, verify `.env` credentials |
 | Port 3001 in use | `lsof -ti:3001 \| xargs kill -9` then restart |
+
+Last tested: 2026-02-10
