@@ -248,33 +248,43 @@ export async function getFilesChanged(workspacePath: string): Promise<string[]> 
 }
 
 export async function commitAndPush(workspacePath: string, task: Task): Promise<string | null> {
-    // Check if there are changes
-    const status = await exec('git', ['status', '--porcelain'], workspacePath);
-    if (!status.stdout.trim()) {
-        console.log(`[workspace] No changes to commit for task ${task.id.substring(0, 8)}`);
-        return null;
-    }
-
-    // Ensure .env files are never committed to git
-    ensureGitignoreExcludes(path.join(workspacePath, '.gitignore'), ['.env', '.env.*', '.env.local']);
-
-    // Stage all changes (safe now — .env* excluded via .gitignore)
-    await exec('git', ['add', '-A'], workspacePath);
-
-    // Double-check: unstage any .env files that slipped through
-    await exec('git', ['reset', 'HEAD', '--', '.env', '.env.*', '.env.local'], workspacePath);
-
-    // Check if there's still anything staged after excluding .env
-    const staged = await exec('git', ['diff', '--cached', '--name-only'], workspacePath);
-    if (!staged.stdout.trim()) {
-        console.log(`[workspace] No non-env changes to commit for task ${task.id.substring(0, 8)}`);
-        return null;
-    }
-
-    // Commit
     const shortId = task.id.substring(0, 8);
-    const commitMsg = `task/${shortId}: ${task.description.substring(0, 72)}`;
-    await exec('git', ['commit', '-m', commitMsg], workspacePath);
+
+    // Check if there are uncommitted changes
+    const status = await exec('git', ['status', '--porcelain'], workspacePath);
+    const hasUncommitted = !!status.stdout.trim();
+
+    if (hasUncommitted) {
+        // Ensure .env files are never committed to git
+        ensureGitignoreExcludes(path.join(workspacePath, '.gitignore'), ['.env', '.env.*', '.env.local']);
+
+        // Stage all changes (safe now — .env* excluded via .gitignore)
+        await exec('git', ['add', '-A'], workspacePath);
+
+        // Double-check: unstage any .env files that slipped through
+        await exec('git', ['reset', 'HEAD', '--', '.env', '.env.*', '.env.local'], workspacePath);
+
+        // Check if there's still anything staged after excluding .env
+        const staged = await exec('git', ['diff', '--cached', '--name-only'], workspacePath);
+        if (!staged.stdout.trim()) {
+            console.log(`[workspace] No non-env changes to commit for task ${shortId}`);
+        } else {
+            const commitMsg = `task/${shortId}: ${task.description.substring(0, 72)}`;
+            await exec('git', ['commit', '-m', commitMsg], workspacePath);
+        }
+    }
+
+    // Check if the task branch has any commits to push (handles both cases:
+    // 1. We just committed above, or 2. Claude already committed during the session)
+    const log = await exec('git', ['log', '--oneline', '@{u}..HEAD'], workspacePath);
+    const hasCommits = log.code === 0 && !!log.stdout.trim();
+    // If no upstream yet, check if we have any commits beyond the merge base
+    const hasNewCommits = hasCommits || log.code !== 0;
+
+    if (!hasUncommitted && !hasNewCommits) {
+        console.log(`[workspace] No changes to commit for task ${shortId}`);
+        return null;
+    }
 
     // Push
     const pushResult = await exec('git', ['push', '-u', 'origin', 'HEAD'], workspacePath);
@@ -283,7 +293,8 @@ export async function commitAndPush(workspacePath: string, task: Task): Promise<
         return null;
     }
 
-    return commitMsg;
+    const lastCommit = await exec('git', ['log', '-1', '--pretty=%s'], workspacePath);
+    return lastCommit.stdout || `task/${shortId}`;
 }
 
 /** Ensure .gitignore contains the given patterns. Appends missing ones. */
@@ -302,13 +313,25 @@ function ensureGitignoreExcludes(gitignorePath: string, patterns: string[]): voi
 
 export async function createPR(workspacePath: string, task: Task): Promise<string | null> {
     const shortId = task.id.substring(0, 8);
+
+    // Detect actual default branch (task.branch may say "main" when repo uses "master")
+    let baseBranch = task.branch;
+    const detected = await detectDefaultBranch(workspacePath, false);
+    if (detected) {
+        baseBranch = detected.replace(/^origin\//, '');
+    }
+
+    // Use shell-safe quoting for args with spaces
+    const title = `task/${shortId}: ${task.description.substring(0, 72)}`.replace(/"/g, '\\"');
+    const body = `Automated task via Itachi orchestrator.\n\nTask ID: ${task.id}\nProject: ${task.project}`.replace(/"/g, '\\"');
+
     const result = await exec(
         'gh',
         [
             'pr', 'create',
-            '--title', `task/${shortId}: ${task.description.substring(0, 72)}`,
-            '--body', `Automated task via Itachi orchestrator.\n\nTask ID: ${task.id}\nProject: ${task.project}`,
-            '--base', task.branch,
+            '--title', `"${title}"`,
+            '--body', `"${body}"`,
+            '--base', baseBranch,
         ],
         workspacePath
     );
