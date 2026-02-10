@@ -253,14 +253,10 @@ export const taskRoutes: Route[] = [
           return;
         }
 
-        await rt.sendMessageToTarget({
-          content: { text: msg },
-          target: {
-            type: 'chat',
-            id: String(chatId),
-            source: 'telegram',
-          },
-        });
+        await rt.sendMessageToTarget(
+          { source: 'telegram', channelId: String(chatId) },
+          { text: msg },
+        );
 
         await taskService.updateTask(task.id, {
           notified_at: new Date().toISOString(),
