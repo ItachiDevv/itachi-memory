@@ -49,7 +49,8 @@ export const createTaskAction: Action = {
       const description = match[2].trim();
 
       const telegramUserId = (message.content as Record<string, unknown>).telegram_user_id as number || 0;
-      const telegramChatId = (message.content as Record<string, unknown>).telegram_chat_id as number || 0;
+      const telegramChatId = (message.content as Record<string, unknown>).telegram_chat_id as number
+        || parseInt(String(runtime.getSetting('TELEGRAM_GROUP_CHAT_ID') || '0'), 10);
 
       const params: CreateTaskParams = {
         description,

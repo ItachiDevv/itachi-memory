@@ -63,7 +63,8 @@ export const spawnSessionAction: Action = {
 
       // Extract telegram user info from message metadata
       const telegramUserId = (message.content as Record<string, unknown>).telegram_user_id as number | undefined;
-      const telegramChatId = (message.content as Record<string, unknown>).telegram_chat_id as number | undefined;
+      const telegramChatId = (message.content as Record<string, unknown>).telegram_chat_id as number | undefined
+        || parseInt(String(runtime.getSetting('TELEGRAM_GROUP_CHAT_ID') || '0'), 10);
 
       if (allowedUsers.length > 0 && telegramUserId && !allowedUsers.includes(String(telegramUserId))) {
         if (callback) {

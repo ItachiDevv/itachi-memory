@@ -246,11 +246,18 @@ export const taskRoutes: Route[] = [
           msg = `Task ${shortId} status: ${task.status}\nProject: ${task.project}\n`;
         }
 
+        const chatId = task.telegram_chat_id
+          || parseInt(String(rt.getSetting('TELEGRAM_GROUP_CHAT_ID') || '0'), 10);
+        if (!chatId) {
+          res.status(400).json({ error: 'No telegram_chat_id for this task' });
+          return;
+        }
+
         await rt.sendMessageToTarget({
           content: { text: msg },
           target: {
             type: 'chat',
-            id: String(task.telegram_chat_id),
+            id: String(chatId),
             source: 'telegram',
           },
         });
