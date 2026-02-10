@@ -247,7 +247,7 @@ export const taskRoutes: Route[] = [
         }
 
         const chatId = task.telegram_chat_id
-          || parseInt(String(rt.getSetting('TELEGRAM_GROUP_CHAT_ID') || '0'), 10);
+          || parseInt(String(rt.getSetting('TELEGRAM_GROUP_CHAT_ID') || process.env.TELEGRAM_GROUP_CHAT_ID || '0'), 10);
         if (!chatId) {
           res.status(400).json({ error: 'No telegram_chat_id for this task' });
           return;

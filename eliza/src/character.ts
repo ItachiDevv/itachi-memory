@@ -112,6 +112,7 @@ export const character: Character = {
       SUPABASE_SERVICE_ROLE_KEY: loadCredential('SUPABASE_SERVICE_ROLE_KEY', '.supabase-credentials', /SUPABASE_SERVICE_ROLE_KEY=(.+)/),
       POSTGRES_URL: loadCredential('POSTGRES_URL', '.supabase-credentials', /POSTGRES_URL=(.+)/),
       GITHUB_TOKEN: loadCredential('GITHUB_TOKEN', '.itachi-api-keys', /GITHUB_TOKEN=(.+)/),
+      TELEGRAM_GROUP_CHAT_ID: loadCredential('TELEGRAM_GROUP_CHAT_ID', '.itachi-api-keys', /TELEGRAM_GROUP_CHAT_ID=(.+)/),
       ITACHI_ALLOWED_USERS: process.env.ITACHI_ALLOWED_USERS ?? '',
       ITACHI_BOOTSTRAP_CONFIG: process.env.ITACHI_BOOTSTRAP_CONFIG ?? '',
       ITACHI_BOOTSTRAP_SALT: process.env.ITACHI_BOOTSTRAP_SALT ?? '',
