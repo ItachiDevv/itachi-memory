@@ -192,6 +192,47 @@ export const taskStreamRoutes: Route[] = [
     },
   },
 
+  // Cancel a task (REST endpoint for external use)
+  {
+    type: 'POST',
+    path: '/api/tasks/:id/cancel',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const id = (req.params as any)?.id;
+        if (!id || !isValidUUID(id)) {
+          res.status(400).json({ error: 'Invalid task ID format' });
+          return;
+        }
+
+        const taskService = rt.getService<TaskService>('itachi-tasks') as TaskService | undefined;
+        if (!taskService) {
+          res.status(503).json({ error: 'Task service not available' });
+          return;
+        }
+
+        const task = await taskService.getTask(id);
+        if (!task) {
+          res.status(404).json({ error: 'Task not found' });
+          return;
+        }
+
+        if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+          res.json({ success: false, error: `Task already ${task.status}` });
+          return;
+        }
+
+        await taskService.cancelTask(id);
+        res.json({ success: true, taskId: id });
+      } catch (error) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    },
+  },
+
   // Get topic info for a task
   {
     type: 'GET',
