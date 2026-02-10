@@ -48,7 +48,7 @@ export async function reportResult(
             completed_at: new Date().toISOString(),
         });
 
-        console.log(`[reporter] Task ${shortId}: ${result.isError ? 'FAILED' : 'COMPLETED'} (${filesChanged.length} files)`);
+        console.log(`[reporter] Task ${shortId}: ${result.isError ? 'FAILED' : 'COMPLETED'} (${filesChanged.length} files, $${result.costUsd.toFixed(2)})`);
 
         // Stream final result to ElizaOS
         streamToEliza(task.id, {
