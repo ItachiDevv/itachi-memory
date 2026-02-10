@@ -103,10 +103,9 @@ export const taskStreamRoutes: Route[] = [
           chunk = `\n🔧 ${tool_use.name}${fileName ? `: ${fileName}` : ''}\n`;
         } else if (eventType === 'result' && resultData) {
           const status = resultData.is_error ? '❌ Failed' : '✅ Completed';
-          const cost = resultData.cost_usd != null ? ` ($${resultData.cost_usd.toFixed(2)})` : '';
           const files = resultData.files_changed?.length ? ` | ${resultData.files_changed.length} files` : '';
           const pr = resultData.pr_url ? `\nPR: ${resultData.pr_url}` : '';
-          chunk = `\n${status}${cost}${files}${pr}\n${resultData.summary || ''}`;
+          chunk = `\n${status}${files}${pr}\n${resultData.summary || ''}`;
         }
 
         if (chunk) {

@@ -75,6 +75,16 @@ export class TaskService extends Service {
     this.runtime.logger.info('TaskService stopped');
   }
 
+  async getDefaultBranch(project: string): Promise<string> {
+    const { data } = await this.supabase
+      .from('project_registry')
+      .select('default_branch')
+      .eq('name', project)
+      .eq('active', true)
+      .single();
+    return data?.default_branch || 'master';
+  }
+
   async createTask(params: CreateTaskParams): Promise<ItachiTask> {
     // Validate budget
     const maxAllowed = 10;
@@ -82,15 +92,18 @@ export class TaskService extends Service {
       throw new Error(`Budget $${params.max_budget_usd} exceeds max allowed $${maxAllowed}`);
     }
 
+    // Look up default branch from project_registry if not specified
+    const branch = params.branch || await this.getDefaultBranch(params.project);
+
     const insertObj: Record<string, unknown> = {
       description: params.description,
       project: params.project,
       telegram_chat_id: params.telegram_chat_id,
       telegram_user_id: params.telegram_user_id,
       status: 'queued',
+      branch,
     };
     if (params.repo_url) insertObj.repo_url = params.repo_url;
-    if (params.branch) insertObj.branch = params.branch;
     if (params.priority != null) insertObj.priority = params.priority;
     if (params.model) insertObj.model = params.model;
     if (params.max_budget_usd != null) insertObj.max_budget_usd = params.max_budget_usd;

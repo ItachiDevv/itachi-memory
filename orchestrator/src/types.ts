@@ -44,19 +44,18 @@ export interface ClaudeStreamEvent {
     session_id?: string;
     message?: {
         role: string;
-        content: string;
+        content: string | Array<{ type: string; text?: string }>;
     };
     tool_use?: {
         name: string;
         input: Record<string, unknown>;
     };
-    result?: {
-        text: string;
-        session_id: string;
-        cost_usd: number;
-        duration_ms: number;
-        is_error: boolean;
-    };
+    // --verbose result format: result is a string, costs/session at top level
+    result?: string | { text: string; session_id?: string; cost_usd?: number; duration_ms?: number; is_error?: boolean };
+    total_cost_usd?: number;
+    duration_ms?: number;
+    is_error?: boolean;
+    num_turns?: number;
 }
 
 export interface ElizaStreamEvent {

@@ -39,6 +39,27 @@ function exec(cmd: string, args: string[], cwd?: string): Promise<{ stdout: stri
     });
 }
 
+/** Detect the actual default branch of a repo (master vs main) */
+async function detectDefaultBranch(repoPath: string, isLocal: boolean): Promise<string | null> {
+    // Try common branch names in order of preference
+    const candidates = isLocal
+        ? ['master', 'main', 'develop']
+        : ['origin/master', 'origin/main', 'origin/develop'];
+
+    for (const ref of candidates) {
+        const check = await exec('git', ['rev-parse', '--verify', ref], repoPath);
+        if (check.code === 0) return ref;
+    }
+
+    // Last resort: get current HEAD branch
+    const head = await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
+    if (head.code === 0 && head.stdout && head.stdout !== 'HEAD') {
+        return isLocal ? head.stdout : `origin/${head.stdout}`;
+    }
+
+    return null;
+}
+
 /** Get the base repo path for a project (persistent clone or configured local path) */
 function getBasePath(task: Task): { basePath: string; isLocal: boolean } {
     const localPath = config.projectPaths[task.project];
@@ -104,30 +125,34 @@ export async function setupWorkspace(task: Task): Promise<string> {
         await ensureBaseClone(task);
     }
 
-    // Create worktree from base (same for both modes)
+    // Resolve the base ref — try the specified branch, then detect the actual default
+    let baseRef = isLocal ? task.branch : `origin/${task.branch}`;
+    const refCheck = await exec('git', ['rev-parse', '--verify', baseRef], basePath);
+    if (refCheck.code !== 0) {
+        // Specified branch doesn't exist — detect actual default branch
+        const detected = await detectDefaultBranch(basePath, isLocal);
+        if (detected) {
+            console.log(`[workspace] Branch "${task.branch}" not found, using detected default: ${detected}`);
+            baseRef = detected;
+        }
+    }
+
+    // Create worktree from base
     const result = await exec(
         'git',
-        ['worktree', 'add', workspacePath, '-b', branchName, `origin/${task.branch}`],
+        ['worktree', 'add', workspacePath, '-b', branchName, baseRef],
         basePath
     );
 
     if (result.code !== 0) {
-        // Branch might already exist, or origin/ prefix not needed for local
+        // Branch already exists — try without -b
         const retry = await exec(
             'git',
-            ['worktree', 'add', workspacePath, '-b', branchName, task.branch],
+            ['worktree', 'add', workspacePath, branchName],
             basePath
         );
         if (retry.code !== 0) {
-            // Branch already exists — try without -b
-            const retry2 = await exec(
-                'git',
-                ['worktree', 'add', workspacePath, branchName],
-                basePath
-            );
-            if (retry2.code !== 0) {
-                throw new Error(`Failed to create worktree: ${retry2.stderr}`);
-            }
+            throw new Error(`Failed to create worktree: ${retry.stderr}`);
         }
     }
 

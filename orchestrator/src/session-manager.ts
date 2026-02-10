@@ -7,6 +7,10 @@ import { config } from './config';
 import type { Task, TaskClassification, ClaudeStreamEvent, CodexStreamEvent, ElizaStreamEvent } from './types';
 import { getBudgetForClassification } from './task-classifier';
 
+/** Directory for temp prompt files (avoids shell quoting issues) */
+const PROMPT_DIR = path.join(os.tmpdir(), 'itachi-prompts');
+fs.mkdirSync(PROMPT_DIR, { recursive: true });
+
 /**
  * Fire-and-forget POST to ElizaOS stream endpoint.
  * Best-effort: logs failures but doesn't disrupt the session.
@@ -115,18 +119,26 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         ? classification.suggestedModel
         : (task.model || config.defaultModel);
 
-    const args = [
-        '-p', prompt,
+    // Write prompt to temp file — avoids shell quoting issues with newlines/quotes on Windows
+    const shortId = task.id.substring(0, 8);
+    const promptFile = path.join(PROMPT_DIR, `${shortId}.txt`);
+    fs.writeFileSync(promptFile, prompt, 'utf8');
+
+    // Build shell command string: read prompt from file, pipe to claude
+    // This avoids embedding the prompt in command-line args (which cmd.exe mangles)
+    const readCmd = process.platform === 'win32'
+        ? `type "${promptFile.replace(/\//g, '\\')}"`
+        : `cat "${promptFile}"`;
+
+    const cliArgs = [
         '--dangerously-skip-permissions',
         '--output-format', 'stream-json',
+        '--verbose',
         '--max-turns', '50',
         '--model', model,
     ];
 
-    // Add budget flag if supported
-    if (budget > 0) {
-        args.push('--max-budget-usd', budget.toString());
-    }
+    const fullCmd = `${readCmd} | claude ${cliArgs.join(' ')}`;
 
     console.log(`[session] Spawning claude in ${workspacePath} (model: ${model}, budget: $${budget}${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
 
@@ -145,7 +157,7 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         console.log(`[session] Agent teams enabled for task ${task.id.substring(0, 8)} (team size: ${classification.teamSize})`);
     }
 
-    const proc = spawn('claude', args, {
+    const proc = spawn(fullCmd, [], {
         cwd: workspacePath,
         env: envVars,
         shell: true,
@@ -158,6 +170,30 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         let durationMs = 0;
         let isError = false;
         let lastActivity = Date.now();
+        let done = false;
+
+        // Poll ElizaOS for user input from Telegram topic replies
+        const inputPollInterval = setInterval(async () => {
+            if (done) return;
+            try {
+                const headers: Record<string, string> = {};
+                const apiKey = process.env.ITACHI_API_KEY;
+                if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+                const res = await fetch(`${config.apiUrl}/api/tasks/${task.id}/input`, { headers });
+                if (!res.ok) return;
+
+                const data = await res.json() as { inputs?: Array<{ text: string }> };
+                if (data.inputs && data.inputs.length > 0 && proc.stdin) {
+                    for (const input of data.inputs) {
+                        console.log(`[session:${task.id.substring(0, 8)}] Relaying user input: ${input.text.substring(0, 60)}`);
+                        proc.stdin.write(input.text + '\n');
+                    }
+                }
+            } catch {
+                // Non-fatal — input polling failure doesn't break the session
+            }
+        }, 3000);
 
         if (proc.stdout) {
             const rl = readline.createInterface({ input: proc.stdout });
@@ -172,29 +208,44 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
                     }
 
                     if (event.type === 'assistant' && event.message) {
-                        // Accumulate assistant text for result summary
-                        resultText = event.message.content;
-                        // Stream text to ElizaOS
-                        streamToEliza(task.id, {
-                            type: 'text',
-                            text: event.message.content,
-                        });
+                        // --verbose format: content can be string or array of blocks
+                        const content = event.message.content;
+                        const text = typeof content === 'string'
+                            ? content
+                            : Array.isArray(content)
+                                ? content.filter(b => b.type === 'text').map(b => b.text || '').join('\n')
+                                : '';
+                        if (text) {
+                            resultText = text;
+                            streamToEliza(task.id, { type: 'text', text });
+                        }
                     }
 
                     if (event.type === 'tool_use' && event.tool_use) {
-                        // Stream tool usage to ElizaOS
                         streamToEliza(task.id, {
                             type: 'tool_use',
                             tool_use: event.tool_use,
                         });
                     }
 
-                    if (event.type === 'result' && event.result) {
-                        resultText = event.result.text;
-                        sessionId = event.result.session_id || sessionId;
-                        costUsd = event.result.cost_usd || 0;
-                        durationMs = event.result.duration_ms || 0;
-                        isError = event.result.is_error || false;
+                    if (event.type === 'result') {
+                        // --verbose format: result is a string at top level, costs at top level
+                        // Legacy format: result is an object with .text, .cost_usd, etc.
+                        const r = event.result;
+                        if (typeof r === 'string') {
+                            resultText = r || resultText;
+                        } else if (r && typeof r === 'object') {
+                            resultText = r.text || resultText;
+                            costUsd = r.cost_usd || costUsd;
+                            durationMs = r.duration_ms || durationMs;
+                            isError = r.is_error ?? isError;
+                            sessionId = r.session_id || sessionId;
+                        }
+                        // Top-level fields (--verbose format)
+                        sessionId = event.session_id || sessionId;
+                        costUsd = event.total_cost_usd || costUsd;
+                        durationMs = event.duration_ms || durationMs;
+                        isError = event.is_error ?? isError;
                     }
                 } catch {
                     // Non-JSON line, ignore
@@ -210,6 +261,8 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         }
 
         proc.on('close', (code) => {
+            done = true;
+            clearInterval(inputPollInterval);
             const exitCode = code ?? 1;
             console.log(`[session] Claude exited with code ${exitCode} for task ${task.id.substring(0, 8)}`);
 
@@ -224,6 +277,8 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         });
 
         proc.on('error', (err) => {
+            done = true;
+            clearInterval(inputPollInterval);
             console.error(`[session] Spawn error for task ${task.id.substring(0, 8)}:`, err.message);
             resolve({
                 sessionId: null,
@@ -244,18 +299,24 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
     result: Promise<SessionResult>;
 } {
     const prompt = buildPrompt(task, classification);
+    const shortId = task.id.substring(0, 8);
 
-    const args = [
-        'exec',
-        '--full-auto',
-        '--json',
-        prompt,
-    ];
+    // Write prompt to temp file for same shell-quoting reasons as Claude
+    const promptFile = path.join(PROMPT_DIR, `codex-${shortId}.txt`);
+    fs.writeFileSync(promptFile, prompt, 'utf8');
 
+    const readCmd = process.platform === 'win32'
+        ? `type "${promptFile.replace(/\//g, '\\')}"`
+        : `cat "${promptFile}"`;
+
+    const codexArgs = ['exec', '--full-auto', '--json'];
     // Codex model override (gpt-5-codex is default, user can set via task.model)
     if (task.model && task.model.startsWith('gpt')) {
-        args.unshift('--model', task.model);
+        codexArgs.unshift('--model', task.model);
     }
+
+    // Pipe prompt as last positional arg via shell to avoid quoting issues
+    const fullCmd = `${readCmd} | codex ${codexArgs.join(' ')} -`;
 
     console.log(`[session] Spawning codex in ${workspacePath} (engine: codex${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
 
@@ -268,7 +329,7 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
         ITACHI_TASK_ID: task.id,
     };
 
-    const proc = spawn('codex', args, {
+    const proc = spawn(fullCmd, [], {
         cwd: workspacePath,
         env: envVars,
         shell: true,

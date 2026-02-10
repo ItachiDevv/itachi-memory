@@ -1,5 +1,11 @@
 import { execSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import type { Task, Config, TaskClassification, Engine } from './types';
+
+const PROMPT_DIR = path.join(os.tmpdir(), 'itachi-prompts');
+fs.mkdirSync(PROMPT_DIR, { recursive: true });
 
 const DIFFICULTY_MAP: Record<TaskClassification['difficulty'], {
     model: TaskClassification['suggestedModel'];
@@ -64,13 +70,26 @@ export async function classifyTask(task: Task, config: Config): Promise<TaskClas
     try {
         const prompt = `${CLASSIFICATION_PROMPT}\n\nProject: ${task.project}\nTask: ${task.description}`;
 
+        // Write prompt to temp file to avoid shell quoting issues on Windows
+        const promptFile = path.join(PROMPT_DIR, `classify-${task.id.substring(0, 8)}.txt`);
+        fs.writeFileSync(promptFile, prompt, 'utf8');
+
+        const readCmd = process.platform === 'win32'
+            ? `type "${promptFile.replace(/\//g, '\\')}"`
+            : `cat "${promptFile}"`;
+
         // Use Claude CLI with subscription auth (no API key needed)
+        // Pipe prompt from file to avoid cmd.exe mangling args with quotes/newlines
         const output = execSync(
-            `claude -p ${JSON.stringify(prompt)} --model haiku --max-turns 1 --output-format text`,
-            { encoding: 'utf8', timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] }
+            `${readCmd} | claude --model haiku --max-turns 1 --output-format text --dangerously-skip-permissions`,
+            { encoding: 'utf8', timeout: 30000 }
         ).trim();
 
-        const text = output;
+        // Strip markdown code fences if the model wrapped JSON in ```json ... ```
+        const text = output
+            .replace(/^```(?:json)?\s*\n?/gm, '')
+            .replace(/\n?```\s*$/gm, '')
+            .trim();
         const parsed = JSON.parse(text);
 
         const difficulty = parsed.difficulty as TaskClassification['difficulty'];

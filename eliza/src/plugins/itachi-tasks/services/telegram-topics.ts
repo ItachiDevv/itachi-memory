@@ -260,6 +260,7 @@ export class TelegramTopicsService extends Service {
 
   /**
    * Flush the buffer for a task to Telegram.
+   * Always sends a new message per flush to avoid overwriting previous output.
    */
   private async flushBuffer(taskId: string): Promise<void> {
     const buffer = this.buffers.get(taskId);
@@ -270,19 +271,9 @@ export class TelegramTopicsService extends Service {
     buffer.lastFlush = Date.now();
 
     try {
-      if (buffer.messageId) {
-        // Try to edit existing message
-        const ok = await this.updateTopicMessage(buffer.topicId, buffer.messageId, text);
-        if (!ok) {
-          // Edit failed (message too old?), send new
-          const msgId = await this.sendToTopic(buffer.topicId, text);
-          if (msgId) buffer.messageId = msgId;
-        }
-      } else {
-        // Send new message
-        const msgId = await this.sendToTopic(buffer.topicId, text);
-        if (msgId) buffer.messageId = msgId;
-      }
+      // Always send a new message — editing replaces content and loses previous output
+      const msgId = await this.sendToTopic(buffer.topicId, text);
+      if (msgId) buffer.messageId = msgId;
     } catch (error) {
       this._rt.logger.error(`flushBuffer error for ${taskId}:`, error instanceof Error ? error.message : String(error));
     }
