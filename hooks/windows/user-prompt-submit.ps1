@@ -8,7 +8,15 @@ if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    $BASE_API = if ($env:ITACHI_API_URL) { $env:ITACHI_API_URL } else { "https://itachisbrainserver.online" }
+    # Load ITACHI_API_URL: ~/.itachi-api-keys > env var > fallback
+    $BASE_API = $null
+    $apiKeysFile = Join-Path $env:USERPROFILE ".itachi-api-keys"
+    if (Test-Path $apiKeysFile) {
+        $match = Select-String -Path $apiKeysFile -Pattern "^ITACHI_API_URL=(.+)" | Select-Object -First 1
+        if ($match) { $BASE_API = $match.Matches.Groups[1].Value.Trim() }
+    }
+    if (-not $BASE_API -and $env:ITACHI_API_URL) { $BASE_API = $env:ITACHI_API_URL }
+    if (-not $BASE_API) { $BASE_API = "https://itachisbrainserver.online" }
     $MEMORY_API = "$BASE_API/api/memory"
     $authHeaders = @{}
     if ($env:ITACHI_API_KEY) { $authHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
