@@ -253,10 +253,21 @@ export const taskRoutes: Route[] = [
           return;
         }
 
-        await rt.sendMessageToTarget(
-          { source: 'telegram', channelId: String(chatId) },
-          { text: msg },
-        );
+        // Use Telegram Bot API directly (sendMessageToTarget handler registration is unreliable)
+        const botToken = rt.getSetting('TELEGRAM_BOT_TOKEN');
+        if (!botToken) {
+          res.status(400).json({ error: 'TELEGRAM_BOT_TOKEN not configured' });
+          return;
+        }
+        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'HTML' }),
+        });
+        if (!tgRes.ok) {
+          const tgErr = await tgRes.json().catch(() => ({}));
+          throw new Error(`Telegram API error: ${(tgErr as { description?: string }).description || tgRes.statusText}`);
+        }
 
         await taskService.updateTask(task.id, {
           notified_at: new Date().toISOString(),
