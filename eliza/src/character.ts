@@ -100,8 +100,8 @@ export const character: Character = {
     '@elizaos/plugin-telegram',
   ],
   settings: {
-    ANTHROPIC_LARGE_MODEL: 'claude-opus-4-5-20251101',
-    ANTHROPIC_SMALL_MODEL: 'claude-opus-4-5-20251101',
+    ANTHROPIC_LARGE_MODEL: 'claude-haiku-4-5-20251001',
+    ANTHROPIC_SMALL_MODEL: 'claude-haiku-4-5-20251001',
     ENABLE_EXTENDED_CAPABILITIES: true,
     SHOULD_RESPOND_BYPASS_SOURCES: 'telegram',
     secrets: {
