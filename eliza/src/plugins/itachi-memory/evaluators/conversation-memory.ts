@@ -1,20 +1,25 @@
 import { type Evaluator, type IAgentRuntime, type Memory, type State, ModelType } from '@elizaos/core';
 import { MemoryService } from '../services/memory-service.js';
 
+/**
+ * Combined conversation memory + fact extraction evaluator.
+ * Single LLM call per Telegram message scores significance, extracts summary,
+ * and pulls out concrete facts — replacing two separate evaluators.
+ */
 export const conversationMemoryEvaluator: Evaluator = {
   name: 'CONVERSATION_MEMORY',
-  description: 'Store Telegram conversation exchanges in project memory with significance scoring',
-  similes: ['remember conversation', 'store chat context'],
+  description: 'Score Telegram conversations for significance, extract summary and facts in a single LLM call',
+  similes: ['remember conversation', 'store chat context', 'extract facts'],
   alwaysRun: true,
 
   examples: [
     {
       prompt: 'User asked about PostgreSQL migration decision and Itachi confirmed the approach.',
-      response: 'Stored conversation memory with significance 0.85: decided to use PostgreSQL for new project.',
+      response: 'Stored conversation memory with significance 0.85 and extracted 1 fact.',
     },
     {
       prompt: 'User said "thanks" and Itachi replied "you\'re welcome".',
-      response: 'Stored conversation memory with significance 0.1: casual exchange.',
+      response: 'Stored conversation memory with significance 0.1, no facts extracted.',
     },
   ],
 
@@ -24,7 +29,6 @@ export const conversationMemoryEvaluator: Evaluator = {
     if (source !== 'telegram') return false;
 
     // Only trigger on the agent's own response (not user messages)
-    // In ElizaOS, the agent's entityId matches the runtime agent
     const isAgentMessage = message.entityId === message.agentId;
     if (!isAgentMessage) return false;
 
@@ -58,7 +62,8 @@ export const conversationMemoryEvaluator: Evaluator = {
 
       const currentMessage = message.content?.text || '';
 
-      const prompt = `You are analyzing a conversation between a user and Itachi (an AI project manager) to determine its long-term significance and extract a summary.
+      // Single LLM call: significance + summary + facts
+      const prompt = `You are analyzing a conversation between a user and Itachi (an AI project manager).
 
 Recent conversation:
 ${context}
@@ -66,18 +71,27 @@ ${context}
 Current response:
 ${currentMessage}
 
-Score this exchange 0.0-1.0 for long-term significance:
-- 0.0-0.2: Greetings, thanks, acknowledgments, small talk
-- 0.3-0.5: General questions answered, status updates, minor clarifications
-- 0.6-0.8: Technical decisions, preferences expressed, important context shared
-- 0.9-1.0: Critical decisions, architectural choices, project pivots, explicit "remember this"
+Do TWO things:
+
+1. Score this exchange 0.0-1.0 for long-term significance:
+   - 0.0-0.2: Greetings, thanks, acknowledgments, small talk
+   - 0.3-0.5: General questions answered, status updates, minor clarifications
+   - 0.6-0.8: Technical decisions, preferences expressed, important context shared
+   - 0.9-1.0: Critical decisions, architectural choices, project pivots, explicit "remember this"
+
+2. Extract concrete, reusable facts (if any):
+   - Personal details (name, location, timezone, role, company)
+   - Preferences (tools, languages, frameworks, workflows)
+   - Project details (names, tech stack, architecture decisions)
+   - Decisions made or plans stated
+   Return empty array if no facts are present.
 
 Also extract:
 - A 1-2 sentence summary of the exchange
 - The project name if mentioned (or "general" if none)
 
 Respond ONLY with valid JSON, no markdown fences:
-{"significance": 0.0, "summary": "...", "project": "..."}`;
+{"significance": 0.0, "summary": "...", "project": "...", "facts": [{"fact": "...", "project": "..."}]}`;
 
       const result = await runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
@@ -85,7 +99,12 @@ Respond ONLY with valid JSON, no markdown fences:
       });
 
       const raw = typeof result === 'string' ? result : String(result);
-      let parsed: { significance: number; summary: string; project: string };
+      let parsed: {
+        significance: number;
+        summary: string;
+        project: string;
+        facts?: Array<{ fact: string; project?: string }>;
+      };
       try {
         parsed = JSON.parse(raw.trim());
       } catch {
@@ -98,6 +117,7 @@ Respond ONLY with valid JSON, no markdown fences:
       const significance = Math.max(0, Math.min(1, parsed.significance));
       const project = parsed.project || 'general';
 
+      // Store conversation memory
       await memoryService.storeMemory({
         project,
         category: 'conversation',
@@ -107,8 +127,18 @@ Respond ONLY with valid JSON, no markdown fences:
         metadata: { significance, source: 'telegram' },
       });
 
+      // Store extracted facts (deduped via storeFact)
+      let factsStored = 0;
+      if (Array.isArray(parsed.facts) && significance >= 0.3) {
+        for (const item of parsed.facts) {
+          if (!item.fact || item.fact.length < 5) continue;
+          const stored = await memoryService.storeFact(item.fact, item.project || project);
+          if (stored) factsStored++;
+        }
+      }
+
       runtime.logger.info(
-        `CONVERSATION_MEMORY: stored (significance=${significance.toFixed(2)}, project=${project})`
+        `CONVERSATION_MEMORY: stored (significance=${significance.toFixed(2)}, project=${project}, facts=${factsStored})`
       );
     } catch (error) {
       runtime.logger.error('CONVERSATION_MEMORY error:', error);

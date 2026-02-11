@@ -6,13 +6,13 @@ import { memoryStatsProvider } from './providers/memory-stats.js';
 import { conversationContextProvider } from './providers/conversation-context.js';
 import { factsContextProvider } from './providers/facts-context.js';
 import { conversationMemoryEvaluator } from './evaluators/conversation-memory.js';
-import { factExtractorEvaluator } from './evaluators/fact-extractor.js';
+// factExtractorEvaluator merged into conversationMemoryEvaluator (single LLM call)
 
 export const itachiMemoryPlugin: Plugin = {
   name: 'itachi-memory',
   description: 'Project memory storage, semantic search, and fact extraction for Itachi',
   actions: [storeMemoryAction],
-  evaluators: [conversationMemoryEvaluator, factExtractorEvaluator],
+  evaluators: [conversationMemoryEvaluator],
   providers: [factsContextProvider, recentMemoriesProvider, memoryStatsProvider, conversationContextProvider],
   services: [MemoryService],
 };

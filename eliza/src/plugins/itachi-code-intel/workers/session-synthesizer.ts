@@ -44,6 +44,20 @@ export const sessionSynthesizerWorker: TaskWorker = {
             .order('created_at', { ascending: true })
             .limit(50);
 
+          // Skip empty sessions — mark with placeholder to avoid re-processing
+          if (!edits || edits.length === 0) {
+            const zeroEmbedding = new Array(1536).fill(0);
+            await supabase
+              .from('session_summaries')
+              .update({
+                summary: 'Empty session — no edits recorded',
+                embedding: zeroEmbedding,
+              })
+              .eq('id', session.id);
+            runtime.logger.info(`[session-synthesizer] Skipped empty session ${session.session_id}`);
+            continue;
+          }
+
           const editSummary = (edits || []).map(e =>
             `- ${e.edit_type} ${e.file_path} (+${e.lines_added}/-${e.lines_removed})`
           ).join('\n');
@@ -146,7 +160,7 @@ export async function registerSessionSynthesizerTask(runtime: IAgentRuntime): Pr
       name: 'ITACHI_SESSION_SYNTHESIZER',
       worldId: runtime.agentId,
       metadata: {
-        updateInterval: 5 * 60 * 1000, // 5 minutes — check for unsummarized sessions
+        updateInterval: 30 * 60 * 1000, // 30 minutes — sessions complete infrequently
       },
       tags: ['repeat'],
     });
