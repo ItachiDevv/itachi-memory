@@ -102,10 +102,15 @@ async function runTask(task: Task): Promise<void> {
 
 let pollTimer: NodeJS.Timeout | null = null;
 
+let pollCount = 0;
 async function poll(): Promise<void> {
     if (activeSessions.size >= config.maxConcurrent) return;
 
     try {
+        pollCount++;
+        if (pollCount % 12 === 1) {
+            console.log(`[poll] Polling (machine: ${config.machineId}, active: ${activeSessions.size}/${config.maxConcurrent})`);
+        }
         const task = await claimNextTask(config.projectFilter, config.machineId);
         if (!task) return;
 

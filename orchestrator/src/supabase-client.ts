@@ -25,11 +25,12 @@ export async function claimNextTask(projectFilter?: string, machineId?: string):
     const { data, error } = await sb.rpc('claim_next_task', rpcParams);
 
     if (error) {
-        console.error('Error claiming task:', error.message);
+        console.error('[poll] Error claiming task:', error.message, error.details);
         return null;
     }
 
     if (!data || data.length === 0) return null;
+    console.log(`[poll] Claimed task ${(data[0] as Task).id.substring(0, 8)}`);
     return data[0] as Task;
 }
 
