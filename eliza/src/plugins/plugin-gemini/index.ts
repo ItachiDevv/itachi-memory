@@ -5,12 +5,18 @@ import { generateText } from 'ai';
 /**
  * Itachi Gemini Plugin — routes model calls to Gemini.
  *
- * TEXT_SMALL + OBJECT_SMALL: Always routed to Gemini Flash (priority 10 > Anthropic 0).
- * TEXT_LARGE: Only routed to Gemini Pro when USE_GEMINI_LARGE=true (env var toggle).
- *             Default: off (Anthropic Sonnet handles conversation).
+ * TEXT_SMALL + OBJECT_SMALL: Routed to Gemini Flash when GEMINI_API_KEY is set.
+ * TEXT_LARGE: Only routed to Gemini Pro when USE_GEMINI_LARGE=true.
  *
- * Fallback: If GEMINI_API_KEY is missing, all handlers throw → ElizaOS falls back to Anthropic.
+ * IMPORTANT: ElizaOS does NOT catch errors from model handlers — a throw crashes
+ * the entire request with no fallback to lower-priority providers. This plugin uses
+ * a getter on `models` that returns an empty map when disabled, so handlers are
+ * never registered and Anthropic (priority 0) handles everything.
  */
+
+// Module-level flags set during init — controls whether handlers are active
+let geminiEnabled = false;
+let geminiLargeEnabled = false;
 
 function getApiKey(runtime: IAgentRuntime): string {
   return runtime.getSetting('GEMINI_API_KEY') ?? process.env.GEMINI_API_KEY ?? '';
@@ -121,7 +127,6 @@ async function handleTextLarge(
     temperature,
     maxOutputTokens: maxTokens,
     stopSequences,
-    // Allow thinking for conversation (Pro) but cap it to not consume all output tokens
     providerOptions: {
       google: { thinkingConfig: { thinkingBudget: 4096 } },
     },
@@ -145,32 +150,71 @@ export const itachiGeminiPlugin: Plugin = {
   async init(_config, runtime) {
     const apiKey = getApiKey(runtime);
     if (!apiKey) {
-      logger.warn('[Gemini] GEMINI_API_KEY not set — Gemini plugin disabled, falling back to Anthropic');
+      logger.warn('[Gemini] GEMINI_API_KEY not set — Gemini plugin disabled, Anthropic handles all models');
+      geminiEnabled = false;
       return;
     }
-    const largeEnabled = isLargeEnabled(runtime);
-    logger.info(`[Gemini] Plugin initialized — TEXT_SMALL → ${getSmallModel(runtime)}, TEXT_LARGE → ${largeEnabled ? getLargeModel(runtime) : 'Anthropic (toggle off)'}`);
+
+    // Quick validation: try creating a client to ensure key format is valid
+    try {
+      createGeminiClient(runtime);
+      geminiEnabled = true;
+    } catch (err) {
+      logger.error('[Gemini] Failed to create client — plugin disabled:', err instanceof Error ? err.message : String(err));
+      geminiEnabled = false;
+      geminiLargeEnabled = false;
+      return;
+    }
+
+    geminiLargeEnabled = isLargeEnabled(runtime);
+    logger.info(`[Gemini] Plugin active — TEXT_SMALL → ${getSmallModel(runtime)}, TEXT_LARGE → ${geminiLargeEnabled ? getLargeModel(runtime) : 'Anthropic (toggle off)'}`);
   },
 
-  models: {
-    [ModelType.TEXT_SMALL]: async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
-      const apiKey = getApiKey(runtime);
-      if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
-      return handleTextSmall(runtime, params as Parameters<typeof handleTextSmall>[1]);
-    },
-    [ModelType.OBJECT_SMALL]: async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
-      const apiKey = getApiKey(runtime);
-      if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
-      return handleObjectSmall(runtime, params as Parameters<typeof handleObjectSmall>[1]);
-    },
-    [ModelType.TEXT_LARGE]: async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
-      // Only intercept if toggle is enabled; otherwise throw to fall back to Anthropic
-      if (!isLargeEnabled(runtime)) {
-        throw new Error('USE_GEMINI_LARGE not enabled — falling back to Anthropic');
-      }
-      const apiKey = getApiKey(runtime);
-      if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
-      return handleTextLarge(runtime, params as Parameters<typeof handleTextLarge>[1]);
-    },
+  // Models are always registered, but handlers check geminiEnabled flag.
+  // When disabled, they throw immediately — but since Gemini has priority 10,
+  // we need to NOT register when disabled so Anthropic (priority 0) handles it.
+  //
+  // Solution: Register handlers that are no-ops when disabled.
+  // Since ElizaOS doesn't support conditional registration, we use a getter pattern.
+  get models() {
+    // This getter is evaluated AFTER init() runs (ElizaOS calls init first, then reads models).
+    // If Gemini is disabled (no API key), return empty → Anthropic handles everything.
+    if (!geminiEnabled) {
+      return {};
+    }
+
+    const handlers: Record<string, (runtime: IAgentRuntime, params: Record<string, unknown>) => Promise<unknown>> = {
+      [ModelType.TEXT_SMALL]: async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
+        try {
+          return await handleTextSmall(runtime, params as Parameters<typeof handleTextSmall>[1]);
+        } catch (err) {
+          logger.error(`[Gemini] TEXT_SMALL error: ${err instanceof Error ? err.message : String(err)}`);
+          throw err;
+        }
+      },
+      [ModelType.OBJECT_SMALL]: async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
+        try {
+          return await handleObjectSmall(runtime, params as Parameters<typeof handleObjectSmall>[1]);
+        } catch (err) {
+          logger.error(`[Gemini] OBJECT_SMALL error: ${err instanceof Error ? err.message : String(err)}`);
+          throw err;
+        }
+      },
+    };
+
+    // Only register TEXT_LARGE handler when toggle is ON.
+    // If not registered, Anthropic (priority 0) handles conversation — no crash.
+    if (geminiLargeEnabled) {
+      handlers[ModelType.TEXT_LARGE] = async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
+        try {
+          return await handleTextLarge(runtime, params as Parameters<typeof handleTextLarge>[1]);
+        } catch (err) {
+          logger.error(`[Gemini] TEXT_LARGE error: ${err instanceof Error ? err.message : String(err)}`);
+          throw err;
+        }
+      };
+    }
+
+    return handlers;
   },
 };
