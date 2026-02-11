@@ -23,7 +23,7 @@ function getApiKey(runtime: IAgentRuntime): string {
 }
 
 function getSmallModel(runtime: IAgentRuntime): string {
-  return runtime.getSetting('GEMINI_SMALL_MODEL') ?? process.env.GEMINI_SMALL_MODEL ?? 'gemini-2.5-flash';
+  return runtime.getSetting('GEMINI_SMALL_MODEL') ?? process.env.GEMINI_SMALL_MODEL ?? 'gemini-3-flash-preview';
 }
 
 function getLargeModel(runtime: IAgentRuntime): string {

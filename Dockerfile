@@ -62,6 +62,6 @@ ENV ITACHI_WORKSPACE_DIR=/root/itachi-workspaces
 ENV ANTHROPIC_LARGE_MODEL=claude-sonnet-4-5-20250929
 ENV ANTHROPIC_SMALL_MODEL=claude-haiku-4-5-20251001
 # Gemini Flash handles TEXT_SMALL/OBJECT_SMALL (evaluators, synthesizers, analyzers)
-ENV GEMINI_SMALL_MODEL=gemini-2.5-flash
+ENV GEMINI_SMALL_MODEL=gemini-3-flash-preview
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
