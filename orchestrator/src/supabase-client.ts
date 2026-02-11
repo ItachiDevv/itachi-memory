@@ -22,10 +22,12 @@ export async function claimNextTask(projectFilter?: string, machineId?: string):
     if (projectFilter) {
         rpcParams.p_project = projectFilter;
     }
+    console.log(`[poll] RPC params:`, JSON.stringify(rpcParams));
     const { data, error } = await sb.rpc('claim_next_task', rpcParams);
+    console.log(`[poll] RPC result: error=${error?.message || 'none'}, rows=${data?.length ?? 'null'}`);
 
     if (error) {
-        console.error('[poll] Error claiming task:', error.message, error.details);
+        console.error('[poll] Error claiming task:', error.message, error.details, error.hint);
         return null;
     }
 
