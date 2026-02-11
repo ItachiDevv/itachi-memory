@@ -81,7 +81,7 @@ export async function classifyTask(task: Task, config: Config): Promise<TaskClas
         // Use Claude CLI with subscription auth (no API key needed)
         // Pipe prompt from file to avoid cmd.exe mangling args with quotes/newlines
         const output = execSync(
-            `${readCmd} | claude --model haiku --max-turns 1 --output-format text --dangerously-skip-permissions`,
+            `${readCmd} | claude --model sonnet --max-turns 1 --output-format text --dangerously-skip-permissions`,
             { encoding: 'utf8', timeout: 30000 }
         ).trim();
 
