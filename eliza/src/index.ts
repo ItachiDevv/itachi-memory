@@ -4,6 +4,7 @@ import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
 import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
+import { itachiGeminiPlugin } from './plugins/plugin-gemini/index.js';
 import {
   itachiCodeIntelPlugin,
   editAnalyzerWorker, registerEditAnalyzerTask,
@@ -48,6 +49,7 @@ function scheduleWorkers(runtime: IAgentRuntime, workers: WorkerDef[]): void {
 const agent: ProjectAgent = {
   character,
   plugins: [
+    itachiGeminiPlugin,
     itachiMemoryPlugin,
     itachiTasksPlugin,
     itachiSyncPlugin,
@@ -94,8 +96,8 @@ const agent: ProjectAgent = {
       // Code-intel: edit analyzer (15m, start after 60s)
       { name: 'edit-analyzer', intervalMs: 900_000, delayMs: 60_000,
         execute: (rt) => editAnalyzerWorker.execute(rt, {}, { name: 'ITACHI_EDIT_ANALYZER', tags: [], description: '' }) },
-      // Code-intel: session synthesizer (5m, start after 45s)
-      { name: 'session-synthesizer', intervalMs: 300_000, delayMs: 45_000,
+      // Code-intel: session synthesizer (30m, start after 45s)
+      { name: 'session-synthesizer', intervalMs: 1_800_000, delayMs: 45_000,
         execute: (rt) => sessionSynthesizerWorker.execute(rt, {}, { name: 'ITACHI_SESSION_SYNTHESIZER', tags: [], description: '' }) },
       // Code-intel: repo expertise (24h, start after 2m)
       { name: 'repo-expertise', intervalMs: 86_400_000, delayMs: 120_000,

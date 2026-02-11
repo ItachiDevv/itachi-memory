@@ -86,12 +86,16 @@ Do TWO things:
    - Decisions made or plans stated
    Return empty array if no facts are present.
 
+3. For each fact, classify it as "identity" or "fact":
+   - "identity": Core personal attributes, relationship dynamics, personality traits, communication style, deeply held preferences, life details — things that define WHO the user is and how you relate to them. These persist forever.
+   - "fact": Project-specific details, technical decisions, temporary preferences, status updates — things that may change over time.
+
 Also extract:
 - A 1-2 sentence summary of the exchange
 - The project name if mentioned (or "general" if none)
 
 Respond ONLY with valid JSON, no markdown fences:
-{"significance": 0.0, "summary": "...", "project": "...", "facts": [{"fact": "...", "project": "..."}]}`;
+{"significance": 0.0, "summary": "...", "project": "...", "facts": [{"fact": "...", "project": "...", "tier": "identity|fact"}]}`;
 
       const result = await runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
@@ -103,7 +107,7 @@ Respond ONLY with valid JSON, no markdown fences:
         significance: number;
         summary: string;
         project: string;
-        facts?: Array<{ fact: string; project?: string }>;
+        facts?: Array<{ fact: string; project?: string; tier?: string }>;
       };
       try {
         parsed = JSON.parse(raw.trim());
@@ -129,16 +133,22 @@ Respond ONLY with valid JSON, no markdown fences:
 
       // Store extracted facts (deduped via storeFact)
       let factsStored = 0;
+      let identityStored = 0;
       if (Array.isArray(parsed.facts) && significance >= 0.3) {
         for (const item of parsed.facts) {
           if (!item.fact || item.fact.length < 5) continue;
-          const stored = await memoryService.storeFact(item.fact, item.project || project);
-          if (stored) factsStored++;
+          // Use LLM-classified tier, or auto-promote if significance >= 0.9
+          const tier = item.tier === 'identity' || significance >= 0.9 ? 'identity' : 'fact';
+          const stored = await memoryService.storeFact(item.fact, item.project || project, tier);
+          if (stored) {
+            if (tier === 'identity') identityStored++;
+            else factsStored++;
+          }
         }
       }
 
       runtime.logger.info(
-        `CONVERSATION_MEMORY: stored (significance=${significance.toFixed(2)}, project=${project}, facts=${factsStored})`
+        `CONVERSATION_MEMORY: stored (significance=${significance.toFixed(2)}, project=${project}, facts=${factsStored}, identity=${identityStored})`
       );
     } catch (error) {
       runtime.logger.error('CONVERSATION_MEMORY error:', error);

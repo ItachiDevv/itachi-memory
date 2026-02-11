@@ -18,32 +18,44 @@ export const factsContextProvider: Provider = {
 
       const messageText = message.content?.text || '';
 
-      // Fetch relevant facts (semantic search) + recent facts (time-based) in parallel
-      const [relevant, recent] = await Promise.all([
+      // Fetch identity facts (permanent, always injected) + relevant + recent in parallel
+      const [identity, relevant, recent] = await Promise.all([
+        fetchIdentityFacts(memoryService, 20),
         messageText.length > 10
           ? memoryService.searchMemories(messageText, undefined, 8, undefined, 'fact')
           : Promise.resolve([]),
         fetchRecentFacts(memoryService, 10),
       ]);
 
-      // Deduplicate by summary text
+      // Build output: identity first (always present), then contextual facts
       const seen = new Set<string>();
-      const allFacts: Array<{ summary: string; project: string }> = [];
+      const identityFacts: Array<{ summary: string; project: string }> = [];
+      const contextFacts: Array<{ summary: string; project: string }> = [];
 
+      // Identity tier: permanent core facts about the user
+      for (const m of identity) {
+        if (!seen.has(m.summary)) {
+          seen.add(m.summary);
+          identityFacts.push({ summary: m.summary, project: m.project });
+        }
+      }
+
+      // Contextual tier: semantic search + recent time-windowed facts
       for (const m of relevant) {
         if (!seen.has(m.summary)) {
           seen.add(m.summary);
-          allFacts.push({ summary: m.summary, project: m.project });
+          contextFacts.push({ summary: m.summary, project: m.project });
         }
       }
       for (const m of recent) {
         if (!seen.has(m.summary)) {
           seen.add(m.summary);
-          allFacts.push({ summary: m.summary, project: m.project });
+          contextFacts.push({ summary: m.summary, project: m.project });
         }
       }
 
-      if (allFacts.length === 0) {
+      const totalCount = identityFacts.length + contextFacts.length;
+      if (totalCount === 0) {
         return {
           text: '## Known Facts & Preferences\nNo stored facts yet.',
           values: { factCount: '0' },
@@ -51,15 +63,27 @@ export const factsContextProvider: Provider = {
         };
       }
 
-      const parts = ['## Known Facts & Preferences'];
-      for (const f of allFacts) {
-        parts.push(`- ${f.summary}${f.project !== 'general' ? ` (${f.project})` : ''}`);
+      const parts: string[] = [];
+
+      if (identityFacts.length > 0) {
+        parts.push('## Core Identity & Relationship');
+        parts.push('These are permanent facts about the user and your relationship:');
+        for (const f of identityFacts) {
+          parts.push(`- ${f.summary}`);
+        }
+      }
+
+      if (contextFacts.length > 0) {
+        parts.push('## Known Facts & Preferences');
+        for (const f of contextFacts) {
+          parts.push(`- ${f.summary}${f.project !== 'general' ? ` (${f.project})` : ''}`);
+        }
       }
 
       return {
         text: parts.join('\n'),
-        values: { factCount: String(allFacts.length) },
-        data: { facts: allFacts },
+        values: { factCount: String(totalCount) },
+        data: { identity: identityFacts, facts: contextFacts },
       };
     } catch (error) {
       runtime.logger.error('factsContextProvider error:', error);
@@ -67,6 +91,24 @@ export const factsContextProvider: Provider = {
     }
   },
 };
+
+/** Fetch permanent identity facts — no time window, always injected */
+async function fetchIdentityFacts(
+  memoryService: MemoryService,
+  limit: number
+): Promise<Array<{ summary: string; project: string }>> {
+  const supabase = memoryService.getSupabase();
+
+  const { data, error } = await supabase
+    .from('itachi_memories')
+    .select('summary, project')
+    .eq('category', 'identity')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error || !data) return [];
+  return data as Array<{ summary: string; project: string }>;
+}
 
 async function fetchRecentFacts(
   memoryService: MemoryService,

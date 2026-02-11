@@ -102,6 +102,7 @@ export const character: Character = {
   settings: {
     ANTHROPIC_LARGE_MODEL: 'claude-sonnet-4-5-20250929',
     ANTHROPIC_SMALL_MODEL: 'claude-haiku-4-5-20251001',
+    GEMINI_SMALL_MODEL: 'gemini-2.5-flash-preview-05-20',
     ENABLE_EXTENDED_CAPABILITIES: true,
     SHOULD_RESPOND_BYPASS_SOURCES: 'telegram',
     secrets: {
@@ -116,6 +117,7 @@ export const character: Character = {
       ITACHI_ALLOWED_USERS: process.env.ITACHI_ALLOWED_USERS ?? '',
       ITACHI_BOOTSTRAP_CONFIG: process.env.ITACHI_BOOTSTRAP_CONFIG ?? '',
       ITACHI_BOOTSTRAP_SALT: process.env.ITACHI_BOOTSTRAP_SALT ?? '',
+      GEMINI_API_KEY: loadCredential('GEMINI_API_KEY', '.itachi-api-keys', /GEMINI_API_KEY=(.+)/),
     },
   },
 };

@@ -193,31 +193,44 @@ export class MemoryService extends Service {
     return { total: rows.length, byCategory, topFiles, dateRange: { oldest, newest } };
   }
 
-  /** Store a fact extracted from conversation (with deduplication) */
+  /** Store a fact extracted from conversation (with deduplication).
+   *  category defaults to 'fact'; use 'identity' for permanent core facts. */
   async storeFact(
     fact: string,
-    project: string
+    project: string,
+    category: 'fact' | 'identity' = 'fact'
   ): Promise<ItachiMemory | null> {
     const embedding = await this.getEmbedding(fact);
 
-    // Dedup: skip if very similar fact exists
-    const { data: existing } = await this.supabase.rpc('match_memories', {
-      query_embedding: embedding,
-      match_project: null,
-      match_category: 'fact',
-      match_branch: null,
-      match_limit: 1,
-    });
+    // Dedup: skip if very similar fact/identity exists in either category
+    for (const cat of ['fact', 'identity'] as const) {
+      const { data: existing } = await this.supabase.rpc('match_memories', {
+        query_embedding: embedding,
+        match_project: null,
+        match_category: cat,
+        match_branch: null,
+        match_limit: 1,
+      });
 
-    if (existing?.length > 0 && existing[0].similarity > 0.92) {
-      return null; // duplicate
+      if (existing?.length > 0 && existing[0].similarity > 0.92) {
+        // If a fact exists but we're upgrading to identity, promote it
+        if (cat === 'fact' && category === 'identity') {
+          await this.supabase
+            .from('itachi_memories')
+            .update({ category: 'identity' })
+            .eq('id', existing[0].id);
+          this.runtime.logger.info(`[memory] Promoted fact to identity: ${fact.slice(0, 60)}`);
+          return existing[0] as ItachiMemory;
+        }
+        return null; // duplicate
+      }
     }
 
     const { data, error } = await this.supabase
       .from('itachi_memories')
       .insert({
         project: project || 'general',
-        category: 'fact',
+        category,
         content: fact,
         summary: fact,
         files: [],

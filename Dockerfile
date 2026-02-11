@@ -58,8 +58,10 @@ EXPOSE 3001
 ENV NODE_ENV=production
 # Default orchestrator workspace inside container
 ENV ITACHI_WORKSPACE_DIR=/root/itachi-workspaces
-# Telegram bot: Sonnet 4.5 for conversation (personality), Haiku 4.5 for background workers
+# Telegram bot: Sonnet 4.5 for conversation, Gemini Flash for background workers
 ENV ANTHROPIC_LARGE_MODEL=claude-sonnet-4-5-20250929
 ENV ANTHROPIC_SMALL_MODEL=claude-haiku-4-5-20251001
+# Gemini Flash handles TEXT_SMALL/OBJECT_SMALL (evaluators, synthesizers, analyzers)
+ENV GEMINI_SMALL_MODEL=gemini-2.5-flash-preview-05-20
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
