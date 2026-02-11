@@ -143,6 +143,9 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
     console.log(`[session] Spawning claude in ${workspacePath} (model: ${model}, budget: $${budget}${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
 
     const apiKeys = loadApiKeys();
+    // Don't pass ANTHROPIC_API_KEY to Claude CLI — it should use Max subscription,
+    // not API billing. The task classifier reads it from process.env separately.
+    delete apiKeys.ANTHROPIC_API_KEY;
 
     const envVars: Record<string, string> = {
         ...process.env as Record<string, string>,
@@ -150,6 +153,8 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         ITACHI_ENABLED: '1',
         ITACHI_TASK_ID: task.id,
     };
+    // Ensure ANTHROPIC_API_KEY is not in the CLI env (may come from process.env too)
+    delete envVars.ANTHROPIC_API_KEY;
 
     // Enable agent teams for major tasks
     if (classification?.useAgentTeams) {
@@ -321,6 +326,8 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
     console.log(`[session] Spawning codex in ${workspacePath} (engine: codex${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
 
     const apiKeys = loadApiKeys();
+    // Don't pass ANTHROPIC_API_KEY to Codex CLI — same reason as Claude CLI
+    delete apiKeys.ANTHROPIC_API_KEY;
 
     const envVars: Record<string, string> = {
         ...process.env as Record<string, string>,
@@ -328,6 +335,7 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
         ITACHI_ENABLED: '1',
         ITACHI_TASK_ID: task.id,
     };
+    delete envVars.ANTHROPIC_API_KEY;
 
     const proc = spawn(fullCmd, [], {
         cwd: workspacePath,
