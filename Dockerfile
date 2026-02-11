@@ -58,8 +58,8 @@ EXPOSE 3001
 ENV NODE_ENV=production
 # Default orchestrator workspace inside container
 ENV ITACHI_WORKSPACE_DIR=/root/itachi-workspaces
-# Telegram bot model — Haiku 4.5 for cost efficiency (task manager only)
-ENV ANTHROPIC_LARGE_MODEL=claude-haiku-4-5-20251001
+# Telegram bot: Sonnet 4.5 for conversation (personality), Haiku 4.5 for background workers
+ENV ANTHROPIC_LARGE_MODEL=claude-sonnet-4-5-20250929
 ENV ANTHROPIC_SMALL_MODEL=claude-haiku-4-5-20251001
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
