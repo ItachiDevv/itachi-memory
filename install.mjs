@@ -503,6 +503,13 @@ function step7_configureSettings() {
     cwd: join(__dirname, 'mcp').replace(/\\/g, '/'),
   };
 
+  // Claude Code settings
+  settings.alwaysThinkingEnabled = true;
+  if (!settings.permissions) settings.permissions = {};
+  settings.permissions.defaultMode = 'acceptEdits';
+  if (!settings.env) settings.env = {};
+  settings.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
+
   // Atomic write: write to tmp then rename
   const tmpPath = settingsPath + '.tmp';
   writeFileSync(tmpPath, JSON.stringify(settings, null, 2));
