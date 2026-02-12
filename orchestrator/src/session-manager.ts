@@ -119,16 +119,7 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         ? classification.suggestedModel
         : (task.model || config.defaultModel);
 
-    // Write prompt to temp file — avoids shell quoting issues with newlines/quotes on Windows
     const shortId = task.id.substring(0, 8);
-    const promptFile = path.join(PROMPT_DIR, `${shortId}.txt`);
-    fs.writeFileSync(promptFile, prompt, 'utf8');
-
-    // Build shell command string: read prompt from file, pipe to claude
-    // This avoids embedding the prompt in command-line args (which cmd.exe mangles)
-    const readCmd = process.platform === 'win32'
-        ? `type "${promptFile.replace(/\//g, '\\')}"`
-        : `cat "${promptFile}"`;
 
     const cliArgs = [
         '--dangerously-skip-permissions',
@@ -138,7 +129,7 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         '--model', model,
     ];
 
-    const fullCmd = `${readCmd} | claude ${cliArgs.join(' ')}`;
+    const fullCmd = `claude ${cliArgs.join(' ')}`;
 
     console.log(`[session] Spawning claude in ${workspacePath} (model: ${model}, budget: $${budget}${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
 
@@ -167,6 +158,12 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         env: envVars,
         shell: true,
     });
+
+    // Write prompt directly to stdin (instead of piping from file) so stdin stays
+    // open for the input relay to forward Telegram replies mid-session.
+    // Flatten to single line — Claude CLI treats each Enter as a message submit.
+    const singleLinePrompt = prompt.replace(/\n+/g, ' ').trim();
+    proc.stdin?.write(singleLinePrompt + '\n');
 
     const resultPromise = new Promise<SessionResult>((resolve) => {
         let sessionId: string | null = null;
