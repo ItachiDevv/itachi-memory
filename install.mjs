@@ -781,19 +781,21 @@ exec claude "\$@"
 
   const windowsCmd = `@echo off
 REM Itachi Memory System - Claude Code wrapper
+
+:: Shortcut flags — checked BEFORE loading keys to avoid for/f parsing issues
+if "%~1"=="--cds" ( claude --continue --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
+if "%~1"=="--c"   ( claude --continue %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
+if "%~1"=="--ds"  ( claude --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
+if "%~1"=="clear-failed" ( node "%~dp0..\\orchestrator\\scripts\\clear-tasks.js" failed & goto :eof )
+if "%~1"=="clear-done"   ( node "%~dp0..\\orchestrator\\scripts\\clear-tasks.js" completed & goto :eof )
+
+:: Load env vars for default passthrough
 set ITACHI_ENABLED=1
 set "ITACHI_KEYS_FILE=%USERPROFILE%\\.itachi-api-keys"
 if exist "%ITACHI_KEYS_FILE%" (
     for /f "usebackq tokens=1,* delims==" %%a in ("%ITACHI_KEYS_FILE%") do set "%%a=%%b"
 )
 if not defined ITACHI_API_URL set "ITACHI_API_URL=${API_URL}"
-
-:: Shortcut flags
-if "%~1"=="--cds" ( claude --continue --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
-if "%~1"=="--c"   ( claude --continue %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
-if "%~1"=="--ds"  ( claude --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
-if "%~1"=="clear-failed" ( node "%~dp0..\\orchestrator\\scripts\\clear-tasks.js" failed & goto :eof )
-if "%~1"=="clear-done"   ( node "%~dp0..\\orchestrator\\scripts\\clear-tasks.js" completed & goto :eof )
 
 claude %*
 `;
@@ -811,10 +813,13 @@ if (Test-Path $keysFile) {
 if (-not $env:ITACHI_API_URL) { $env:ITACHI_API_URL = "${API_URL}" }
 
 # Shortcut flags
+$rest = @()
+if ($args.Length -gt 1) { $rest = $args[1..($args.Length-1)] }
+
 switch ($args[0]) {
-    '--cds' { claude --continue --dangerously-skip-permissions @($args[1..($args.Length-1)]); return }
-    '--c'   { claude --continue @($args[1..($args.Length-1)]); return }
-    '--ds'  { claude --dangerously-skip-permissions @($args[1..($args.Length-1)]); return }
+    '--cds' { claude --continue --dangerously-skip-permissions @rest; return }
+    '--c'   { claude --continue @rest; return }
+    '--ds'  { claude --dangerously-skip-permissions @rest; return }
     'clear-failed' { node (Join-Path $PSScriptRoot '..\\orchestrator\\scripts\\clear-tasks.js') failed; return }
     'clear-done'   { node (Join-Path $PSScriptRoot '..\\orchestrator\\scripts\\clear-tasks.js') completed; return }
 }
@@ -827,25 +832,37 @@ claude @args
   writeFileSync(join(binDir, 'itachi.ps1'), windowsPs1);
   if (PLATFORM !== 'windows') { try { chmodSync(join(binDir, 'itachi'), 0o755); } catch {} }
 
+  // Install to ~/.claude/ (always in PATH for itachi users)
+  try {
+    if (PLATFORM === 'windows') {
+      copyFileSync(join(binDir, 'itachi.cmd'), join(CLAUDE_DIR, 'itachi.cmd'));
+      copyFileSync(join(binDir, 'itachi.ps1'), join(CLAUDE_DIR, 'itachi.ps1'));
+    } else {
+      const target = join(CLAUDE_DIR, 'itachi');
+      copyFileSync(join(binDir, 'itachi'), target);
+      try { chmodSync(target, 0o755); } catch {}
+    }
+    log(`    Installed to ${CLAUDE_DIR}`, 'green');
+  } catch (e) {
+    log(`    Could not install to ${CLAUDE_DIR}: ${e.message}`, 'yellow');
+  }
+
+  // Also try npm global bin as fallback
   const globalBin = getNpmGlobalBin();
   try {
     if (PLATFORM === 'windows') {
       copyFileSync(join(binDir, 'itachi.cmd'), join(globalBin, 'itachi.cmd'));
+      copyFileSync(join(binDir, 'itachi.ps1'), join(globalBin, 'itachi.ps1'));
     } else {
       const target = join(globalBin, 'itachi');
       copyFileSync(join(binDir, 'itachi'), target);
       try { chmodSync(target, 0o755); } catch {}
     }
-    log(`    Installed to ${globalBin}`, 'green');
-    log('    Use "itachi" instead of "claude" for full system integration.', 'green');
+    log(`    Also installed to ${globalBin}`, 'green');
   } catch (e) {
     log(`    Could not install to ${globalBin}: ${e.message}`, 'yellow');
-    if (PLATFORM === 'windows') {
-      log(`    Copy "${join(binDir, 'itachi.cmd')}" to a directory in your PATH`, 'gray');
-    } else {
-      log(`    sudo cp "${join(binDir, 'itachi')}" /usr/local/bin/itachi`, 'gray');
-    }
   }
+  log('    Use "itachi" instead of "claude" for full system integration.', 'green');
 }
 
 // ── Full Mode: Orchestrator Setup ───────────────────────
