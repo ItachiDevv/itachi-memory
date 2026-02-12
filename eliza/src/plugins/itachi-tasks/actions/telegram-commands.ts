@@ -1,6 +1,7 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
+import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { syncGitHubRepos } from '../services/github-sync.js';
 
@@ -11,8 +12,8 @@ import { syncGitHubRepos } from '../services/github-sync.js';
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /recall, /repos, /machines, and /sync-repos Telegram commands',
-  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github'],
+  description: 'Handle /recall, /repos, /machines, /sync-repos, /close-done, and /close-failed Telegram commands',
+  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics'],
   examples: [
     [
       { name: 'user', content: { text: '/recall auth middleware changes' } },
@@ -45,7 +46,8 @@ export const telegramCommandsAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.trim() || '';
-    return text.startsWith('/recall ') || text === '/repos' || text === '/machines' || text === '/sync-repos';
+    return text.startsWith('/recall ') || text === '/repos' || text === '/machines' ||
+      text === '/sync-repos' || text === '/close-done' || text === '/close-failed';
   },
 
   handler: async (
@@ -76,6 +78,16 @@ export const telegramCommandsAction: Action = {
       // /sync-repos
       if (text === '/sync-repos') {
         return await handleSyncRepos(runtime, callback);
+      }
+
+      // /close-done
+      if (text === '/close-done') {
+        return await handleCloseTopics(runtime, 'completed', callback);
+      }
+
+      // /close-failed
+      if (text === '/close-failed') {
+        return await handleCloseTopics(runtime, 'failed', callback);
       }
 
       return { success: false, error: 'Unknown command' };
@@ -208,4 +220,45 @@ async function handleSyncRepos(
 
   if (callback) await callback({ text: response });
   return { success: true, data: result };
+}
+
+async function handleCloseTopics(
+  runtime: IAgentRuntime,
+  status: 'completed' | 'failed',
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  if (!taskService) {
+    if (callback) await callback({ text: 'Task service not available.' });
+    return { success: false, error: 'Task service not available' };
+  }
+
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!topicsService) {
+    if (callback) await callback({ text: 'Telegram topics service not available.' });
+    return { success: false, error: 'Topics service not available' };
+  }
+
+  // Get all tasks with the target status that have a topic
+  const tasks = await taskService.listTasks({ status, limit: 200 });
+  const withTopics = tasks.filter((t: any) => t.telegram_topic_id);
+
+  if (withTopics.length === 0) {
+    if (callback) await callback({ text: `No ${status} tasks with open topics.` });
+    return { success: true, data: { closed: 0 } };
+  }
+
+  if (callback) await callback({ text: `Closing ${withTopics.length} ${status} topic(s)...` });
+
+  let closed = 0;
+  const label = status === 'completed' ? '✅ DONE' : '❌ FAILED';
+  for (const task of withTopics) {
+    const topicId = (task as any).telegram_topic_id;
+    const shortId = task.id.substring(0, 8);
+    const ok = await topicsService.closeTopic(topicId, `${label} | ${shortId} | ${task.project}`);
+    if (ok) closed++;
+  }
+
+  if (callback) await callback({ text: `Closed ${closed}/${withTopics.length} ${status} topic(s).` });
+  return { success: true, data: { closed, total: withTopics.length } };
 }
