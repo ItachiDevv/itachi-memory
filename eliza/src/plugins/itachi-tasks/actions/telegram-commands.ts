@@ -12,7 +12,7 @@ import { syncGitHubRepos } from '../services/github-sync.js';
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /recall, /repos, /machines, /sync-repos, /close-done, and /close-failed Telegram commands',
+  description: 'Handle /recall, /repos, /machines, /sync_repos, /close_done, and /close_failed Telegram commands',
   similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics'],
   examples: [
     [
@@ -47,7 +47,9 @@ export const telegramCommandsAction: Action = {
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.trim() || '';
     return text.startsWith('/recall ') || text === '/repos' || text === '/machines' ||
-      text === '/sync-repos' || text === '/close-done' || text === '/close-failed';
+      text === '/sync-repos' || text === '/sync_repos' ||
+      text === '/close-done' || text === '/close_done' ||
+      text === '/close-failed' || text === '/close_failed';
   },
 
   handler: async (
@@ -75,18 +77,18 @@ export const telegramCommandsAction: Action = {
         return await handleMachines(runtime, callback);
       }
 
-      // /sync-repos
-      if (text === '/sync-repos') {
+      // /sync-repos or /sync_repos
+      if (text === '/sync-repos' || text === '/sync_repos') {
         return await handleSyncRepos(runtime, callback);
       }
 
-      // /close-done
-      if (text === '/close-done') {
+      // /close-done or /close_done
+      if (text === '/close-done' || text === '/close_done') {
         return await handleCloseTopics(runtime, 'completed', callback);
       }
 
-      // /close-failed
-      if (text === '/close-failed') {
+      // /close-failed or /close_failed
+      if (text === '/close-failed' || text === '/close_failed') {
         return await handleCloseTopics(runtime, 'failed', callback);
       }
 

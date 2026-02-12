@@ -41,5 +41,35 @@ export const itachiTasksPlugin: Plugin = {
       runtime.routes.push(route);
     }
     runtime.logger.info(`itachi-tasks: registered ${taskStreamRoutes.length + machineRoutes.length} routes at top level`);
+
+    // Register Telegram bot command menu
+    const botToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
+    if (botToken) {
+      const commands = [
+        { command: 'task', description: 'Create a coding task — /task <project> <description>' },
+        { command: 'status', description: 'Show task queue status' },
+        { command: 'cancel', description: 'Cancel a task — /cancel <id>' },
+        { command: 'recall', description: 'Search memories — /recall <query>' },
+        { command: 'repos', description: 'List registered repositories' },
+        { command: 'machines', description: 'Show orchestrator machines' },
+        { command: 'sync_repos', description: 'Sync GitHub repos into registry' },
+        { command: 'close_done', description: 'Close all completed task topics' },
+        { command: 'close_failed', description: 'Close all failed task topics' },
+        { command: 'remind', description: 'Set a reminder — /remind <time> <message>' },
+        { command: 'schedule', description: 'Schedule an action — /schedule <time> <action>' },
+        { command: 'reminders', description: 'List upcoming reminders & scheduled actions' },
+        { command: 'unremind', description: 'Cancel a reminder — /unremind <id>' },
+      ];
+      try {
+        await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ commands }),
+        });
+        runtime.logger.info(`itachi-tasks: registered ${commands.length} Telegram bot commands`);
+      } catch (err) {
+        runtime.logger.warn('itachi-tasks: failed to register Telegram commands:', err instanceof Error ? err.message : String(err));
+      }
+    }
   },
 };

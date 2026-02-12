@@ -1,40 +1,60 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
-import { ReminderService } from '../services/reminder-service.js';
+import { ReminderService, type ActionType } from '../services/reminder-service.js';
 
 /**
- * Handles /remind and /reminders Telegram commands.
+ * Handles reminders and scheduled actions via Telegram.
  *
- * Usage:
- *   /remind <time> <message>
+ * Reminders (text-only):
  *   /remind 9am go to the gym
  *   /remind tomorrow 3pm call dentist
  *   /remind daily 8:30am standup
- *   /remind weekdays 9am check emails
- *   /reminders              — list upcoming
+ *
+ * Scheduled actions:
+ *   /schedule daily 9am close-done
+ *   /schedule weekdays 8am close-failed
+ *   /schedule daily 6am sync-repos
+ *   /schedule in 2h recall auth middleware
+ *   /schedule tomorrow 9am recall <project>:<query>
+ *
+ * Management:
+ *   /reminders              — list all upcoming reminders & scheduled actions
  *   /unremind <id>          — cancel by short ID
  */
+
+const ACTION_MAP: Record<string, ActionType> = {
+  'close-done': 'close_done',
+  'close-failed': 'close_failed',
+  'sync-repos': 'sync_repos',
+  'recall': 'recall',
+};
+
 export const reminderCommandsAction: Action = {
   name: 'REMINDER_COMMANDS',
-  description: 'Create, list, and cancel reminders via Telegram',
-  similes: ['remind me', 'set reminder', 'create reminder', 'list reminders', 'cancel reminder', 'alarm', 'schedule reminder'],
+  description: 'Create, list, and cancel reminders and scheduled actions via Telegram',
+  similes: ['remind me', 'set reminder', 'create reminder', 'list reminders', 'cancel reminder', 'schedule action', 'schedule close', 'schedule sync'],
   examples: [
     [
       { name: 'user', content: { text: '/remind 9am go to the gym' } },
       { name: 'Itachi', content: { text: 'Reminder set for today at 9:00 AM: go to the gym' } },
     ],
     [
-      { name: 'user', content: { text: '/remind daily 8:30am morning standup' } },
-      { name: 'Itachi', content: { text: 'Recurring reminder set (daily) at 8:30 AM: morning standup' } },
+      { name: 'user', content: { text: '/schedule daily 9am close-done' } },
+      { name: 'Itachi', content: { text: 'Scheduled action set (daily) at 9:00 AM: close-done' } },
+    ],
+    [
+      { name: 'user', content: { text: '/schedule weekdays 8am close-failed' } },
+      { name: 'Itachi', content: { text: 'Scheduled action set (weekdays) at 8:00 AM: close-failed' } },
     ],
     [
       { name: 'user', content: { text: '/reminders' } },
-      { name: 'Itachi', content: { text: 'Upcoming reminders:\n1. [abc12345] Today 9:00 AM — go to the gym\n2. [def67890] Daily 8:30 AM — morning standup' } },
+      { name: 'Itachi', content: { text: 'Upcoming:\n1. [abc12345] Today 9:00 AM — go to the gym\n2. [def67890] Daily 9:00 AM [close_done] — close done topics' } },
     ],
   ],
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.trim() || '';
-    return text.startsWith('/remind ') || text === '/reminders' || text.startsWith('/unremind ');
+    return text.startsWith('/remind ') || text === '/reminders' ||
+      text.startsWith('/unremind ') || text.startsWith('/schedule ');
   },
 
   handler: async (
@@ -61,11 +81,15 @@ export const reminderCommandsAction: Action = {
         return await handleCancel(reminderService, text, callback);
       }
 
+      if (text.startsWith('/schedule ')) {
+        return await handleSchedule(reminderService, message, text, callback);
+      }
+
       if (text.startsWith('/remind ')) {
         return await handleCreate(reminderService, message, text, callback);
       }
 
-      return { success: false, error: 'Unknown reminder command' };
+      return { success: false, error: 'Unknown command' };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (callback) await callback({ text: `Error: ${msg}` });
@@ -73,6 +97,10 @@ export const reminderCommandsAction: Action = {
     }
   },
 };
+
+// ============================================================
+// /remind — text reminders
+// ============================================================
 
 async function handleCreate(
   service: ReminderService,
@@ -86,16 +114,13 @@ async function handleCreate(
     return { success: false, error: 'No input' };
   }
 
-  const parsed = parseReminderInput(input);
+  const parsed = parseTimeAndMessage(input);
   if (!parsed) {
     if (callback) await callback({ text: 'Could not parse time. Try:\n  /remind 9am message\n  /remind tomorrow 3pm message\n  /remind in 2h message\n  /remind daily 8:30am message' });
     return { success: false, error: 'Could not parse time' };
   }
 
-  const content = message.content as Record<string, unknown>;
-  const telegramChatId = (content.telegram_chat_id as number) || 0;
-  const telegramUserId = (content.telegram_user_id as number) || 0;
-
+  const { telegramChatId, telegramUserId } = extractTelegramIds(message);
   if (!telegramChatId) {
     if (callback) await callback({ text: 'Could not determine chat ID. Are you using this from Telegram?' });
     return { success: false, error: 'No chat ID' };
@@ -107,6 +132,7 @@ async function handleCreate(
     message: parsed.message,
     remind_at: parsed.remindAt,
     recurring: parsed.recurring,
+    action_type: 'message',
   });
 
   const timeStr = formatTime(parsed.remindAt);
@@ -115,33 +141,122 @@ async function handleCreate(
   return { success: true, data: { reminderId: reminder.id } };
 }
 
+// ============================================================
+// /schedule — scheduled actions
+// ============================================================
+
+async function handleSchedule(
+  service: ReminderService,
+  message: Memory,
+  text: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const input = text.substring('/schedule '.length).trim();
+  if (!input) {
+    if (callback) await callback({
+      text: 'Usage: /schedule [recurring] <time> <action>\n\nActions:\n  close-done — Close completed task topics\n  close-failed — Close failed task topics\n  sync-repos — Sync GitHub repos\n  recall <query> — Search memories\n\nExamples:\n  /schedule daily 9am close-done\n  /schedule weekdays 8am close-failed\n  /schedule in 2h sync-repos\n  /schedule daily 6am recall auth middleware',
+    });
+    return { success: false, error: 'No input' };
+  }
+
+  const parsed = parseTimeAndMessage(input);
+  if (!parsed) {
+    if (callback) await callback({ text: 'Could not parse time. Try: /schedule daily 9am close-done' });
+    return { success: false, error: 'Could not parse time' };
+  }
+
+  // Parse the action from the "message" portion
+  const { actionType, actionData, label } = parseActionFromMessage(parsed.message);
+
+  const { telegramChatId, telegramUserId } = extractTelegramIds(message);
+  if (!telegramChatId) {
+    if (callback) await callback({ text: 'Could not determine chat ID.' });
+    return { success: false, error: 'No chat ID' };
+  }
+
+  const item = await service.createReminder({
+    telegram_chat_id: telegramChatId,
+    telegram_user_id: telegramUserId,
+    message: label,
+    remind_at: parsed.remindAt,
+    recurring: parsed.recurring,
+    action_type: actionType,
+    action_data: actionData,
+  });
+
+  const timeStr = formatTime(parsed.remindAt);
+  const recurStr = parsed.recurring ? ` (${parsed.recurring})` : '';
+  const actionLabel = actionType !== 'message' ? ` [${actionType}]` : '';
+  if (callback) await callback({ text: `Scheduled${recurStr} at ${timeStr}${actionLabel}: ${label}` });
+  return { success: true, data: { itemId: item.id } };
+}
+
+function parseActionFromMessage(msg: string): { actionType: ActionType; actionData: Record<string, unknown>; label: string } {
+  const lower = msg.toLowerCase().trim();
+
+  // Check for known actions
+  for (const [keyword, actionType] of Object.entries(ACTION_MAP)) {
+    if (lower === keyword || lower.startsWith(keyword + ' ')) {
+      const rest = msg.substring(keyword.length).trim();
+
+      if (actionType === 'recall' && rest) {
+        // Parse recall query, optionally with project:query
+        let project: string | undefined;
+        let query = rest;
+        const colonIdx = rest.indexOf(':');
+        if (colonIdx > 0 && colonIdx < 30 && !rest.substring(0, colonIdx).includes(' ')) {
+          project = rest.substring(0, colonIdx);
+          query = rest.substring(colonIdx + 1).trim();
+        }
+        return {
+          actionType,
+          actionData: { query, ...(project ? { project } : {}) },
+          label: `recall: ${rest}`,
+        };
+      }
+
+      return { actionType, actionData: {}, label: keyword };
+    }
+  }
+
+  // Unknown — treat as a text reminder
+  return { actionType: 'message', actionData: {}, label: msg };
+}
+
+// ============================================================
+// /reminders — list all
+// ============================================================
+
 async function handleList(
   service: ReminderService,
   message: Memory,
   callback?: HandlerCallback
 ): Promise<ActionResult> {
-  const content = message.content as Record<string, unknown>;
-  const userId = (content.telegram_user_id as number) || 0;
+  const { telegramUserId } = extractTelegramIds(message);
+  const items = await service.listReminders(telegramUserId, 15);
 
-  const reminders = await service.listReminders(userId, 10);
-
-  if (reminders.length === 0) {
-    if (callback) await callback({ text: 'No upcoming reminders.' });
-    return { success: true, data: { reminders: [] } };
+  if (items.length === 0) {
+    if (callback) await callback({ text: 'No upcoming reminders or scheduled actions.' });
+    return { success: true, data: { items: [] } };
   }
 
-  let response = 'Upcoming reminders:\n\n';
-  reminders.forEach((r, i) => {
+  let response = 'Upcoming reminders & scheduled actions:\n\n';
+  items.forEach((r, i) => {
     const shortId = r.id.substring(0, 8);
     const time = formatTime(new Date(r.remind_at));
     const recur = r.recurring ? ` [${r.recurring}]` : '';
-    response += `${i + 1}. [${shortId}] ${time}${recur} — ${r.message}\n`;
+    const action = r.action_type !== 'message' ? ` {${r.action_type}}` : '';
+    response += `${i + 1}. [${shortId}] ${time}${recur}${action} — ${r.message}\n`;
   });
-  response += '\nCancel with: /unremind <id>';
+  response += '\nCancel: /unremind <id>';
 
   if (callback) await callback({ text: response });
-  return { success: true, data: { reminders } };
+  return { success: true, data: { items } };
 }
+
+// ============================================================
+// /unremind — cancel
+// ============================================================
 
 async function handleCancel(
   service: ReminderService,
@@ -155,21 +270,29 @@ async function handleCancel(
   }
 
   const ok = await service.cancelReminder(id);
-  if (callback) await callback({ text: ok ? `Reminder ${id.substring(0, 8)} cancelled.` : `Could not find reminder ${id.substring(0, 8)}.` });
+  if (callback) await callback({ text: ok ? `Cancelled ${id.substring(0, 8)}.` : `Could not find ${id.substring(0, 8)}.` });
   return { success: ok };
 }
 
 // ============================================================
-// Time parsing
+// Helpers
 // ============================================================
 
-interface ParsedReminder {
+function extractTelegramIds(message: Memory): { telegramChatId: number; telegramUserId: number } {
+  const content = message.content as Record<string, unknown>;
+  return {
+    telegramChatId: (content.telegram_chat_id as number) || 0,
+    telegramUserId: (content.telegram_user_id as number) || 0,
+  };
+}
+
+interface ParsedTimeMessage {
   remindAt: Date;
   message: string;
   recurring: 'daily' | 'weekly' | 'weekdays' | null;
 }
 
-function parseReminderInput(input: string): ParsedReminder | null {
+function parseTimeAndMessage(input: string): ParsedTimeMessage | null {
   let recurring: 'daily' | 'weekly' | 'weekdays' | null = null;
   let rest = input;
 
@@ -180,7 +303,7 @@ function parseReminderInput(input: string): ParsedReminder | null {
     rest = rest.substring(recurMatch[0].length);
   }
 
-  // Try "in Xh", "in Xm", "in X hours", "in X minutes"
+  // Try "in Xh/Xm"
   const relMatch = rest.match(/^in\s+(\d+)\s*(h|hr|hrs|hours?|m|min|mins|minutes?)\s+(.+)/i);
   if (relMatch) {
     const amount = parseInt(relMatch[1], 10);
@@ -209,7 +332,6 @@ function parseReminderInput(input: string): ParsedReminder | null {
   if (timeMatch) {
     const now = new Date();
     const remindAt = applyTime(now, timeMatch[1], timeMatch[2], timeMatch[3]);
-    // If time already passed today, push to tomorrow
     if (remindAt <= new Date()) {
       remindAt.setDate(remindAt.getDate() + 1);
     }

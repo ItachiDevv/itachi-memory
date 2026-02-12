@@ -1,20 +1,27 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-export interface Reminder {
+export type ActionType = 'message' | 'close_done' | 'close_failed' | 'sync_repos' | 'recall' | 'custom';
+
+export interface ScheduledItem {
   id: string;
   telegram_chat_id: number;
   telegram_user_id: number;
   message: string;
   remind_at: string;
   recurring: 'daily' | 'weekly' | 'weekdays' | null;
+  action_type: ActionType;
+  action_data: Record<string, unknown>;
   sent_at: string | null;
   created_at: string;
 }
 
+// Keep Reminder as alias for backward compat
+export type Reminder = ScheduledItem;
+
 export class ReminderService extends Service {
   static serviceType = 'itachi-reminders';
-  capabilityDescription = 'Scheduled reminders via Telegram';
+  capabilityDescription = 'Scheduled reminders and actions via Telegram';
 
   private supabase: SupabaseClient;
   private runtime: IAgentRuntime;
@@ -44,7 +51,9 @@ export class ReminderService extends Service {
     message: string;
     remind_at: Date;
     recurring?: 'daily' | 'weekly' | 'weekdays' | null;
-  }): Promise<Reminder> {
+    action_type?: ActionType;
+    action_data?: Record<string, unknown>;
+  }): Promise<ScheduledItem> {
     const { data, error } = await this.supabase
       .from('itachi_reminders')
       .insert({
@@ -53,16 +62,18 @@ export class ReminderService extends Service {
         message: opts.message,
         remind_at: opts.remind_at.toISOString(),
         recurring: opts.recurring || null,
+        action_type: opts.action_type || 'message',
+        action_data: opts.action_data || {},
       })
       .select()
       .single();
 
-    if (error) throw new Error(`Failed to create reminder: ${error.message}`);
-    return data as Reminder;
+    if (error) throw new Error(`Failed to create scheduled item: ${error.message}`);
+    return data as ScheduledItem;
   }
 
-  /** Get all unsent reminders that are due now or in the past. */
-  async getDueReminders(): Promise<Reminder[]> {
+  /** Get all unsent items that are due now or in the past. */
+  async getDueReminders(): Promise<ScheduledItem[]> {
     const { data, error } = await this.supabase
       .from('itachi_reminders')
       .select('*')
@@ -75,32 +86,32 @@ export class ReminderService extends Service {
       this.runtime.logger.error(`getDueReminders error: ${error.message}`);
       return [];
     }
-    return (data || []) as Reminder[];
+    return (data || []) as ScheduledItem[];
   }
 
-  /** Mark a reminder as sent. For recurring, schedule the next occurrence. */
-  async markSent(reminder: Reminder): Promise<void> {
-    // Mark current as sent
+  /** Mark as sent. For recurring items, schedule the next occurrence. */
+  async markSent(item: ScheduledItem): Promise<void> {
     await this.supabase
       .from('itachi_reminders')
       .update({ sent_at: new Date().toISOString() })
-      .eq('id', reminder.id);
+      .eq('id', item.id);
 
-    // If recurring, create next occurrence
-    if (reminder.recurring) {
-      const nextDate = this.computeNext(new Date(reminder.remind_at), reminder.recurring);
+    if (item.recurring) {
+      const nextDate = this.computeNext(new Date(item.remind_at), item.recurring);
       await this.createReminder({
-        telegram_chat_id: reminder.telegram_chat_id,
-        telegram_user_id: reminder.telegram_user_id,
-        message: reminder.message,
+        telegram_chat_id: item.telegram_chat_id,
+        telegram_user_id: item.telegram_user_id,
+        message: item.message,
         remind_at: nextDate,
-        recurring: reminder.recurring,
+        recurring: item.recurring,
+        action_type: item.action_type,
+        action_data: item.action_data,
       });
     }
   }
 
-  /** List upcoming (unsent) reminders for a user. */
-  async listReminders(telegramUserId: number, limit = 10): Promise<Reminder[]> {
+  /** List upcoming (unsent) items for a user. */
+  async listReminders(telegramUserId: number, limit = 10): Promise<ScheduledItem[]> {
     const { data, error } = await this.supabase
       .from('itachi_reminders')
       .select('*')
@@ -110,16 +121,35 @@ export class ReminderService extends Service {
       .limit(limit);
 
     if (error) return [];
-    return (data || []) as Reminder[];
+    return (data || []) as ScheduledItem[];
   }
 
-  /** Cancel a reminder by ID. */
+  /** Cancel by ID (full UUID or short prefix). */
   async cancelReminder(id: string): Promise<boolean> {
-    const { error } = await this.supabase
+    // Try exact match first
+    let { error } = await this.supabase
       .from('itachi_reminders')
       .delete()
       .eq('id', id);
-    return !error;
+
+    if (!error) return true;
+
+    // Try prefix match for short IDs
+    if (id.length < 36) {
+      const { data } = await this.supabase
+        .from('itachi_reminders')
+        .select('id')
+        .is('sent_at', null)
+        .like('id', `${id}%`)
+        .limit(1)
+        .single();
+
+      if (data) {
+        const result = await this.supabase.from('itachi_reminders').delete().eq('id', data.id);
+        return !result.error;
+      }
+    }
+    return false;
   }
 
   private computeNext(current: Date, recurring: string): Date {
@@ -132,7 +162,6 @@ export class ReminderService extends Service {
         next.setDate(next.getDate() + 7);
         break;
       case 'weekdays': {
-        // Advance to next weekday
         do {
           next.setDate(next.getDate() + 1);
         } while (next.getDay() === 0 || next.getDay() === 6);

@@ -45,7 +45,8 @@ export const topicReplyAction: Action = {
     if (text.startsWith('/task ') || text.startsWith('/cancel ') ||
         text.startsWith('/status') || text.startsWith('/queue') ||
         text.startsWith('/recall ') || text === '/repos' ||
-        text.startsWith('/remind') || text.startsWith('/unremind')) {
+        text.startsWith('/remind') || text.startsWith('/unremind') ||
+        text.startsWith('/schedule') || text.startsWith('/close-')) {
       return false;
     }
 
