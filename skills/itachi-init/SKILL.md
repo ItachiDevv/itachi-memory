@@ -12,11 +12,11 @@ Use this skill when the user runs /itachi-init to add memory system documentatio
 
 When the user runs /itachi-init:
 
-1. Check if .claude/CLAUDE.md exists in the current project directory
+1. Check if CLAUDE.md exists in the current project root directory (NOT .claude/CLAUDE.md — the file lives at the project root)
 2. If it does not exist, tell the user: "No CLAUDE.md found. Run /init first to generate project context, then run /itachi-init to add memory system docs."
 3. If it exists, check if it already contains the text "## Memory System"
 4. If it already contains "## Memory System", tell the user: "Memory system section already present in CLAUDE.md"
-5. If it does not contain "## Memory System", append the following section to the end of .claude/CLAUDE.md:
+5. If it does not contain "## Memory System", append the following section to the end of CLAUDE.md (in the project root):
 
 ---
 
@@ -50,30 +50,33 @@ To disable memory for this project, create a file called .no-memory in the proje
 
 6. After appending, register the project with the Itachi server so it appears in `/repos` and `/task`. Use Bash to run:
 
+First, load ITACHI_API_URL from the env file if it's not already set. Use Bash (works on all platforms since Claude Code uses bash):
+
 ```bash
+# Load ITACHI_API_URL from ~/.itachi-api-keys if not in environment
+if [ -z "$ITACHI_API_URL" ] && [ -f "$HOME/.itachi-api-keys" ]; then
+  ITACHI_API_URL=$(grep '^ITACHI_API_URL=' "$HOME/.itachi-api-keys" | cut -d= -f2-)
+fi
+# Fallback to orchestrator-env
+if [ -z "$ITACHI_API_URL" ] && [ -f "$HOME/.claude/orchestrator-env" ]; then
+  ITACHI_API_URL=$(grep '^ITACHI_API_URL=' "$HOME/.claude/orchestrator-env" | cut -d= -f2-)
+fi
+
 REPO_NAME="$(basename "$(pwd)")"
 REPO_URL="$(git remote get-url origin 2>/dev/null || echo "")"
-if [ -n "$REPO_URL" ]; then
-  curl -s -X POST $ITACHI_API_URL/api/repos/register \
-    -H "Content-Type: application/json" \
-    -d "{\"name\": \"$REPO_NAME\", \"repo_url\": \"$REPO_URL\"}"
+if [ -n "$ITACHI_API_URL" ]; then
+  if [ -n "$REPO_URL" ]; then
+    curl -sk -X POST "$ITACHI_API_URL/api/repos/register" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\": \"$REPO_NAME\", \"repo_url\": \"$REPO_URL\"}"
+  else
+    curl -sk -X POST "$ITACHI_API_URL/api/repos/register" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\": \"$REPO_NAME\"}"
+  fi
 else
-  curl -s -X POST $ITACHI_API_URL/api/repos/register \
-    -H "Content-Type: application/json" \
-    -d "{\"name\": \"$REPO_NAME\"}"
+  echo "Warning: ITACHI_API_URL not found, skipping repo registration"
 fi
-```
-
-On Windows (PowerShell), use the equivalent:
-
-```powershell
-$repoName = Split-Path -Leaf (Get-Location)
-$repoUrl = git remote get-url origin 2>$null
-if ($repoUrl) {
-  Invoke-RestMethod -Uri "$ITACHI_API_URL/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`",`"repo_url`":`"$repoUrl`"}"
-} else {
-  Invoke-RestMethod -Uri "$ITACHI_API_URL/api/repos/register" -Method Post -ContentType "application/json" -Body "{`"name`":`"$repoName`"}"
-}
 ```
 
 If the request fails (e.g. offline), continue — the registration is not blocking.

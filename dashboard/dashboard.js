@@ -7,7 +7,7 @@
   'use strict';
 
   // ── Configuration ─────────────────────────────────────────
-  // Priority: URL params > localStorage > window.__ITACHI_ENV__ > hardcoded
+  // Priority: URL params > window.__ITACHI_ENV__ (build-time) > hardcoded
   const HARDCODED_DEFAULTS = {
     apiUrl: 'https://itachisbrainserver.online',
     apiKey: '',
@@ -17,9 +17,8 @@
 
   // Merge Vercel env vars (set by build.sh) over hardcoded defaults
   const ENV = (typeof window.__ITACHI_ENV__ === 'object' && window.__ITACHI_ENV__) || {};
-  const DEFAULTS = { ...HARDCODED_DEFAULTS, ...ENV };
 
-  let config = { ...DEFAULTS };
+  let config = { ...HARDCODED_DEFAULTS, ...ENV };
   let refreshTimer = null;
   let chartInstances = {};
   let allTasks = [];
@@ -73,15 +72,6 @@
     lastRefresh: $('#last-refresh'),
     autoRefresh: $('#auto-refresh-toggle'),
     refreshBtn: $('#refresh-btn'),
-    settingsBtn: $('#settings-btn'),
-    settingsModal: $('#settings-modal'),
-    settingsClose: $('#settings-close'),
-    settingsCancel: $('#settings-cancel'),
-    settingsSave: $('#settings-save'),
-    apiUrlInput: $('#api-url-input'),
-    apiKeyInput: $('#api-key-input'),
-    refreshInput: $('#refresh-input'),
-    orchestratorUrlInput: $('#orchestrator-url-input'),
     machineCount: $('#machine-count'),
     machinesList: $('#machines-list'),
     taskFilterProject: $('#task-filter-project'),
@@ -110,63 +100,22 @@
 
   // ── Init ──────────────────────────────────────────────────
   function init() {
-    loadConfig();
-    bindEvents();
     applyUrlParams();
+    bindEvents();
     startRefreshCycle();
     refreshAll();
     startElapsedTimers();
   }
 
-  function loadConfig() {
-    const saved = localStorage.getItem('itachi_dashboard_config');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        config = { ...DEFAULTS, ...parsed };
-      } catch (e) { /* ignore */ }
-    }
-    // Also check legacy key storage
-    const legacyKey = localStorage.getItem('itachi_api_key');
-    if (legacyKey && !config.apiKey) {
-      config.apiKey = legacyKey;
-    }
-    // Build-time env vars always win over stale localStorage
-    if (ENV.apiUrl) config.apiUrl = ENV.apiUrl;
-    if (ENV.apiKey) config.apiKey = ENV.apiKey;
-    if (ENV.refreshInterval) config.refreshInterval = ENV.refreshInterval;
-  }
-
-  function saveConfig() {
-    localStorage.setItem('itachi_dashboard_config', JSON.stringify(config));
-    // Also store api key under legacy key for compatibility
-    localStorage.setItem('itachi_api_key', config.apiKey || '');
-  }
-
   function applyUrlParams() {
     const params = new URLSearchParams(window.location.search);
-    if (params.has('api')) {
-      config.apiUrl = params.get('api');
-    }
-    if (params.has('refresh')) {
-      config.refreshInterval = Math.max(3, parseInt(params.get('refresh'), 10) || 10);
-    }
-    if (params.has('key')) {
-      config.apiKey = params.get('key');
-    }
-    saveConfig();
+    if (params.has('api')) config.apiUrl = params.get('api');
+    if (params.has('refresh')) config.refreshInterval = Math.max(3, parseInt(params.get('refresh'), 10) || 10);
+    if (params.has('key')) config.apiKey = params.get('key');
   }
 
   // ── Events ────────────────────────────────────────────────
   function bindEvents() {
-    dom.settingsBtn.addEventListener('click', openSettings);
-    dom.settingsClose.addEventListener('click', closeSettings);
-    dom.settingsCancel.addEventListener('click', closeSettings);
-    dom.settingsSave.addEventListener('click', saveSettings);
-    dom.settingsModal.addEventListener('click', (e) => {
-      if (e.target === dom.settingsModal) closeSettings();
-    });
-
     dom.refreshBtn.addEventListener('click', () => refreshAll());
     dom.autoRefresh.addEventListener('change', () => {
       if (dom.autoRefresh.checked) startRefreshCycle();
@@ -187,38 +136,11 @@
       if (e.target === dom.taskModal) dom.taskModal.classList.add('hidden');
     });
 
-    // Escape key to close modals
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        dom.settingsModal.classList.add('hidden');
         dom.taskModal.classList.add('hidden');
       }
     });
-  }
-
-  function openSettings() {
-    dom.apiUrlInput.value = config.apiUrl || '';
-    dom.apiKeyInput.value = config.apiKey || '';
-    dom.refreshInput.value = config.refreshInterval;
-    dom.orchestratorUrlInput.value = config.orchestratorUrl || '';
-    dom.settingsModal.classList.remove('hidden');
-    dom.apiUrlInput.focus();
-  }
-
-  function closeSettings() {
-    dom.settingsModal.classList.add('hidden');
-  }
-
-  function saveSettings() {
-    config.apiUrl = dom.apiUrlInput.value.replace(/\/+$/, '');
-    config.apiKey = dom.apiKeyInput.value.trim();
-    config.refreshInterval = Math.max(3, parseInt(dom.refreshInput.value, 10) || 10);
-    config.orchestratorUrl = dom.orchestratorUrlInput.value.replace(/\/+$/, '');
-    saveConfig();
-    closeSettings();
-    stopRefreshCycle();
-    if (dom.autoRefresh.checked) startRefreshCycle();
-    refreshAll();
   }
 
   // ── Refresh cycle ─────────────────────────────────────────
