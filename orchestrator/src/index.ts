@@ -174,6 +174,17 @@ async function main(): Promise<void> {
     console.log(`  Projects:    ${detectedProjects.join(', ') || '(auto-detect on register)'}`);
     console.log(`  Engine:      ${config.defaultEngine}`);
     console.log('===========================================');
+
+    // SAFETY: Warn if ANTHROPIC_API_KEY is in env — it causes Claude CLI to use
+    // API billing instead of Max subscription, burning credits unnecessarily.
+    if (process.env.ANTHROPIC_API_KEY) {
+        console.warn('');
+        console.warn('  ⚠ WARNING: ANTHROPIC_API_KEY detected in environment!');
+        console.warn('  Claude CLI will use API billing instead of Max subscription.');
+        console.warn('  Remove ANTHROPIC_API_KEY from .env to use subscription auth.');
+        console.warn('');
+    }
+
     console.log('');
 
     // Register machine with ElizaOS

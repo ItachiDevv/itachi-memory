@@ -79,10 +79,14 @@ export async function classifyTask(task: Task, config: Config): Promise<TaskClas
             : `cat "${promptFile}"`;
 
         // Use Claude CLI with subscription auth (no API key needed)
+        // Strip ANTHROPIC_API_KEY so CLI uses subscription, not API billing
+        const cleanEnv = { ...process.env };
+        delete cleanEnv.ANTHROPIC_API_KEY;
+
         // Pipe prompt from file to avoid cmd.exe mangling args with quotes/newlines
         const output = execSync(
             `${readCmd} | claude --model sonnet --max-turns 1 --output-format text --dangerously-skip-permissions`,
-            { encoding: 'utf8', timeout: 30000 }
+            { encoding: 'utf8', timeout: 30000, env: cleanEnv }
         ).trim();
 
         // Strip markdown code fences if the model wrapped JSON in ```json ... ```
