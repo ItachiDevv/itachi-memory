@@ -16,12 +16,20 @@ export const lessonExtractor: Evaluator = {
 
   examples: [
     {
-      prompt: 'Task a1b2c3d4 completed! Result: Fixed login bug. PR: github.com/...',
-      response: 'Extracted lesson: Tasks in auth-related code benefit from targeted test runs before PR creation.',
+      prompt: 'Evaluate whether a lesson can be extracted from this task completion.',
+      messages: [
+        { name: '{{name1}}', content: { text: 'Task a1b2c3d4 completed! Result: Fixed login bug. PR: github.com/...' } },
+        { name: 'Itachi', content: { text: 'Great, the auth fix is merged.' } },
+      ],
+      outcome: 'Extracted lesson: Tasks in auth-related code benefit from targeted test runs before PR creation.',
     },
     {
-      prompt: 'That was wrong, the budget was too low for that refactoring task',
-      response: 'Extracted lesson: Refactoring tasks need higher budgets ($8+) to complete properly.',
+      prompt: 'Evaluate whether a lesson can be extracted from this feedback.',
+      messages: [
+        { name: '{{name1}}', content: { text: 'That was wrong, the budget was too low for that refactoring task' } },
+        { name: 'Itachi', content: { text: 'Noted, I\'ll increase the budget next time.' } },
+      ],
+      outcome: 'Extracted lesson: Refactoring tasks need higher budgets ($8+) to complete properly.',
     },
   ],
 

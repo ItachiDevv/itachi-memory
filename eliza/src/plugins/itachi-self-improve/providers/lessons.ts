@@ -13,25 +13,33 @@ export const lessonsProvider: Provider = {
   ): Promise<ProviderResult> => {
     try {
       const query = message.content?.text || '';
-      if (query.length < 5) return { text: '## Past Management Lessons\nMessage too short to search for relevant lessons.', values: {}, data: {} };
+      if (query.length < 5) return { text: '', values: {}, data: {} };
 
-      // Search for relevant lessons
-      const results = await runtime.searchMemories({
-        type: MemoryType.CUSTOM,
-        query,
-        limit: 5,
-        threshold: 0.6,
-      });
+      // Search for relevant lessons — embedding search can fail if the
+      // embedding service is unavailable, so catch gracefully.
+      let results;
+      try {
+        results = await runtime.searchMemories({
+          type: MemoryType.CUSTOM,
+          query,
+          limit: 5,
+          threshold: 0.6,
+        });
+      } catch {
+        // Embedding generation failed — return empty gracefully instead of
+        // spamming logs with "embedding.map is not a function" retries
+        return { text: '', values: {}, data: {} };
+      }
 
       // Filter to management-lesson type
-      const lessons = results.filter(
+      const lessons = (results || []).filter(
         (m) => m.metadata?.type === 'management-lesson'
       );
 
-      if (lessons.length === 0) return { text: '## Past Management Lessons\nNo relevant lessons found for this topic.', values: {}, data: {} };
+      if (lessons.length === 0) return { text: '', values: {}, data: {} };
 
       // Also look for strategy documents (higher-level synthesized lessons)
-      const strategies = results.filter(
+      const strategies = (results || []).filter(
         (m) => m.metadata?.type === 'strategy-document'
       );
 
@@ -60,7 +68,7 @@ export const lessonsProvider: Provider = {
       };
     } catch (error) {
       runtime.logger.error('lessonsProvider error:', error);
-      return { text: '## Past Management Lessons\nFailed to load lessons.', values: {}, data: {} };
+      return { text: '', values: {}, data: {} };
     }
   },
 };

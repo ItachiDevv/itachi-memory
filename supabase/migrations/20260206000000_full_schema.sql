@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS itachi_memories (
     files text[] DEFAULT '{}',
     branch text DEFAULT 'main',
     task_id uuid,
+    metadata jsonb DEFAULT '{}',
     embedding vector(1536),
     created_at timestamptz DEFAULT now()
 );
@@ -202,12 +203,12 @@ CREATE OR REPLACE FUNCTION match_memories(
 ) RETURNS TABLE (
     id uuid, project text, category text, content text,
     summary text, files text[], branch text, task_id uuid,
-    created_at timestamptz, similarity float
+    metadata jsonb, created_at timestamptz, similarity float
 ) LANGUAGE plpgsql AS $$
 BEGIN
     RETURN QUERY
     SELECT m.id, m.project, m.category, m.content, m.summary,
-        m.files, m.branch, m.task_id, m.created_at,
+        m.files, m.branch, m.task_id, m.metadata, m.created_at,
         1 - (m.embedding <=> query_embedding) AS similarity
     FROM itachi_memories m
     WHERE (match_project IS NULL OR m.project = match_project)

@@ -425,3 +425,281 @@ describe('Edge cases', () => {
     expect(getTimeAgo(twoDaysAgo)).toBe('2d ago');
   });
 });
+
+// ============================================================
+// Production error fix validations — FUNCTIONAL TESTS
+// Imports actual modules and calls real functions with mocks
+// ============================================================
+
+describe('Fix 2: lessonExtractor examples (actual import)', () => {
+  it('26. examples have {prompt, messages, outcome} — no {prompt, response}', async () => {
+    const { lessonExtractor } = await import('../plugins/itachi-self-improve/evaluators/lesson-extractor.js');
+    expect(lessonExtractor.examples!.length).toBeGreaterThan(0);
+    for (const ex of lessonExtractor.examples!) {
+      expect(ex).toHaveProperty('prompt');
+      expect(ex).toHaveProperty('messages');
+      expect(ex).toHaveProperty('outcome');
+      expect(Array.isArray(ex.messages)).toBe(true);
+      expect(ex.messages!.length).toBeGreaterThan(0);
+      expect(typeof ex.outcome).toBe('string');
+      expect(ex).not.toHaveProperty('response');
+    }
+  });
+});
+
+describe('Fix 3: fact-extractor.ts deleted', () => {
+  it('27. import fails — file does not exist', async () => {
+    let threw = false;
+    try { await import('../plugins/itachi-memory/evaluators/fact-extractor.js'); } catch { threw = true; }
+    expect(threw).toBe(true);
+  });
+});
+
+describe('Fix 4: lessonsProvider graceful embedding failure', () => {
+  it('28. returns empty when searchMemories throws (embedding.map crash)', async () => {
+    const { lessonsProvider } = await import('../plugins/itachi-self-improve/providers/lessons.js');
+    const runtime = createMockRuntime({
+      searchMemories: async () => { throw new Error('embedding.map is not a function'); },
+    });
+    const msg = { content: { text: 'What lessons about testing?' } };
+    const result = await lessonsProvider.get(runtime as any, msg as any, undefined);
+    expect(result.text).toBe('');
+    expect(result).toHaveProperty('values');
+    expect(result).toHaveProperty('data');
+  });
+
+  it('29. returns empty for short messages without hitting search at all', async () => {
+    const { lessonsProvider } = await import('../plugins/itachi-self-improve/providers/lessons.js');
+    let searchCalled = false;
+    const runtime = createMockRuntime({
+      searchMemories: async () => { searchCalled = true; return []; },
+    });
+    const msg = { content: { text: 'hi' } };
+    const result = await lessonsProvider.get(runtime as any, msg as any, undefined);
+    expect(result.text).toBe('');
+    expect(searchCalled).toBe(false); // Must not even try to search
+  });
+});
+
+describe('Fix 5: CREATE_TASK — validate()', () => {
+  it('30. validate accepts /task command', async () => {
+    const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
+    const runtime = createMockRuntime();
+    const msg = { content: { text: '/task my-app Fix login bug' } };
+    expect(await createTaskAction.validate(runtime as any, msg as any)).toBe(true);
+  });
+
+  it('31. validate accepts contextual confirmation when task service is available', async () => {
+    // THE SCREENSHOT SCENARIO: user says "Yeah that would be great, can you do that?"
+    // This has zero task keywords — but task service is running, so LLM should decide
+    const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
+    const runtime = createMockRuntime({
+      getService: (name: string) => name === 'itachi-tasks' ? { fake: true } : null,
+    });
+    const msg = { content: { text: 'Yeah that would be great, can you do that?' } };
+    expect(await createTaskAction.validate(runtime as any, msg as any)).toBe(true);
+  });
+
+  it('32. validate returns false when task service is not available', async () => {
+    const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
+    const runtime = createMockRuntime({
+      getService: () => null,
+    });
+    const msg = { content: { text: 'Yeah create those tasks' } };
+    expect(await createTaskAction.validate(runtime as any, msg as any)).toBe(false);
+  });
+});
+
+describe('Fix 5: CREATE_TASK — handler() /task command path', () => {
+  it('33. /task my-app Fix login bug → creates task with project=my-app', async () => {
+    const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
+
+    const createdTasks: any[] = [];
+    const mockTaskService = {
+      createTask: async (params: any) => {
+        createdTasks.push(params);
+        return { id: 'aaaabbbb-cccc-dddd-eeee-ffffffffffff' };
+      },
+      getQueuedCount: async () => 1,
+      getMergedRepos: async () => [{ name: 'my-app', repo_url: null }],
+    };
+    const runtime = createMockRuntime({
+      getService: (name: string) => name === 'itachi-tasks' ? mockTaskService : null,
+    });
+    const msg = {
+      content: { text: '/task my-app Fix the login bug', telegram_user_id: 123, telegram_chat_id: 456 },
+    };
+
+    let callbackText = '';
+    const callback = async (r: any) => { callbackText = r.text; };
+    const result = await createTaskAction.handler(runtime as any, msg as any, undefined, undefined, callback);
+
+    expect(result.success).toBe(true);
+    expect(createdTasks).toHaveLength(1);
+    expect(createdTasks[0].project).toBe('my-app');
+    expect(createdTasks[0].description).toBe('Fix the login bug');
+    expect(callbackText).toContain('Task queued!');
+    expect(callbackText).toContain('my-app');
+  });
+});
+
+describe('Fix 5: CREATE_TASK — handler() natural language with conversation context', () => {
+  it('34. SCREENSHOT SCENARIO: "Yeah that would be great" + context → creates 2 tasks', async () => {
+    // Reproduces the exact failure from Telegram screenshots:
+    // Bot offered Remotion tasks for lotitachi + elizapets, user confirmed,
+    // but handler couldn't parse "Yeah that would be great, can you do that?"
+    const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
+
+    const createdTasks: any[] = [];
+    const mockTaskService = {
+      createTask: async (params: any) => {
+        createdTasks.push(params);
+        return { id: `${createdTasks.length}aaabbbb-cccc-dddd-eeee-ffffffffffff` };
+      },
+      getQueuedCount: async () => createdTasks.length,
+      getMergedRepos: async () => [
+        { name: 'lotitachi', repo_url: 'https://github.com/user/lotitachi' },
+        { name: 'elizapets', repo_url: 'https://github.com/user/elizapets' },
+      ],
+    };
+
+    // Mock LLM: when asked to extract tasks from context, return 2 tasks
+    const runtime = createMockRuntime({
+      getService: (name: string) => name === 'itachi-tasks' ? mockTaskService : null,
+      useModel: async (_type: any, opts: any) => {
+        const prompt = typeof opts === 'string' ? opts : opts?.prompt || '';
+        // The LLM should see conversation context and extract both tasks
+        if (prompt.includes('extracting task') || prompt.includes('Known projects')) {
+          return JSON.stringify([
+            { project: 'lotitachi', description: 'Scaffold reusable Remotion compositions for demo videos' },
+            { project: 'elizapets', description: 'Scaffold reusable Remotion compositions for demo videos' },
+          ]);
+        }
+        return '[]';
+      },
+    });
+
+    const msg = {
+      content: {
+        text: 'Yeah that would be great, can you do that?',
+        telegram_user_id: 123,
+        telegram_chat_id: 456,
+      },
+    };
+
+    // State with conversation history — the bot previously offered to create tasks
+    const state = {
+      data: {
+        recentMessages: [
+          { role: 'user', content: 'Using remotion for making demos for lotitachi and elizapets' },
+          { role: 'assistant', content: 'Nice — Remotion is solid. I could queue up tasks to scaffold out reusable Remotion compositions. Want to offload any of that setup work?' },
+          { role: 'user', content: 'Yeah that would be great, can you do that?' },
+        ],
+      },
+    };
+
+    let callbackText = '';
+    const callback = async (r: any) => { callbackText = r.text; };
+    const result = await createTaskAction.handler(
+      runtime as any, msg as any, state as any, undefined, callback
+    );
+
+    // MUST succeed — this was the exact failure
+    expect(result.success).toBe(true);
+    // MUST create exactly 2 tasks
+    expect(createdTasks).toHaveLength(2);
+    expect(createdTasks[0].project).toBe('lotitachi');
+    expect(createdTasks[1].project).toBe('elizapets');
+    expect(createdTasks[0].description).toContain('Remotion');
+    expect(createdTasks[1].description).toContain('Remotion');
+    // Callback must report both tasks
+    expect(callbackText).toContain('2 tasks queued');
+    expect(callbackText).toContain('lotitachi');
+    expect(callbackText).toContain('elizapets');
+  });
+
+  it('35. single natural language task: "create a task for lotitachi to scaffold Remotion demos"', async () => {
+    const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
+
+    const createdTasks: any[] = [];
+    const mockTaskService = {
+      createTask: async (params: any) => {
+        createdTasks.push(params);
+        return { id: 'aaaabbbb-cccc-dddd-eeee-ffffffffffff' };
+      },
+      getQueuedCount: async () => 1,
+      getMergedRepos: async () => [
+        { name: 'lotitachi', repo_url: 'https://github.com/user/lotitachi' },
+      ],
+    };
+
+    const runtime = createMockRuntime({
+      getService: (name: string) => name === 'itachi-tasks' ? mockTaskService : null,
+      useModel: async () => JSON.stringify([
+        { project: 'lotitachi', description: 'Scaffold Remotion demo page' },
+      ]),
+    });
+
+    const msg = {
+      content: {
+        text: 'create a task for lotitachi to scaffold Remotion demos',
+        telegram_user_id: 123,
+        telegram_chat_id: 456,
+      },
+    };
+
+    let callbackText = '';
+    const callback = async (r: any) => { callbackText = r.text; };
+    const result = await createTaskAction.handler(
+      runtime as any, msg as any, undefined, undefined, callback
+    );
+
+    expect(result.success).toBe(true);
+    expect(createdTasks).toHaveLength(1);
+    expect(createdTasks[0].project).toBe('lotitachi');
+    expect(callbackText).toContain('Task queued!');
+    expect(callbackText).toContain('lotitachi');
+  });
+
+  it('36. handler fails gracefully when LLM returns empty', async () => {
+    const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
+
+    const mockTaskService = {
+      createTask: async () => { throw new Error('should not be called'); },
+      getQueuedCount: async () => 0,
+      getMergedRepos: async () => [],
+    };
+
+    const runtime = createMockRuntime({
+      getService: (name: string) => name === 'itachi-tasks' ? mockTaskService : null,
+      useModel: async () => '[]', // LLM can't determine any tasks
+    });
+
+    const msg = { content: { text: 'do the thing', telegram_user_id: 123, telegram_chat_id: 456 } };
+
+    let callbackText = '';
+    const callback = async (r: any) => { callbackText = r.text; };
+    const result = await createTaskAction.handler(
+      runtime as any, msg as any, undefined, undefined, callback
+    );
+
+    expect(result.success).toBe(false);
+    expect(callbackText).toContain("couldn't figure out");
+    // Must NOT show "Usage: /task" — that was the old broken behavior
+    expect(callbackText).not.toContain('Usage: /task');
+  });
+});
+
+describe('Fix 2+: conversationMemoryEvaluator examples (actual import)', () => {
+  it('37. examples have {prompt, messages, outcome}', async () => {
+    const { conversationMemoryEvaluator } = await import('../plugins/itachi-memory/evaluators/conversation-memory.js');
+    expect(conversationMemoryEvaluator.examples!.length).toBeGreaterThan(0);
+    for (const ex of conversationMemoryEvaluator.examples!) {
+      expect(ex).toHaveProperty('prompt');
+      expect(ex).toHaveProperty('messages');
+      expect(ex).toHaveProperty('outcome');
+      expect(Array.isArray(ex.messages)).toBe(true);
+      expect(typeof ex.outcome).toBe('string');
+    }
+  });
+});
