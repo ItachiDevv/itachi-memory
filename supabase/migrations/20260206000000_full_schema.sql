@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS itachi_memories (
     content text NOT NULL,
     summary text NOT NULL,
     files text[] DEFAULT '{}',
-    branch text DEFAULT 'main',
+    branch text DEFAULT 'master',
     task_id uuid,
     metadata jsonb DEFAULT '{}',
     embedding vector(1536),
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS itachi_tasks (
     description text NOT NULL,
     project text NOT NULL,
     repo_url text,
-    branch text DEFAULT 'main',
+    branch text DEFAULT 'master',
     target_branch text,
     status text NOT NULL DEFAULT 'queued'
         CHECK (status IN ('queued','claimed','running','completed','failed','cancelled','timeout')),
@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS project_registry (
     name text PRIMARY KEY,
     display_name text,
     repo_url text,
-    default_branch text DEFAULT 'main',
+    default_branch text DEFAULT 'master',
     telegram_chat_id bigint,
     orchestrator_affinity text,
     deployment_mode text DEFAULT 'shared' CHECK (deployment_mode IN ('shared', 'dedicated')),
@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS session_edits (
     lines_added integer DEFAULT 0,
     lines_removed integer DEFAULT 0,
     tool_name text,
-    branch text DEFAULT 'main',
+    branch text DEFAULT 'master',
     task_id uuid REFERENCES itachi_tasks(id),
     created_at timestamptz DEFAULT now()
 );
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     summary text,
     key_decisions text[],
     patterns_used text[],
-    branch text DEFAULT 'main',
+    branch text DEFAULT 'master',
     orchestrator_id text,
     embedding vector(1536),
     created_at timestamptz DEFAULT now()

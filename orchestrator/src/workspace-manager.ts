@@ -90,12 +90,17 @@ async function ensureBaseClone(task: Task): Promise<string> {
         console.log(`[workspace] Fetching latest for base clone ${task.project}`);
         await exec('git', ['fetch', '--all'], basePath);
     } else {
-        // First time — full clone
+        // First time — full clone (try specified branch, fall back to repo default)
         console.log(`[workspace] Creating base clone for ${task.project}`);
-        const result = await exec(
+        let result = await exec(
             'git',
             ['clone', '--branch', task.branch, repoUrl, basePath]
         );
+        if (result.code !== 0 && result.stderr.includes('not found')) {
+            // Branch doesn't exist — clone without --branch (uses repo default)
+            console.log(`[workspace] Branch "${task.branch}" not found, cloning with repo default`);
+            result = await exec('git', ['clone', repoUrl, basePath]);
+        }
         if (result.code !== 0) {
             throw new Error(`Failed to clone: ${result.stderr}`);
         }
