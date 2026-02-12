@@ -1,7 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { config } from './config';
 import { claimNextTask, updateTask, recoverStuckTasks } from './supabase-client';
-import { spawnSession, streamToEliza } from './session-manager';
+import { spawnSession, resumeClaudeSession, streamToEliza } from './session-manager';
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
@@ -90,10 +90,74 @@ async function runTask(task: Task): Promise<void> {
     });
 
     // Wait for completion
-    const result = await resultPromise;
+    let result = await resultPromise;
 
-    // Cleanup
+    // Cleanup timeout (may be re-set if we resume)
     clearTimeout(timeoutHandle);
+
+    // --- Human-in-the-loop: if Claude asked a question, wait for user reply and resume ---
+    // Detect if Claude's output looks like it asked the user something
+    const needsInput = result.sessionId && !result.isError && (
+        /\b(which|what|how|please (choose|select|specify|confirm|let me know))\b/i.test(result.resultText)
+    );
+
+    if (needsInput) {
+        console.log(`[runner] Task ${shortId} appears to need user input, waiting for Telegram reply...`);
+
+        // Stream Claude's question to Telegram
+        streamToEliza(task.id, {
+            type: 'text',
+            text: `Waiting for your reply:\n\n${result.resultText.substring(0, 500)}`,
+        });
+
+        // Poll for user input (5 minute timeout)
+        const maxWaitMs = 5 * 60 * 1000;
+        const pollMs = 5_000;
+        const waitStart = Date.now();
+        let userReply: string | null = null;
+
+        while (Date.now() - waitStart < maxWaitMs) {
+            await sleep(pollMs);
+            const inputs = await fetchUserInput(task.id);
+            if (inputs.length > 0) {
+                userReply = typeof inputs[0] === 'string' ? inputs[0] : (inputs[0] as any).text || String(inputs[0]);
+                break;
+            }
+        }
+
+        if (userReply) {
+            console.log(`[runner] Got user reply for ${shortId}: "${userReply.substring(0, 60)}"`);
+
+            // Resume the session with user's answer
+            const { process: resumeProc, result: resumePromise } = resumeClaudeSession(
+                task, workspacePath, result.sessionId!, userReply
+            );
+
+            // Update active session tracker
+            const resumeTimeout = setTimeout(() => {
+                resumeProc.kill('SIGTERM');
+            }, config.taskTimeoutMs);
+
+            activeSessions.set(task.id, {
+                task, workspacePath, startedAt: new Date(),
+                timeoutHandle: resumeTimeout, classification, process: resumeProc,
+            });
+
+            const resumeResult = await resumePromise;
+            clearTimeout(resumeTimeout);
+
+            // Merge costs
+            result = {
+                ...resumeResult,
+                costUsd: result.costUsd + resumeResult.costUsd,
+                durationMs: result.durationMs + resumeResult.durationMs,
+            };
+        } else {
+            console.log(`[runner] No user reply for ${shortId} within timeout`);
+            streamToEliza(task.id, { type: 'text', text: 'No reply received. Completing task with what we have.' });
+        }
+    }
+
     activeSessions.delete(task.id);
 
     // Report results (handles commit, push, PR, notification)

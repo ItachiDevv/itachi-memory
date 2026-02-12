@@ -9,6 +9,7 @@ import { listTasksAction } from './actions/list-tasks.js';
 import { cancelTaskAction } from './actions/cancel-task.js';
 import { telegramCommandsAction } from './actions/telegram-commands.js';
 import { topicReplyAction } from './actions/topic-reply.js';
+import { topicInputRelayEvaluator } from './evaluators/topic-input-relay.js';
 import { activeTasksProvider } from './providers/active-tasks.js';
 import { reposProvider } from './providers/repos.js';
 import { machineStatusProvider } from './providers/machine-status.js';
@@ -24,6 +25,7 @@ export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',
   description: 'Task queue management, orchestrator integration, and completion notifications',
   actions: [spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction],
+  evaluators: [topicInputRelayEvaluator],
   providers: [activeTasksProvider, reposProvider, machineStatusProvider],
   services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService],
   // Routes registered in init() to bypass ElizaOS plugin-name prefix

@@ -119,7 +119,15 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         ? classification.suggestedModel
         : (task.model || config.defaultModel);
 
+    // Write prompt to temp file — avoids shell quoting issues with newlines/quotes on Windows
     const shortId = task.id.substring(0, 8);
+    const promptFile = path.join(PROMPT_DIR, `${shortId}.txt`);
+    fs.writeFileSync(promptFile, prompt, 'utf8');
+
+    // Build shell command string: read prompt from file, pipe to claude
+    const readCmd = process.platform === 'win32'
+        ? `type "${promptFile.replace(/\//g, '\\')}"`
+        : `cat "${promptFile}"`;
 
     const cliArgs = [
         '--dangerously-skip-permissions',
@@ -129,7 +137,7 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         '--model', model,
     ];
 
-    const fullCmd = `claude ${cliArgs.join(' ')}`;
+    const fullCmd = `${readCmd} | claude ${cliArgs.join(' ')}`;
 
     console.log(`[session] Spawning claude in ${workspacePath} (model: ${model}, budget: $${budget}${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
 
@@ -159,12 +167,6 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         shell: true,
     });
 
-    // Write prompt directly to stdin (instead of piping from file) so stdin stays
-    // open for the input relay to forward Telegram replies mid-session.
-    // Flatten to single line — Claude CLI treats each Enter as a message submit.
-    const singleLinePrompt = prompt.replace(/\n+/g, ' ').trim();
-    proc.stdin?.write(singleLinePrompt + '\n');
-
     const resultPromise = new Promise<SessionResult>((resolve) => {
         let sessionId: string | null = null;
         let resultText = '';
@@ -173,29 +175,6 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         let isError = false;
         let lastActivity = Date.now();
         let done = false;
-
-        // Poll ElizaOS for user input from Telegram topic replies
-        const inputPollInterval = setInterval(async () => {
-            if (done) return;
-            try {
-                const headers: Record<string, string> = {};
-                const apiKey = process.env.ITACHI_API_KEY;
-                if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-                const res = await fetch(`${config.apiUrl}/api/tasks/${task.id}/input`, { headers });
-                if (!res.ok) return;
-
-                const data = await res.json() as { inputs?: Array<{ text: string }> };
-                if (data.inputs && data.inputs.length > 0 && proc.stdin) {
-                    for (const input of data.inputs) {
-                        console.log(`[session:${task.id.substring(0, 8)}] Relaying user input: ${input.text.substring(0, 60)}`);
-                        proc.stdin.write(input.text + '\n');
-                    }
-                }
-            } catch {
-                // Non-fatal — input polling failure doesn't break the session
-            }
-        }, 3000);
 
         if (proc.stdout) {
             const rl = readline.createInterface({ input: proc.stdout });
@@ -264,7 +243,6 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
 
         proc.on('close', (code) => {
             done = true;
-            clearInterval(inputPollInterval);
             const exitCode = code ?? 1;
             console.log(`[session] Claude exited with code ${exitCode} for task ${task.id.substring(0, 8)}`);
 
@@ -280,7 +258,6 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
 
         proc.on('error', (err) => {
             done = true;
-            clearInterval(inputPollInterval);
             console.error(`[session] Spawn error for task ${task.id.substring(0, 8)}:`, err.message);
             resolve({
                 sessionId: null,
@@ -290,6 +267,123 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
                 isError: true,
                 exitCode: 1,
             });
+        });
+    });
+
+    return { process: proc, result: resultPromise };
+}
+
+/**
+ * Resume a Claude session with user input via --continue --resume.
+ * Used when the first session completed but needs user feedback.
+ */
+export function resumeClaudeSession(
+    task: Task, workspacePath: string, sessionId: string, userInput: string
+): { process: ChildProcess; result: Promise<SessionResult> } {
+    const shortId = task.id.substring(0, 8);
+
+    // Write user input to temp file, pipe to claude --continue --resume
+    const inputFile = path.join(PROMPT_DIR, `${shortId}-resume.txt`);
+    fs.writeFileSync(inputFile, userInput, 'utf8');
+
+    const readCmd = process.platform === 'win32'
+        ? `type "${inputFile.replace(/\//g, '\\')}"`
+        : `cat "${inputFile}"`;
+
+    const cliArgs = [
+        '--continue',
+        '--resume', sessionId,
+        '--dangerously-skip-permissions',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--max-turns', '50',
+        '--model', task.model || config.defaultModel,
+    ];
+
+    const fullCmd = `${readCmd} | claude ${cliArgs.join(' ')}`;
+    console.log(`[session] Resuming session ${sessionId.substring(0, 8)} for task ${shortId} with user input`);
+
+    const apiKeys = loadApiKeys();
+    delete apiKeys.ANTHROPIC_API_KEY;
+
+    const envVars: Record<string, string> = {
+        ...process.env as Record<string, string>,
+        ...apiKeys,
+        ITACHI_ENABLED: '1',
+        ITACHI_TASK_ID: task.id,
+    };
+    delete envVars.ANTHROPIC_API_KEY;
+
+    const proc = spawn(fullCmd, [], {
+        cwd: workspacePath,
+        env: envVars,
+        shell: true,
+    });
+
+    const resultPromise = new Promise<SessionResult>((resolve) => {
+        let resumedSessionId: string | null = sessionId;
+        let resultText = '';
+        let costUsd = 0;
+        let durationMs = 0;
+        let isError = false;
+
+        if (proc.stdout) {
+            const rl = readline.createInterface({ input: proc.stdout });
+            rl.on('line', (line) => {
+                try {
+                    const event: ClaudeStreamEvent = JSON.parse(line);
+                    if (event.type === 'system' && event.session_id) resumedSessionId = event.session_id;
+                    if (event.type === 'assistant' && event.message) {
+                        const content = event.message.content;
+                        const text = typeof content === 'string'
+                            ? content
+                            : Array.isArray(content)
+                                ? content.filter(b => b.type === 'text').map(b => b.text || '').join('\n')
+                                : '';
+                        if (text) {
+                            resultText = text;
+                            streamToEliza(task.id, { type: 'text', text });
+                        }
+                    }
+                    if (event.type === 'result') {
+                        const r = event.result;
+                        if (typeof r === 'string') resultText = r || resultText;
+                        else if (r && typeof r === 'object') {
+                            resultText = r.text || resultText;
+                            costUsd = r.cost_usd || costUsd;
+                            durationMs = r.duration_ms || durationMs;
+                            isError = r.is_error ?? isError;
+                        }
+                        costUsd = event.total_cost_usd || costUsd;
+                        durationMs = event.duration_ms || durationMs;
+                        isError = event.is_error ?? isError;
+                    }
+                } catch { /* non-JSON */ }
+            });
+        }
+
+        if (proc.stderr) {
+            proc.stderr.on('data', (data) => {
+                const msg = data.toString().trim();
+                if (msg) console.error(`[session:${shortId}:resume] stderr: ${msg}`);
+            });
+        }
+
+        proc.on('close', (code) => {
+            const exitCode = code ?? 1;
+            console.log(`[session] Resume exited with code ${exitCode} for task ${shortId}`);
+            resolve({
+                sessionId: resumedSessionId,
+                resultText: resultText || '(no output)',
+                costUsd, durationMs,
+                isError: isError || exitCode !== 0,
+                exitCode,
+            });
+        });
+
+        proc.on('error', (err) => {
+            console.error(`[session] Resume spawn error for task ${shortId}:`, err.message);
+            resolve({ sessionId: null, resultText: `Spawn error: ${err.message}`, costUsd: 0, durationMs: 0, isError: true, exitCode: 1 });
         });
     });
 
