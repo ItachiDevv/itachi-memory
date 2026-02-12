@@ -211,6 +211,31 @@ export class MachineRegistryService extends Service {
   }
 
   /**
+   * Resolve a machine from user input via fuzzy matching.
+   * Priority: exact machine_id → exact display_name → substring display_name → substring machine_id
+   */
+  async resolveMachine(input: string): Promise<{ machine: MachineRecord | null; allMachines: MachineRecord[] }> {
+    const allMachines = await this.getAllMachines();
+    const lower = input.toLowerCase();
+
+    // Exact machine_id
+    let machine = allMachines.find(m => m.machine_id.toLowerCase() === lower) || null;
+    if (machine) return { machine, allMachines };
+
+    // Exact display_name
+    machine = allMachines.find(m => m.display_name?.toLowerCase() === lower) || null;
+    if (machine) return { machine, allMachines };
+
+    // Substring display_name
+    machine = allMachines.find(m => m.display_name?.toLowerCase().includes(lower)) || null;
+    if (machine) return { machine, allMachines };
+
+    // Substring machine_id
+    machine = allMachines.find(m => m.machine_id.toLowerCase().includes(lower)) || null;
+    return { machine, allMachines };
+  }
+
+  /**
    * Unassign tasks from a machine (set assigned_machine to null for queued tasks).
    */
   async unassignTasksFromMachine(machineId: string): Promise<number> {

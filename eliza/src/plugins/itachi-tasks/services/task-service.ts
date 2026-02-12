@@ -40,6 +40,7 @@ export interface CreateTaskParams {
   priority?: number;
   model?: string;
   max_budget_usd?: number;
+  assigned_machine?: string;
 }
 
 export interface RepoInfo {
@@ -107,6 +108,7 @@ export class TaskService extends Service {
     if (params.priority != null) insertObj.priority = params.priority;
     if (params.model) insertObj.model = params.model;
     if (params.max_budget_usd != null) insertObj.max_budget_usd = params.max_budget_usd;
+    if (params.assigned_machine) insertObj.assigned_machine = params.assigned_machine;
 
     const { data, error } = await this.supabase
       .from('itachi_tasks')

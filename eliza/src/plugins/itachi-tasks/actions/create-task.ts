@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService, type CreateTaskParams } from '../services/task-service.js';
+import { MachineRegistryService } from '../services/machine-registry.js';
 
 export const createTaskAction: Action = {
   name: 'CREATE_TASK',
@@ -11,7 +12,16 @@ export const createTaskAction: Action = {
       {
         name: 'Itachi',
         content: {
-          text: 'Task queued!\n\nID: a1b2c3d4\nProject: my-app\nDescription: Fix the login bug\nQueue position: 1',
+          text: 'Task queued!\n\nID: a1b2c3d4\nProject: my-app\nDescription: Fix the login bug\nMachine: auto-dispatch\nQueue position: 1',
+        },
+      },
+    ],
+    [
+      { name: 'user', content: { text: '/task @air my-app Fix the login bug' } },
+      {
+        name: 'Itachi',
+        content: {
+          text: 'Task queued!\n\nID: a1b2c3d4\nProject: my-app\nDescription: Fix the login bug\nMachine: air\nQueue position: 1',
         },
       },
     ],
@@ -63,12 +73,34 @@ export const createTaskAction: Action = {
       const text = message.content?.text || '';
       let project: string | undefined;
       let description: string | undefined;
+      let targetMachine: string | undefined;
 
-      // Try /task command format first
-      const slashMatch = text.match(/^\/task\s+(\S+)\s+(.+)/s);
+      // Try /task command format first: /task [@machine] <project> <description>
+      const slashMatch = text.match(/^\/task\s+(?:@(\S+)\s+)?(\S+)\s+(.+)/s);
       if (slashMatch) {
-        project = slashMatch[1];
-        description = slashMatch[2].trim();
+        const machineInput = slashMatch[1]; // may be undefined
+        project = slashMatch[2];
+        description = slashMatch[3].trim();
+
+        // Resolve machine if @machine was specified
+        if (machineInput) {
+          const machineRegistry = runtime.getService<MachineRegistryService>('machine-registry');
+          if (!machineRegistry) {
+            if (callback) await callback({ text: 'Machine registry service not available. Omit @machine or try again later.' });
+            return { success: false, error: 'Machine registry service not available' };
+          }
+          const { machine, allMachines } = await machineRegistry.resolveMachine(machineInput);
+          if (!machine) {
+            const available = allMachines.map(m => `• ${m.display_name || m.machine_id} (${m.status})`).join('\n');
+            if (callback) await callback({ text: `Unknown machine "@${machineInput}". Available machines:\n${available || '(none registered)'}` });
+            return { success: false, error: `Unknown machine: ${machineInput}` };
+          }
+          if (machine.status === 'offline') {
+            if (callback) await callback({ text: `Machine "${machine.display_name || machine.machine_id}" is offline. Task would never be picked up.\nUse without @machine for auto-dispatch.` });
+            return { success: false, error: `Machine ${machine.machine_id} is offline` };
+          }
+          targetMachine = machine.machine_id;
+        }
       } else {
         // Natural language or contextual confirmation — use LLM with conversation history
         const repos = await taskService.getMergedRepos();
@@ -83,7 +115,11 @@ export const createTaskAction: Action = {
               .join('\n')
           : '';
 
-        const parsed = await parseNaturalLanguageTask(runtime, text, repoNames, conversationContext);
+        // Get known machines for NL extraction
+        const machineRegistry = runtime.getService<MachineRegistryService>('machine-registry');
+        const knownMachines = machineRegistry ? (await machineRegistry.getAllMachines()).map(m => m.display_name || m.machine_id) : [];
+
+        const parsed = await parseNaturalLanguageTask(runtime, text, repoNames, conversationContext, knownMachines);
         if (!parsed || parsed.length === 0) {
           if (callback) {
             await callback({
@@ -91,6 +127,14 @@ export const createTaskAction: Action = {
             });
           }
           return { success: false, error: 'Could not parse task from message + context' };
+        }
+
+        // Resolve machine from NL parse (first task's machine applies to all)
+        if (parsed[0].machine && machineRegistry) {
+          const { machine, allMachines } = await machineRegistry.resolveMachine(parsed[0].machine);
+          if (machine && machine.status !== 'offline') {
+            targetMachine = machine.machine_id;
+          }
         }
 
         // Handle multiple tasks (e.g. "create tasks for lotitachi and elizapets")
@@ -106,21 +150,23 @@ export const createTaskAction: Action = {
               project: task.project,
               telegram_chat_id: telegramChatId,
               telegram_user_id: telegramUserId,
+              assigned_machine: targetMachine,
             });
             results.push({ id: created.id.substring(0, 8), project: task.project, description: task.description });
           }
 
           const queuedCount = await taskService.getQueuedCount();
+          const machineLabel = targetMachine || 'auto-dispatch';
           if (callback) {
             const lines = results.map((r, i) => `${i + 1}. [${r.id}] ${r.project}: ${r.description}`);
             await callback({
-              text: `${results.length} tasks queued!\n\n${lines.join('\n')}\n\nQueue depth: ${queuedCount}\nI'll notify you as they complete.`,
+              text: `${results.length} tasks queued!\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nI'll notify you as they complete.`,
             });
           }
 
           return {
             success: true,
-            data: { tasks: results, count: results.length },
+            data: { tasks: results, count: results.length, assignedMachine: machineLabel },
           };
         }
 
@@ -145,21 +191,23 @@ export const createTaskAction: Action = {
         project,
         telegram_chat_id: telegramChatId,
         telegram_user_id: telegramUserId,
+        assigned_machine: targetMachine,
       };
 
       const task = await taskService.createTask(params);
       const queuedCount = await taskService.getQueuedCount();
       const shortId = task.id.substring(0, 8);
+      const machineLabel = targetMachine || 'auto-dispatch';
 
       if (callback) {
         await callback({
-          text: `Task queued!\n\nID: ${shortId}\nProject: ${project}\nDescription: ${description}\nQueue position: ${queuedCount}\n\nI'll notify you when it completes.`,
+          text: `Task queued!\n\nID: ${shortId}\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nI'll notify you when it completes.`,
         });
       }
 
       return {
         success: true,
-        data: { taskId: task.id, shortId, project, queuePosition: queuedCount },
+        data: { taskId: task.id, shortId, project, queuePosition: queuedCount, assignedMachine: machineLabel },
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -177,14 +225,19 @@ async function parseNaturalLanguageTask(
   runtime: IAgentRuntime,
   text: string,
   knownProjects: string[],
-  conversationContext: string
-): Promise<Array<{ project: string; description: string }> | null> {
+  conversationContext: string,
+  knownMachines: string[] = []
+): Promise<Array<{ project: string; description: string; machine?: string }> | null> {
   try {
     const { ModelType } = await import('@elizaos/core');
+    const machineClause = knownMachines.length > 0
+      ? `\nKnown machines: ${knownMachines.join(', ')}\n- If the user mentions a specific machine (e.g. "on air", "on my mac", "@air"), set "machine" to the matching name\n- If no machine is mentioned, omit the "machine" field`
+      : '';
+
     const result = await runtime.useModel(ModelType.TEXT_SMALL, {
       prompt: `You are extracting task(s) from a conversation. The user wants to create coding task(s).
 
-Known projects: ${knownProjects.join(', ') || '(none)'}
+Known projects: ${knownProjects.join(', ') || '(none)'}${machineClause}
 
 Recent conversation:
 ${conversationContext}
@@ -194,7 +247,7 @@ Current user message: "${text}"
 Extract the task(s) the user wants created. Look at the FULL conversation — the user may be confirming a previous offer (e.g. "yeah do that", "yes please", "go ahead").
 
 Return ONLY valid JSON array, no markdown fences:
-[{"project": "<project name>", "description": "<what to do>"}]
+[{"project": "<project name>", "description": "<what to do>", "machine": "<optional machine name>"}]
 
 Rules:
 - project must be one of the known projects, or best guess from conversation

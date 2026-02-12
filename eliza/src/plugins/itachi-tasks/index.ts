@@ -46,7 +46,7 @@ export const itachiTasksPlugin: Plugin = {
     const botToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
     if (botToken) {
       const commands = [
-        { command: 'task', description: 'Create a coding task — /task <project> <description>' },
+        { command: 'task', description: 'Create a task — /task [@machine] <project> <description>' },
         { command: 'status', description: 'Show task queue status' },
         { command: 'cancel', description: 'Cancel a task — /cancel <id>' },
         { command: 'recall', description: 'Search memories — /recall <query>' },
