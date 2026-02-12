@@ -10,7 +10,7 @@ export const conversationMemoryEvaluator: Evaluator = {
   name: 'CONVERSATION_MEMORY',
   description: 'Score Telegram conversations for significance, extract summary and facts in a single LLM call',
   similes: ['remember conversation', 'store chat context', 'extract facts'],
-  alwaysRun: true,
+  alwaysRun: false,
 
   examples: [
     {
@@ -28,13 +28,13 @@ export const conversationMemoryEvaluator: Evaluator = {
     const source = message.content?.source;
     if (source !== 'telegram') return false;
 
-    // Only trigger on the agent's own response (not user messages)
-    const isAgentMessage = message.entityId === message.agentId;
-    if (!isAgentMessage) return false;
+    // Skip bot's own messages — we want to evaluate user messages
+    // (ElizaOS calls evaluate() with the user's message after the agent responds)
+    if (message.entityId === message.agentId) return false;
 
     // Skip very short messages
     const text = message.content?.text || '';
-    if (text.length < 30) return false;
+    if (text.length < 20) return false;
 
     return true;
   },
@@ -65,10 +65,10 @@ export const conversationMemoryEvaluator: Evaluator = {
       // Single LLM call: significance + summary + facts
       const prompt = `You are analyzing a conversation between a user and Itachi (an AI project manager).
 
-Recent conversation:
+Recent conversation (including bot's latest reply):
 ${context}
 
-Current response:
+The most recent user message that triggered this evaluation:
 ${currentMessage}
 
 Do TWO things:
