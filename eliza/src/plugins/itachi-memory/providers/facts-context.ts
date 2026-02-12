@@ -14,7 +14,10 @@ export const factsContextProvider: Provider = {
   ): Promise<ProviderResult> => {
     try {
       const memoryService = runtime.getService<MemoryService>('itachi-memory');
-      if (!memoryService) return { text: '', values: {}, data: {} };
+      if (!memoryService) {
+        runtime.logger.warn('FACTS_CONTEXT: MemoryService not available, skipping');
+        return { text: '', values: {}, data: {} };
+      }
 
       const messageText = message.content?.text || '';
 
@@ -55,6 +58,7 @@ export const factsContextProvider: Provider = {
       }
 
       const totalCount = identityFacts.length + contextFacts.length;
+      runtime.logger.info(`FACTS_CONTEXT: fetched identity=${identityFacts.length} contextual=${contextFacts.length} (raw: identity=${identity.length} relevant=${relevant.length} recent=${recent.length})`);
       if (totalCount === 0) {
         return {
           text: '## Known Facts & Preferences\nNo stored facts yet.',
