@@ -55,6 +55,9 @@ export const bootstrapRoutes: Route[] = [
         const heapTotalMB = parseFloat((used.heapTotal / 1024 / 1024).toFixed(1));
         const rssMB = parseFloat((used.rss / 1024 / 1024).toFixed(1));
 
+        const telegramToken = rt.getSetting('TELEGRAM_BOT_TOKEN');
+        const telegramStatus = telegramToken ? 'active' : false;
+
         res.json({
           status: 'ok',
           uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
@@ -65,7 +68,7 @@ export const bootstrapRoutes: Route[] = [
           heap_mb: heapMB,
           heap_total_mb: heapTotalMB,
           rss_mb: rssMB,
-          telegram: 'active',
+          telegram: telegramStatus,
           workers: [
             'edit-analyzer (15min)',
             'session-synthesizer (5min)',
@@ -76,7 +79,8 @@ export const bootstrapRoutes: Route[] = [
           ],
         });
       } catch {
-        res.json({ status: 'degraded' });
+        const telegramToken = rt.getSetting('TELEGRAM_BOT_TOKEN');
+        res.json({ status: 'degraded', telegram: telegramToken ? 'active' : false });
       }
     },
   },

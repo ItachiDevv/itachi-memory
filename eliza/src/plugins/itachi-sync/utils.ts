@@ -27,22 +27,29 @@ export function isValidStatus(status: string): boolean {
 
 /** Sanitize error for client response — hide DB internals */
 export function sanitizeError(error: unknown): string {
-  if (error instanceof Error) {
-    const msg = error.message;
-    // Hide Supabase/Postgres internals
-    if (msg.includes('schema cache') || msg.includes('column') || msg.includes('relation')) {
-      return 'Internal database error';
-    }
-    if (msg.includes('invalid input syntax')) {
-      return 'Invalid input format';
-    }
-    return msg;
+  // Extract message from Error instances or Supabase PostgrestError objects
+  const msg =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null && 'message' in error
+        ? String((error as { message: unknown }).message)
+        : '';
+
+  if (!msg) return 'Internal server error';
+
+  // Hide Supabase/Postgres internals
+  if (msg.includes('schema cache') || msg.includes('column') || msg.includes('relation')) {
+    return 'Internal database error';
   }
-  return 'Internal server error';
+  if (msg.includes('invalid input syntax')) {
+    return 'Invalid input format';
+  }
+  return msg;
 }
 
 /**
  * Check API key auth. Returns true if authorized.
+ * Accepts Bearer token via Authorization header OR x-api-key header.
  * If ITACHI_API_KEY is not set, auth is skipped (backward compat).
  */
 export function checkAuth(
@@ -53,14 +60,20 @@ export function checkAuth(
   const apiKey = runtime.getSetting('ITACHI_API_KEY');
   if (!apiKey) return true; // no key configured = open access
 
+  // Check Authorization: Bearer <token>
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  const token = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
+  const bearerToken = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
 
-  if (token !== apiKey) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return false;
+  // Check x-api-key header
+  const xApiKey = req.headers['x-api-key'];
+  const apiKeyToken = typeof xApiKey === 'string' ? xApiKey : '';
+
+  if (bearerToken === apiKey || apiKeyToken === apiKey) {
+    return true;
   }
-  return true;
+
+  res.status(401).json({ error: 'Unauthorized' });
+  return false;
 }
 
 /** Max allowed field lengths for input validation */
