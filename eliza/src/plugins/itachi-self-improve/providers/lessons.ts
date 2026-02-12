@@ -3,7 +3,7 @@ import { type Provider, type IAgentRuntime, type Memory, type State, type Provid
 export const lessonsProvider: Provider = {
   name: 'MANAGEMENT_LESSONS',
   description: 'Relevant management lessons from past decisions to improve future choices',
-  dynamic: true,
+  dynamic: false,
   position: 5, // Early in context, before action decisions
 
   get: async (

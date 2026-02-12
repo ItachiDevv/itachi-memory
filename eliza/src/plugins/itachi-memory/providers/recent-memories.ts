@@ -4,7 +4,7 @@ import { MemoryService } from '../services/memory-service.js';
 export const recentMemoriesProvider: Provider = {
   name: 'RECENT_PROJECT_MEMORIES',
   description: 'Recent project memories from coding sessions',
-  dynamic: true,
+  dynamic: false,
   position: 10,
 
   get: async (

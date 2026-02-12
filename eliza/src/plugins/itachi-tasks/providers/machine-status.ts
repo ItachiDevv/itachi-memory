@@ -4,7 +4,7 @@ import { MachineRegistryService } from '../services/machine-registry.js';
 export const machineStatusProvider: Provider = {
   name: 'MACHINE_STATUS',
   description: 'Available orchestrator machines and their status',
-  dynamic: true,
+  dynamic: false,
   position: 16,
 
   get: async (

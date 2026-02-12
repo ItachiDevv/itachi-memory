@@ -4,7 +4,7 @@ import { MemoryService } from '../services/memory-service.js';
 export const conversationContextProvider: Provider = {
   name: 'CONVERSATION_CONTEXT',
   description: 'Recent significant conversation memories from Telegram chats',
-  dynamic: true,
+  dynamic: false,
   position: 11,
 
   get: async (

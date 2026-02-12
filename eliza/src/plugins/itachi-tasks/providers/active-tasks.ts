@@ -4,7 +4,7 @@ import { TaskService } from '../services/task-service.js';
 export const activeTasksProvider: Provider = {
   name: 'ACTIVE_TASKS',
   description: 'Currently running and queued tasks',
-  dynamic: true,
+  dynamic: false,
   position: 15,
 
   get: async (

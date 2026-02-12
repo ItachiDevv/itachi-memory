@@ -4,7 +4,7 @@ import { MemoryService } from '../services/memory-service.js';
 export const factsContextProvider: Provider = {
   name: 'FACTS_CONTEXT',
   description: 'Known facts and user preferences from past conversations',
-  dynamic: true,
+  dynamic: false,
   position: 9,
 
   get: async (
