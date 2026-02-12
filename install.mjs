@@ -757,20 +757,26 @@ function installWrapper() {
   const unixWrapper = `#!/bin/bash
 # Itachi Memory System - Claude Code wrapper
 export ITACHI_ENABLED=1
+
+# Source nvm so claude is in PATH
+export NVM_DIR="\${HOME}/.nvm"
+[ -s "\${NVM_DIR}/nvm.sh" ] && . "\${NVM_DIR}/nvm.sh"
+
+# Source API keys
 ITACHI_KEYS_FILE="\${HOME}/.itachi-api-keys"
 if [ -f "\${ITACHI_KEYS_FILE}" ]; then set -a; source "\${ITACHI_KEYS_FILE}"; set +a; fi
 export ITACHI_API_URL="\${ITACHI_API_URL:-${API_URL}}"
 
 # Shortcut flags
 case "\$1" in
-  -cd) shift; exec claude --continue --dangerously-skip-permissions "$@" ;;
-  -c)  shift; exec claude --continue "$@" ;;
-  -d)  shift; exec claude --dangerously-skip-permissions "$@" ;;
+  -cd) shift; exec claude --continue --dangerously-skip-permissions "\$@" ;;
+  -c)  shift; exec claude --continue "\$@" ;;
+  -d)  shift; exec claude --dangerously-skip-permissions "\$@" ;;
   clear-failed) exec node "\$(dirname "\$0")/../orchestrator/scripts/clear-tasks.js" failed ;;
   clear-done)   exec node "\$(dirname "\$0")/../orchestrator/scripts/clear-tasks.js" completed ;;
 esac
 
-exec claude "$@"
+exec claude "\$@"
 `;
 
   const windowsCmd = `@echo off
