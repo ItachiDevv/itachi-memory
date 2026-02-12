@@ -154,7 +154,7 @@ async function handleSchedule(
   const input = text.substring('/schedule '.length).trim();
   if (!input) {
     if (callback) await callback({
-      text: 'Usage: /schedule [recurring] <time> <action>\n\nActions:\n  close-done — Close completed task topics\n  close-failed — Close failed task topics\n  sync-repos — Sync GitHub repos\n  recall <query> — Search memories\n\nExamples:\n  /schedule daily 9am close-done\n  /schedule weekdays 8am close-failed\n  /schedule in 2h sync-repos\n  /schedule daily 6am recall auth middleware',
+      text: 'Usage: /schedule [recurring] <time> <action or command>\n\nBuilt-in actions:\n  close-done — Close completed task topics\n  close-failed — Close failed task topics\n  sync-repos — Sync GitHub repos\n  recall <query> — Search memories\n\nOr schedule ANY bot command or natural language:\n  /schedule daily 9am /status\n  /schedule weekdays 8am check for failed tasks and close them\n  /schedule in 2h create a task for lotitachi to update the readme\n\nExamples:\n  /schedule daily 9am close-done\n  /schedule weekdays 8am close-failed\n  /schedule in 2h sync-repos\n  /schedule daily 6am recall auth middleware\n  /schedule tomorrow 3pm /repos',
     });
     return { success: false, error: 'No input' };
   }
@@ -219,8 +219,14 @@ function parseActionFromMessage(msg: string): { actionType: ActionType; actionDa
     }
   }
 
-  // Unknown — treat as a text reminder
-  return { actionType: 'message', actionData: {}, label: msg };
+  // Check if it looks like a bot command (starts with /) — treat as custom action
+  if (lower.startsWith('/')) {
+    return { actionType: 'custom', actionData: { command: msg }, label: msg };
+  }
+
+  // Natural language that isn't a simple text reminder — treat as custom action
+  // so it goes through the LLM pipeline for execution
+  return { actionType: 'custom', actionData: { command: msg }, label: msg };
 }
 
 // ============================================================
