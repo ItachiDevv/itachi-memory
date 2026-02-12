@@ -17,7 +17,8 @@
     "@elizaos/plugin-openai": "^1.0.0",
     "@elizaos/plugin-sql": "^1.0.0",
     "@elizaos/plugin-telegram": "^1.6.4",
-    "@supabase/supabase-js": "^2.49.0"
+    "@supabase/supabase-js": "^2.49.0",
+    "pg": "^8.18.0"
   },
   "devDependencies": {
     "@elizaos/cli": "^1.7.2",

@@ -149,7 +149,7 @@ describe('MemoryService integration', () => {
     expect((inserted.embedding as number[]).length).toBe(1536);
   });
 
-  it('4. searchMemories calls match_memories RPC', async () => {
+  it('4. searchMemories calls match_memories_hybrid RPC (falls back to match_memories)', async () => {
     mockRpcResponse = {
       data: [{ id: '1', project: 'test', similarity: 0.9 }],
       error: null,
@@ -160,7 +160,8 @@ describe('MemoryService integration', () => {
     const results = await service.searchMemories('auth bug', 'my-app', 5, 'main', 'code_change');
 
     expect(lastRpcCall).not.toBeNull();
-    expect(lastRpcCall!.fn).toBe('match_memories');
+    // Now delegates to hybrid search first
+    expect(lastRpcCall!.fn).toBe('match_memories_hybrid');
     const params = lastRpcCall!.params as Record<string, unknown>;
     expect(params.match_project).toBe('my-app');
     expect(params.match_branch).toBe('main');

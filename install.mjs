@@ -769,9 +769,9 @@ export ITACHI_API_URL="\${ITACHI_API_URL:-${API_URL}}"
 
 # Shortcut flags
 case "\$1" in
-  -cd) shift; exec claude --continue --dangerously-skip-permissions "\$@" ;;
-  -c)  shift; exec claude --continue "\$@" ;;
-  -d)  shift; exec claude --dangerously-skip-permissions "\$@" ;;
+  --cds) shift; exec claude --continue --dangerously-skip-permissions "\$@" ;;
+  --c)   shift; exec claude --continue "\$@" ;;
+  --ds)  shift; exec claude --dangerously-skip-permissions "\$@" ;;
   clear-failed) exec node "\$(dirname "\$0")/../orchestrator/scripts/clear-tasks.js" failed ;;
   clear-done)   exec node "\$(dirname "\$0")/../orchestrator/scripts/clear-tasks.js" completed ;;
 esac
@@ -789,9 +789,9 @@ if exist "%ITACHI_KEYS_FILE%" (
 if not defined ITACHI_API_URL set "ITACHI_API_URL=${API_URL}"
 
 :: Shortcut flags
-if "%~1"=="-cd" ( claude --continue --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
-if "%~1"=="-c"  ( claude --continue %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
-if "%~1"=="-d"  ( claude --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
+if "%~1"=="--cds" ( claude --continue --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
+if "%~1"=="--c"   ( claude --continue %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
+if "%~1"=="--ds"  ( claude --dangerously-skip-permissions %2 %3 %4 %5 %6 %7 %8 %9 & goto :eof )
 if "%~1"=="clear-failed" ( node "%~dp0..\\orchestrator\\scripts\\clear-tasks.js" failed & goto :eof )
 if "%~1"=="clear-done"   ( node "%~dp0..\\orchestrator\\scripts\\clear-tasks.js" completed & goto :eof )
 
@@ -812,9 +812,9 @@ if (-not $env:ITACHI_API_URL) { $env:ITACHI_API_URL = "${API_URL}" }
 
 # Shortcut flags
 switch ($args[0]) {
-    '-cd' { claude --continue --dangerously-skip-permissions @($args[1..($args.Length-1)]); return }
-    '-c'  { claude --continue @($args[1..($args.Length-1)]); return }
-    '-d'  { claude --dangerously-skip-permissions @($args[1..($args.Length-1)]); return }
+    '--cds' { claude --continue --dangerously-skip-permissions @($args[1..($args.Length-1)]); return }
+    '--c'   { claude --continue @($args[1..($args.Length-1)]); return }
+    '--ds'  { claude --dangerously-skip-permissions @($args[1..($args.Length-1)]); return }
     'clear-failed' { node (Join-Path $PSScriptRoot '..\\orchestrator\\scripts\\clear-tasks.js') failed; return }
     'clear-done'   { node (Join-Path $PSScriptRoot '..\\orchestrator\\scripts\\clear-tasks.js') completed; return }
 }

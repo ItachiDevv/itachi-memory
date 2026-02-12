@@ -1,5 +1,6 @@
 import { Service, type IAgentRuntime, ModelType } from '@elizaos/core';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createHash } from 'node:crypto';
 
 export interface ItachiMemory {
   id: string;
@@ -62,11 +63,47 @@ export class MemoryService extends Service {
   }
 
   async getEmbedding(text: string): Promise<number[]> {
+    const hash = createHash('sha256').update(text).digest('hex');
+
+    // Check embedding cache
+    try {
+      const { data: cached } = await this.supabase
+        .from('itachi_embedding_cache')
+        .select('embedding')
+        .eq('content_hash', hash)
+        .single();
+
+      if (cached?.embedding && Array.isArray(cached.embedding) && cached.embedding.length > 0) {
+        // Update last_used (fire-and-forget)
+        this.supabase
+          .from('itachi_embedding_cache')
+          .update({ last_used: new Date().toISOString() })
+          .eq('content_hash', hash)
+          .then(() => {})
+          .catch(() => {});
+        return cached.embedding as unknown as number[];
+      }
+    } catch {
+      // Cache miss or table doesn't exist — fall through to model call
+    }
+
     const result = await this.runtime.useModel(ModelType.TEXT_EMBEDDING, {
       input: text,
     });
-    // useModel for embeddings returns number[] directly
-    return result as unknown as number[];
+    const embedding = result as unknown as number[];
+
+    // Upsert to cache (fire-and-forget)
+    try {
+      this.supabase
+        .from('itachi_embedding_cache')
+        .upsert({ content_hash: hash, embedding, model_id: 'text-embedding', last_used: new Date().toISOString() })
+        .then(() => {})
+        .catch(() => {});
+    } catch {
+      // Cache write failure is non-critical
+    }
+
+    return embedding;
   }
 
   async storeMemory(params: StoreMemoryParams): Promise<ItachiMemory> {
@@ -110,8 +147,38 @@ export class MemoryService extends Service {
     branch?: string,
     category?: string
   ): Promise<ItachiMemory[]> {
+    return this.searchMemoriesHybrid(query, project, limit, branch, category);
+  }
+
+  async searchMemoriesHybrid(
+    query: string,
+    project?: string,
+    limit = 5,
+    branch?: string,
+    category?: string
+  ): Promise<ItachiMemory[]> {
     const embedding = await this.getEmbedding(query);
 
+    // Try hybrid search first (vector + FTS)
+    try {
+      const { data, error } = await this.supabase.rpc('match_memories_hybrid', {
+        query_embedding: embedding,
+        query_text: query,
+        match_project: project ?? null,
+        match_category: category ?? null,
+        match_branch: branch ?? null,
+        match_limit: limit,
+      });
+
+      if (!error && data) {
+        return (data as ItachiMemory[]) || [];
+      }
+      // Fall through to vector-only if hybrid RPC doesn't exist yet
+    } catch {
+      // Hybrid RPC not available — fall back to vector-only
+    }
+
+    // Fallback: vector-only search via match_memories
     const { data, error } = await this.supabase.rpc('match_memories', {
       query_embedding: embedding,
       match_project: project ?? null,
