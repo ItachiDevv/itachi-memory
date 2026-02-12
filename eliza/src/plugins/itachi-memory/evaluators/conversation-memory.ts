@@ -15,11 +15,19 @@ export const conversationMemoryEvaluator: Evaluator = {
   examples: [
     {
       prompt: 'User asked about PostgreSQL migration decision and Itachi confirmed the approach.',
-      response: 'Stored conversation memory with significance 0.85 and extracted 1 fact.',
+      messages: [
+        { name: '{{name1}}', content: { text: 'Should we use PostgreSQL for the migration?' } },
+        { name: 'Itachi', content: { text: 'Yes, PostgreSQL is the right choice given our data model.' } },
+      ],
+      outcome: 'Stored conversation memory with significance 0.85 and extracted 1 fact.',
     },
     {
-      prompt: 'User said "thanks" and Itachi replied "you\'re welcome".',
-      response: 'Stored conversation memory with significance 0.1, no facts extracted.',
+      prompt: 'User said thanks and Itachi replied you\'re welcome.',
+      messages: [
+        { name: '{{name1}}', content: { text: 'thanks' } },
+        { name: 'Itachi', content: { text: "You're welcome!" } },
+      ],
+      outcome: 'Stored conversation memory with significance 0.1, no facts extracted.',
     },
   ],
 

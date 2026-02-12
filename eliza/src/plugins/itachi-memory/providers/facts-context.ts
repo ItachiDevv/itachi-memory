@@ -23,7 +23,7 @@ export const factsContextProvider: Provider = {
 
       // Fetch identity facts (permanent, always injected) + relevant + recent in parallel
       const [identity, relevant, recent] = await Promise.all([
-        fetchIdentityFacts(memoryService, 20),
+        fetchIdentityFacts(memoryService, 50),
         messageText.length > 10
           ? memoryService.searchMemories(messageText, undefined, 8, undefined, 'fact')
           : Promise.resolve([]),
