@@ -1,7 +1,7 @@
 import type { Project, ProjectAgent, IAgentRuntime } from '@elizaos/core';
 import { character } from './character.js';
 import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
-import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask } from './plugins/itachi-tasks/index.js';
+import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
 import { itachiGeminiPlugin } from './plugins/plugin-gemini/index.js';
@@ -72,6 +72,7 @@ const agent: ProjectAgent = {
       { worker: cleanupWorker, register: registerCleanupTask, name: 'cleanup' },
       { worker: taskDispatcherWorker, register: registerTaskDispatcherTask, name: 'task-dispatcher' },
       { worker: githubRepoSyncWorker, register: registerGithubRepoSyncTask, name: 'github-repo-sync' },
+      { worker: reminderPollerWorker, register: registerReminderPollerTask, name: 'reminder-poller' },
     ];
 
     for (const { worker, register, name } of allWorkers) {
@@ -114,6 +115,10 @@ const agent: ProjectAgent = {
       // Self-improve: reflection (weekly, start after 6m)
       { name: 'reflection', intervalMs: 604_800_000, delayMs: 360_000,
         execute: (rt) => reflectionWorker.execute(rt, {}, { name: 'ITACHI_REFLECTION', tags: [], description: '' }) },
+      // Reminders: check for due reminders (60s, start after 15s)
+      { name: 'reminder-poller', intervalMs: 60_000, delayMs: 15_000,
+        validate: (rt) => reminderPollerWorker.validate!(rt, {} as any, {} as any),
+        execute: (rt) => reminderPollerWorker.execute(rt, {}, { name: 'ITACHI_REMINDER_POLLER', tags: [], description: '' }) },
     ]);
   },
 };
