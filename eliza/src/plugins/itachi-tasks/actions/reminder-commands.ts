@@ -191,7 +191,7 @@ async function handleSchedule(
   return { success: true, data: { itemId: item.id } };
 }
 
-function parseActionFromMessage(msg: string): { actionType: ActionType; actionData: Record<string, unknown>; label: string } {
+export function parseActionFromMessage(msg: string): { actionType: ActionType; actionData: Record<string, unknown>; label: string } {
   const lower = msg.toLowerCase().trim();
 
   // Check for known actions
@@ -292,13 +292,13 @@ function extractTelegramIds(message: Memory): { telegramChatId: number; telegram
   };
 }
 
-interface ParsedTimeMessage {
+export interface ParsedTimeMessage {
   remindAt: Date;
   message: string;
   recurring: 'daily' | 'weekly' | 'weekdays' | null;
 }
 
-function parseTimeAndMessage(input: string): ParsedTimeMessage | null {
+export function parseTimeAndMessage(input: string): ParsedTimeMessage | null {
   let recurring: 'daily' | 'weekly' | 'weekdays' | null = null;
   let rest = input;
 
