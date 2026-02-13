@@ -80,12 +80,15 @@ export async function classifyTask(task: Task, config: Config): Promise<TaskClas
 
         // Use Claude CLI with subscription auth (no API key needed)
         // Strip ANTHROPIC_API_KEY so CLI uses subscription, not API billing
+        // Strip CLAUDECODE to avoid "nested session" error if orchestrator runs inside Claude
         const cleanEnv = { ...process.env };
         delete cleanEnv.ANTHROPIC_API_KEY;
+        delete cleanEnv.CLAUDECODE;
 
-        // Pipe prompt from file to avoid cmd.exe mangling args with quotes/newlines
+        // Use itachi --ds wrapper (loads env, calls claude --dangerously-skip-permissions)
+        // Only override max-turns (1 for classification) and output-format (text for parsing)
         const output = execSync(
-            `${readCmd} | claude --model sonnet --max-turns 1 --output-format text --dangerously-skip-permissions`,
+            `${readCmd} | itachi --ds --max-turns 1 --output-format text`,
             { encoding: 'utf8', timeout: 30000, env: cleanEnv }
         ).trim();
 
@@ -119,7 +122,13 @@ export async function classifyTask(task: Task, config: Config): Promise<TaskClas
         console.log(`[classifier] Task ${task.id.substring(0, 8)}: ${difficulty} → ${engine}/${mapping.model} ($${mapping.budget})`);
         return classification;
     } catch (err) {
-        console.error('[classifier] Classification failed, using default:', err instanceof Error ? err.message : err);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        // Detect auth errors and surface actionable fix
+        if (errMsg.includes('OAuth token has expired') || errMsg.includes('authentication_error')) {
+            console.error('[classifier] *** SUBSCRIPTION TOKEN EXPIRED ***');
+            console.error('[classifier] Run: claude setup-token (long-lived) or claude auth login (refresh)');
+        }
+        console.error('[classifier] Classification failed, using default:', errMsg);
         return DEFAULT_CLASSIFICATION;
     }
 }

@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execSync, ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -92,6 +92,50 @@ export function buildPrompt(task: Task, classification?: TaskClassification): st
 }
 
 /**
+ * Check if Claude CLI subscription auth is valid.
+ * Runs `claude auth status` and inspects the result.
+ * Returns { valid, error } — if invalid, error describes the issue.
+ */
+export function checkClaudeAuth(): { valid: boolean; error?: string } {
+    try {
+        const cleanEnv = { ...process.env };
+        delete cleanEnv.ANTHROPIC_API_KEY;
+        // Unset CLAUDECODE to avoid "nested session" error
+        delete cleanEnv.CLAUDECODE;
+
+        const output = execSync('claude auth status', {
+            encoding: 'utf8',
+            timeout: 10000,
+            env: cleanEnv,
+        }).trim();
+
+        const status = JSON.parse(output);
+
+        if (!status.loggedIn) {
+            return {
+                valid: false,
+                error: 'Claude CLI is not logged in. Run: claude auth login (or claude setup-token for long-lived auth)',
+            };
+        }
+
+        return { valid: true };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Detect OAuth token expiration from the error output
+        if (msg.includes('OAuth token has expired') || msg.includes('authentication_error')) {
+            return {
+                valid: false,
+                error: 'Claude subscription token expired. Run: claude setup-token (for long-lived auth) or claude auth login (to refresh)',
+            };
+        }
+        return {
+            valid: false,
+            error: `Claude auth check failed: ${msg.substring(0, 200)}`,
+        };
+    }
+}
+
+/**
  * Spawn a session using the appropriate engine (claude or codex).
  */
 export function spawnSession(task: Task, workspacePath: string, classification?: TaskClassification): {
@@ -111,54 +155,39 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
 } {
     const prompt = buildPrompt(task, classification);
 
-    // Classification overrides task defaults: classification budget > task budget > config default
-    const budget = classification
-        ? getBudgetForClassification(classification)
-        : (task.max_budget_usd || config.defaultBudget);
-    const model = classification
-        ? classification.suggestedModel
-        : (task.model || config.defaultModel);
-
     // Write prompt to temp file — avoids shell quoting issues with newlines/quotes on Windows
     const shortId = task.id.substring(0, 8);
     const promptFile = path.join(PROMPT_DIR, `${shortId}.txt`);
     fs.writeFileSync(promptFile, prompt, 'utf8');
 
-    // Build shell command string: read prompt from file, pipe to claude
+    // Build shell command string: read prompt from file, pipe to itachi --ds
     const readCmd = process.platform === 'win32'
         ? `type "${promptFile.replace(/\//g, '\\')}"`
         : `cat "${promptFile}"`;
 
-    const cliArgs = [
-        '--dangerously-skip-permissions',
-        '--output-format', 'stream-json',
-        '--verbose',
-        '--max-turns', '50',
-        '--model', model,
-    ];
+    // Just pipe prompt to itachi --ds. That's it.
+    // Model, auth, max-turns are configured per-machine by the user.
+    const fullCmd = `${readCmd} | itachi --ds`;
 
-    const fullCmd = `${readCmd} | claude ${cliArgs.join(' ')}`;
+    console.log(`[session] Spawning itachi --ds in ${workspacePath}`);
 
-    console.log(`[session] Spawning claude in ${workspacePath} (model: ${model}, budget: $${budget}${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
-
-    const apiKeys = loadApiKeys();
-    // Don't pass ANTHROPIC_API_KEY to Claude CLI — it should use Max subscription,
-    // not API billing. The task classifier reads it from process.env separately.
-    delete apiKeys.ANTHROPIC_API_KEY;
-
+    // Clean env: strip ANTHROPIC_API_KEY so Claude CLI uses subscription auth (not API billing).
+    // Strip CLAUDECODE to avoid "nested session" error if orchestrator runs inside Claude Code.
+    // Strip GITHUB_TOKEN so gh CLI uses keyring auth from `gh auth login`.
+    // Let the itachi wrapper handle loading api keys and setting ITACHI_ENABLED.
     const envVars: Record<string, string> = {
         ...process.env as Record<string, string>,
-        ...apiKeys,
-        ITACHI_ENABLED: '1',
         ITACHI_TASK_ID: task.id,
     };
-    // Ensure ANTHROPIC_API_KEY is not in the CLI env (may come from process.env too)
     delete envVars.ANTHROPIC_API_KEY;
+    delete envVars.CLAUDECODE;
+    delete envVars.GITHUB_TOKEN;
 
-    // Enable agent teams for major tasks
-    if (classification?.useAgentTeams) {
-        envVars.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1';
-        console.log(`[session] Agent teams enabled for task ${task.id.substring(0, 8)} (team size: ${classification.teamSize})`);
+    // Debug: confirm ANTHROPIC_API_KEY is NOT in the spawned env
+    if (envVars.ANTHROPIC_API_KEY) {
+        console.error(`[session] WARNING: ANTHROPIC_API_KEY still in env after deletion!`);
+    } else {
+        console.log(`[session] Env clean: no ANTHROPIC_API_KEY (subscription auth)`);
     }
 
     const proc = spawn(fullCmd, [], {
@@ -168,96 +197,69 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
     });
 
     const resultPromise = new Promise<SessionResult>((resolve) => {
-        let sessionId: string | null = null;
         let resultText = '';
-        let costUsd = 0;
-        let durationMs = 0;
-        let isError = false;
-        let lastActivity = Date.now();
-        let done = false;
+        const startTime = Date.now();
 
+        // Capture plain text stdout — no stream-json parsing needed
         if (proc.stdout) {
-            const rl = readline.createInterface({ input: proc.stdout });
-
-            rl.on('line', (line) => {
-                lastActivity = Date.now();
-                try {
-                    const event: ClaudeStreamEvent = JSON.parse(line);
-
-                    if (event.type === 'system' && event.session_id) {
-                        sessionId = event.session_id;
-                    }
-
-                    if (event.type === 'assistant' && event.message) {
-                        // --verbose format: content can be string or array of blocks
-                        const content = event.message.content;
-                        const text = typeof content === 'string'
-                            ? content
-                            : Array.isArray(content)
-                                ? content.filter(b => b.type === 'text').map(b => b.text || '').join('\n')
-                                : '';
-                        if (text) {
-                            resultText = text;
-                            streamToEliza(task.id, { type: 'text', text });
-                        }
-                    }
-
-                    if (event.type === 'tool_use' && event.tool_use) {
-                        streamToEliza(task.id, {
-                            type: 'tool_use',
-                            tool_use: event.tool_use,
-                        });
-                    }
-
-                    if (event.type === 'result') {
-                        // --verbose format: result is a string at top level, costs at top level
-                        // Legacy format: result is an object with .text, .cost_usd, etc.
-                        const r = event.result;
-                        if (typeof r === 'string') {
-                            resultText = r || resultText;
-                        } else if (r && typeof r === 'object') {
-                            resultText = r.text || resultText;
-                            costUsd = r.cost_usd || costUsd;
-                            durationMs = r.duration_ms || durationMs;
-                            isError = r.is_error ?? isError;
-                            sessionId = r.session_id || sessionId;
-                        }
-                        // Top-level fields (--verbose format)
-                        sessionId = event.session_id || sessionId;
-                        costUsd = event.total_cost_usd || costUsd;
-                        durationMs = event.duration_ms || durationMs;
-                        isError = event.is_error ?? isError;
-                    }
-                } catch {
-                    // Non-JSON line, ignore
+            proc.stdout.on('data', (data) => {
+                const chunk = data.toString();
+                resultText += chunk;
+                // Stream last meaningful chunk to ElizaOS
+                const trimmed = chunk.trim();
+                if (trimmed) {
+                    streamToEliza(task.id, { type: 'text', text: trimmed });
                 }
             });
         }
 
+        let stderrBuf = '';
         if (proc.stderr) {
             proc.stderr.on('data', (data) => {
                 const msg = data.toString().trim();
-                if (msg) console.error(`[session:${task.id.substring(0, 8)}] stderr: ${msg}`);
+                if (msg) {
+                    stderrBuf += msg + '\n';
+                    console.error(`[session:${task.id.substring(0, 8)}] stderr: ${msg}`);
+                }
             });
         }
 
         proc.on('close', (code) => {
-            done = true;
             const exitCode = code ?? 1;
-            console.log(`[session] Claude exited with code ${exitCode} for task ${task.id.substring(0, 8)}`);
+            const durationMs = Date.now() - startTime;
+            console.log(`[session] itachi --ds exited with code ${exitCode} for task ${task.id.substring(0, 8)} (${Math.round(durationMs / 1000)}s)`);
+
+            // Detect auth errors in stderr
+            if (exitCode !== 0 && (stderrBuf.includes('OAuth token has expired') || stderrBuf.includes('authentication_error'))) {
+                console.error(`[session] *** SUBSCRIPTION TOKEN EXPIRED — run: claude auth login ***`);
+                resolve({
+                    sessionId: null,
+                    resultText: 'Auth expired. Run `claude auth login` on this machine.',
+                    costUsd: 0,
+                    durationMs,
+                    isError: true,
+                    exitCode,
+                });
+                return;
+            }
+
+            // Use last ~2000 chars of stdout as result text (Claude's final output)
+            const trimmedResult = resultText.trim();
+            const lastChunk = trimmedResult.length > 2000
+                ? trimmedResult.substring(trimmedResult.length - 2000)
+                : trimmedResult;
 
             resolve({
-                sessionId,
-                resultText: resultText || '(no output)',
-                costUsd,
-                durationMs: durationMs || (Date.now() - lastActivity),
-                isError: isError || exitCode !== 0,
+                sessionId: null,
+                resultText: lastChunk || '(no output)',
+                costUsd: 0,
+                durationMs,
+                isError: exitCode !== 0,
                 exitCode,
             });
         });
 
         proc.on('error', (err) => {
-            done = true;
             console.error(`[session] Spawn error for task ${task.id.substring(0, 8)}:`, err.message);
             resolve({
                 sessionId: null,
@@ -290,29 +292,16 @@ export function resumeClaudeSession(
         ? `type "${inputFile.replace(/\//g, '\\')}"`
         : `cat "${inputFile}"`;
 
-    const cliArgs = [
-        '--continue',
-        '--resume', sessionId,
-        '--dangerously-skip-permissions',
-        '--output-format', 'stream-json',
-        '--verbose',
-        '--max-turns', '50',
-        '--model', task.model || config.defaultModel,
-    ];
-
-    const fullCmd = `${readCmd} | claude ${cliArgs.join(' ')}`;
-    console.log(`[session] Resuming session ${sessionId.substring(0, 8)} for task ${shortId} with user input`);
-
-    const apiKeys = loadApiKeys();
-    delete apiKeys.ANTHROPIC_API_KEY;
+    // itachi --cds = claude --continue --dangerously-skip-permissions
+    const fullCmd = `${readCmd} | itachi --cds --resume ${sessionId}`;
+    console.log(`[session] Resuming session ${sessionId.substring(0, 8)} for task ${shortId} (itachi --cds)`);
 
     const envVars: Record<string, string> = {
         ...process.env as Record<string, string>,
-        ...apiKeys,
-        ITACHI_ENABLED: '1',
         ITACHI_TASK_ID: task.id,
     };
     delete envVars.ANTHROPIC_API_KEY;
+    delete envVars.CLAUDECODE;
 
     const proc = spawn(fullCmd, [], {
         cwd: workspacePath,
@@ -321,44 +310,12 @@ export function resumeClaudeSession(
     });
 
     const resultPromise = new Promise<SessionResult>((resolve) => {
-        let resumedSessionId: string | null = sessionId;
         let resultText = '';
-        let costUsd = 0;
-        let durationMs = 0;
-        let isError = false;
+        const startTime = Date.now();
 
         if (proc.stdout) {
-            const rl = readline.createInterface({ input: proc.stdout });
-            rl.on('line', (line) => {
-                try {
-                    const event: ClaudeStreamEvent = JSON.parse(line);
-                    if (event.type === 'system' && event.session_id) resumedSessionId = event.session_id;
-                    if (event.type === 'assistant' && event.message) {
-                        const content = event.message.content;
-                        const text = typeof content === 'string'
-                            ? content
-                            : Array.isArray(content)
-                                ? content.filter(b => b.type === 'text').map(b => b.text || '').join('\n')
-                                : '';
-                        if (text) {
-                            resultText = text;
-                            streamToEliza(task.id, { type: 'text', text });
-                        }
-                    }
-                    if (event.type === 'result') {
-                        const r = event.result;
-                        if (typeof r === 'string') resultText = r || resultText;
-                        else if (r && typeof r === 'object') {
-                            resultText = r.text || resultText;
-                            costUsd = r.cost_usd || costUsd;
-                            durationMs = r.duration_ms || durationMs;
-                            isError = r.is_error ?? isError;
-                        }
-                        costUsd = event.total_cost_usd || costUsd;
-                        durationMs = event.duration_ms || durationMs;
-                        isError = event.is_error ?? isError;
-                    }
-                } catch { /* non-JSON */ }
+            proc.stdout.on('data', (data) => {
+                resultText += data.toString();
             });
         }
 
@@ -371,12 +328,15 @@ export function resumeClaudeSession(
 
         proc.on('close', (code) => {
             const exitCode = code ?? 1;
-            console.log(`[session] Resume exited with code ${exitCode} for task ${shortId}`);
+            const durationMs = Date.now() - startTime;
+            console.log(`[session] Resume exited with code ${exitCode} for task ${shortId} (${Math.round(durationMs / 1000)}s)`);
+            const trimmed = resultText.trim();
+            const lastChunk = trimmed.length > 2000 ? trimmed.substring(trimmed.length - 2000) : trimmed;
             resolve({
-                sessionId: resumedSessionId,
-                resultText: resultText || '(no output)',
-                costUsd, durationMs,
-                isError: isError || exitCode !== 0,
+                sessionId,
+                resultText: lastChunk || '(no output)',
+                costUsd: 0, durationMs,
+                isError: exitCode !== 0,
                 exitCode,
             });
         });
@@ -405,16 +365,16 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
         ? `type "${promptFile.replace(/\//g, '\\')}"`
         : `cat "${promptFile}"`;
 
-    const codexArgs = ['exec', '--full-auto', '--json'];
+    const codexArgs = ['--ds', 'exec', '--json'];
     // Codex model override (gpt-5-codex is default, user can set via task.model)
     if (task.model && task.model.startsWith('gpt')) {
-        codexArgs.unshift('--model', task.model);
+        codexArgs.splice(1, 0, '--model', task.model);
     }
 
     // Pipe prompt as last positional arg via shell to avoid quoting issues
-    const fullCmd = `${readCmd} | codex ${codexArgs.join(' ')} -`;
+    const fullCmd = `${readCmd} | itachic ${codexArgs.join(' ')} -`;
 
-    console.log(`[session] Spawning codex in ${workspacePath} (engine: codex${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
+    console.log(`[session] Spawning itachic --ds in ${workspacePath} (engine: codex${classification ? `, difficulty: ${classification.difficulty}` : ''})`);
 
     const apiKeys = loadApiKeys();
     // Don't pass ANTHROPIC_API_KEY to Codex CLI — same reason as Claude CLI
@@ -424,6 +384,7 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
         ...process.env as Record<string, string>,
         ...apiKeys,
         ITACHI_ENABLED: '1',
+        ITACHI_CLIENT: 'codex',
         ITACHI_TASK_ID: task.id,
     };
     delete envVars.ANTHROPIC_API_KEY;

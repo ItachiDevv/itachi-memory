@@ -1,7 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { config } from './config';
 import { claimNextTask, updateTask, recoverStuckTasks } from './supabase-client';
-import { spawnSession, resumeClaudeSession, streamToEliza } from './session-manager';
+import { spawnSession, resumeClaudeSession, checkClaudeAuth, streamToEliza } from './session-manager';
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
@@ -46,9 +46,9 @@ async function runTask(task: Task): Promise<void> {
         }
     }
 
-    // Classify task to determine model, budget, and team configuration
-    const classification = await classifyTask(task, config);
-    console.log(`[runner] Classification for ${shortId}: ${classification.difficulty} (${classification.engine}/${classification.suggestedModel}, teams: ${classification.useAgentTeams}, ~${classification.estimatedFiles} files)`);
+    // Skip Claude-based classification — it burns an extra session per task.
+    // Use static default; model/auth configured per-machine by the user.
+    const classification = undefined;
 
     // Update status to running
     await updateTask(task.id, {
@@ -56,6 +56,13 @@ async function runTask(task: Task): Promise<void> {
         workspace_path: workspacePath,
         started_at: new Date().toISOString(),
     });
+
+    // Pre-check auth — fail fast with actionable error instead of wasting time
+    const auth = checkClaudeAuth();
+    if (!auth.valid) {
+        await failTask(task, auth.error || 'Claude auth invalid');
+        return;
+    }
 
     // Spawn session with appropriate engine (claude or codex)
     const { process: proc, result: resultPromise } = spawnSession(task, workspacePath, classification);

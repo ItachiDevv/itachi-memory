@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { config } from './config';
 import { startRunner, stopRunner, getActiveCount, getActiveTasks } from './task-runner';
+import { checkClaudeAuth } from './session-manager';
 import { getSupabase } from './supabase-client';
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3001', 10);
@@ -179,10 +180,26 @@ async function main(): Promise<void> {
     // API billing instead of Max subscription, burning credits unnecessarily.
     if (process.env.ANTHROPIC_API_KEY) {
         console.warn('');
-        console.warn('  ⚠ WARNING: ANTHROPIC_API_KEY detected in environment!');
+        console.warn('  WARNING: ANTHROPIC_API_KEY detected in environment!');
         console.warn('  Claude CLI will use API billing instead of Max subscription.');
         console.warn('  Remove ANTHROPIC_API_KEY from .env to use subscription auth.');
         console.warn('');
+    }
+
+    // Pre-check Claude subscription auth on startup (if claude is the default engine)
+    if (config.defaultEngine === 'claude') {
+        const auth = checkClaudeAuth();
+        if (!auth.valid) {
+            console.error('');
+            console.error('  *** CLAUDE AUTH ERROR ***');
+            console.error(`  ${auth.error}`);
+            console.error('');
+            console.error('  Tasks will fail until auth is fixed.');
+            console.error('  Recommended: run `claude setup-token` for long-lived auth.');
+            console.error('');
+        } else {
+            console.log('  Auth:        Claude subscription (valid)');
+        }
     }
 
     console.log('');

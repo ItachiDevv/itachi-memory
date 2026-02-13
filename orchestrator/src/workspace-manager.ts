@@ -28,7 +28,10 @@ async function fetchRepoUrl(project: string): Promise<string | null> {
 
 function exec(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string; code: number }> {
     return new Promise((resolve) => {
-        const proc = spawn(cmd, args, { cwd, shell: true });
+        // Strip GITHUB_TOKEN so gh CLI uses keyring auth from `gh auth login`
+        const cleanEnv = { ...process.env };
+        delete (cleanEnv as Record<string, string | undefined>).GITHUB_TOKEN;
+        const proc = spawn(cmd, args, { cwd, shell: true, env: cleanEnv });
         let stdout = '';
         let stderr = '';
         proc.stdout.on('data', (d) => { stdout += d.toString(); });
