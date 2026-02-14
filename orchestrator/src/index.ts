@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { config } from './config';
 import { startRunner, stopRunner, getActiveCount, getActiveTasks } from './task-runner';
-import { checkClaudeAuth } from './session-manager';
+import { checkClaudeAuth, checkEngineAuth } from './session-manager';
 import { getSupabase } from './supabase-client';
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3001', 10);
@@ -186,20 +186,20 @@ async function main(): Promise<void> {
         console.warn('');
     }
 
-    // Pre-check Claude subscription auth on startup (if claude is the default engine)
-    if (config.defaultEngine === 'claude') {
-        const auth = checkClaudeAuth();
-        if (!auth.valid) {
-            console.error('');
-            console.error('  *** CLAUDE AUTH ERROR ***');
-            console.error(`  ${auth.error}`);
-            console.error('');
-            console.error('  Tasks will fail until auth is fixed.');
+    // Pre-check auth for the configured engine on startup
+    const auth = checkEngineAuth(config.defaultEngine);
+    if (!auth.valid) {
+        console.error('');
+        console.error(`  *** ${config.defaultEngine.toUpperCase()} AUTH ERROR ***`);
+        console.error(`  ${auth.error}`);
+        console.error('');
+        console.error('  Tasks will fail until auth is fixed.');
+        if (config.defaultEngine === 'claude') {
             console.error('  Recommended: run `claude setup-token` for long-lived auth.');
-            console.error('');
-        } else {
-            console.log('  Auth:        Claude subscription (valid)');
         }
+        console.error('');
+    } else {
+        console.log(`  Auth:        ${config.defaultEngine} (valid)`);
     }
 
     console.log('');

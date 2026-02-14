@@ -75,7 +75,7 @@ export interface ElizaStreamEvent {
     };
 }
 
-export type Engine = 'claude' | 'codex';
+export type Engine = 'claude' | 'codex' | 'gemini';
 
 export interface TaskClassification {
     difficulty: 'trivial' | 'simple' | 'medium' | 'complex' | 'major';

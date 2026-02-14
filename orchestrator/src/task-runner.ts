@@ -1,7 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { config } from './config';
 import { claimNextTask, updateTask, recoverStuckTasks } from './supabase-client';
-import { spawnSession, resumeClaudeSession, checkClaudeAuth, streamToEliza } from './session-manager';
+import { spawnSession, resumeClaudeSession, checkClaudeAuth, checkEngineAuth, streamToEliza } from './session-manager';
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
@@ -57,10 +57,11 @@ async function runTask(task: Task): Promise<void> {
         started_at: new Date().toISOString(),
     });
 
-    // Pre-check auth — fail fast with actionable error instead of wasting time
-    const auth = checkClaudeAuth();
+    // Pre-check auth for the engine that will run this task
+    const engine = config.defaultEngine;
+    const auth = checkEngineAuth(engine);
     if (!auth.valid) {
-        await failTask(task, auth.error || 'Claude auth invalid');
+        await failTask(task, auth.error || `${engine} auth invalid`);
         return;
     }
 

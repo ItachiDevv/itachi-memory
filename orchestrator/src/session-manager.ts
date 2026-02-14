@@ -136,7 +136,28 @@ export function checkClaudeAuth(): { valid: boolean; error?: string } {
 }
 
 /**
- * Spawn a session using the appropriate engine (claude or codex).
+ * Check auth for any engine. Only Claude has a dedicated auth check;
+ * codex/gemini are assumed valid if the CLI binary exists.
+ */
+export function checkEngineAuth(engine: string): { valid: boolean; error?: string } {
+    if (engine === 'claude') {
+        return checkClaudeAuth();
+    }
+    // For codex/gemini, just check the CLI binary is available
+    const cli = engine === 'codex' ? 'codex' : engine === 'gemini' ? 'gemini' : engine;
+    try {
+        execSync(`${cli} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
+        return { valid: true };
+    } catch {
+        return {
+            valid: false,
+            error: `${cli} CLI not found. Install it: npm install -g ${cli === 'codex' ? '@openai/codex' : cli === 'gemini' ? '@anthropic-ai/gemini-cli' : cli}`,
+        };
+    }
+}
+
+/**
+ * Spawn a session using the appropriate engine (claude, codex, or gemini).
  */
 export function spawnSession(task: Task, workspacePath: string, classification?: TaskClassification): {
     process: ChildProcess;
@@ -145,6 +166,9 @@ export function spawnSession(task: Task, workspacePath: string, classification?:
     const engine = classification?.engine || config.defaultEngine;
     if (engine === 'codex') {
         return spawnCodexSession(task, workspacePath, classification);
+    }
+    if (engine === 'gemini') {
+        return spawnGeminiSession(task, workspacePath, classification);
     }
     return spawnClaudeSession(task, workspacePath, classification);
 }
@@ -483,6 +507,104 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
 
         proc.on('error', (err) => {
             console.error(`[session] Codex spawn error for task ${task.id.substring(0, 8)}:`, err.message);
+            resolve({
+                sessionId: null,
+                resultText: `Spawn error: ${err.message}`,
+                costUsd: 0,
+                durationMs: 0,
+                isError: true,
+                exitCode: 1,
+            });
+        });
+    });
+
+    return { process: proc, result: resultPromise };
+}
+
+export function spawnGeminiSession(task: Task, workspacePath: string, classification?: TaskClassification): {
+    process: ChildProcess;
+    result: Promise<SessionResult>;
+} {
+    const prompt = buildPrompt(task, classification);
+    const shortId = task.id.substring(0, 8);
+
+    // Write prompt to temp file
+    const promptFile = path.join(PROMPT_DIR, `gemini-${shortId}.txt`);
+    fs.writeFileSync(promptFile, prompt, 'utf8');
+
+    const readCmd = process.platform === 'win32'
+        ? `type "${promptFile.replace(/\//g, '\\')}"`
+        : `cat "${promptFile}"`;
+
+    // Pipe prompt to itachig --ds (gemini --yolo via wrapper)
+    const fullCmd = `${readCmd} | itachig --ds`;
+
+    console.log(`[session] Spawning itachig --ds in ${workspacePath}`);
+
+    const apiKeys = loadApiKeys();
+    const envVars: Record<string, string> = {
+        ...process.env as Record<string, string>,
+        ...apiKeys,
+        ITACHI_ENABLED: '1',
+        ITACHI_CLIENT: 'gemini',
+        ITACHI_TASK_ID: task.id,
+    };
+
+    const proc = spawn(fullCmd, [], {
+        cwd: workspacePath,
+        env: envVars,
+        shell: true,
+    });
+
+    const resultPromise = new Promise<SessionResult>((resolve) => {
+        let resultText = '';
+        const startTime = Date.now();
+
+        // Gemini CLI outputs plain text (no JSON streaming)
+        if (proc.stdout) {
+            proc.stdout.on('data', (data) => {
+                const chunk = data.toString();
+                resultText += chunk;
+                const trimmed = chunk.trim();
+                if (trimmed) {
+                    streamToEliza(task.id, { type: 'text', text: trimmed });
+                }
+            });
+        }
+
+        let stderrBuf = '';
+        if (proc.stderr) {
+            proc.stderr.on('data', (data) => {
+                const msg = data.toString().trim();
+                if (msg) {
+                    stderrBuf += msg + '\n';
+                    console.error(`[session:${shortId}:gemini] stderr: ${msg}`);
+                }
+            });
+        }
+
+        proc.on('close', (code) => {
+            const exitCode = code ?? 1;
+            const durationMs = Date.now() - startTime;
+            console.log(`[session] Gemini exited with code ${exitCode} for task ${shortId} (${Math.round(durationMs / 1000)}s)`);
+
+            const trimmedResult = resultText.trim();
+            const lastChunk = trimmedResult.length > 2000
+                ? trimmedResult.substring(trimmedResult.length - 2000)
+                : trimmedResult;
+
+            resolve({
+                sessionId: null,
+                resultText: lastChunk || '(no output)',
+                costUsd: 0,
+                durationMs,
+                isError: exitCode !== 0,
+                exitCode,
+            });
+        });
+
+        proc.on('error', (err) => {
+            console.error(`[session] Gemini spawn error for task ${shortId}:`, err.message);
             resolve({
                 sessionId: null,
                 resultText: `Spawn error: ${err.message}`,
