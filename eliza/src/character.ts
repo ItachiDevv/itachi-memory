@@ -103,7 +103,7 @@ export const character: Character = {
     ANTHROPIC_LARGE_MODEL: 'claude-sonnet-4-5-20250929',
     ANTHROPIC_SMALL_MODEL: 'claude-haiku-4-5-20251001',
     GEMINI_SMALL_MODEL: 'gemini-3-flash-preview',
-    GEMINI_LARGE_MODEL: 'gemini-2.5-pro',
+    GEMINI_LARGE_MODEL: 'gemini-3-flash-preview',
     USE_GEMINI_LARGE: 'true',
     ENABLE_EXTENDED_CAPABILITIES: true,
     SHOULD_RESPOND_BYPASS_SOURCES: 'telegram',
