@@ -141,6 +141,7 @@ function mergeEnv(localContent, remoteContent) {
     case "$CLIENT" in
         claude) GLOBAL_TARGET="$HOME/.claude" ;;
         codex)  GLOBAL_TARGET="$HOME/.codex" ;;
+        gemini) GLOBAL_TARGET="$HOME/.gemini" ;;
         *)      GLOBAL_TARGET="$HOME/.agents" ;;
     esac
 
@@ -222,6 +223,8 @@ try{
         const md=path.join(os.homedir(),'.claude','projects',enc(cwd),'memory');
         fs.mkdirSync(md,{recursive:true});
         targetFile=path.join(md,'MEMORY.md');
+    }else if(client==='gemini'){
+        targetFile=path.join(cwd,'GEMINI.md');
     }else{
         targetFile=path.join(cwd,'AGENTS.md');
     }

@@ -21,6 +21,7 @@ cd .agents/itachi
 
 ```powershell
 .\install.ps1 codex      # creates itachic.cmd/.ps1
+.\install.ps1 gemini     # creates itachig.cmd/.ps1
 .\install.ps1 aider      # creates itachia.cmd/.ps1
 .\install.ps1 cursor     # creates itachicur.cmd/.ps1
 .\install.ps1 myagent    # creates itachimya.cmd/.ps1 (generic)
@@ -30,6 +31,7 @@ cd .agents/itachi
 
 ```bash
 ./install.sh codex       # creates ~/.claude/itachic
+./install.sh gemini      # creates ~/.claude/itachig
 ./install.sh aider       # creates ~/.claude/itachia
 ./install.sh cursor      # creates ~/.claude/itachicur
 ./install.sh myagent     # creates ~/.claude/itachimya (generic)
@@ -69,19 +71,22 @@ A wrapper that:
 
 Each client maps shortcuts to its own CLI flags:
 
-| Shortcut | Codex | Aider | Claude |
-|----------|-------|-------|--------|
-| `--ds` | `--dangerously-bypass-approvals-and-sandbox` | `--yes-always` | `--dangerously-skip-permissions` |
-| `--fa` | `--full-auto` | `--yes-always --auto-commits` | — |
-| `--c` | `resume --last` | — | `--continue` |
+| Shortcut | Codex | Gemini | Aider | Claude |
+|----------|-------|--------|-------|--------|
+| `--ds` | `--dangerously-bypass-approvals-and-sandbox` | `--yolo` | `--yes-always` | `--dangerously-skip-permissions` |
+| `--c` | `resume --last` | `--resume latest` | — | `--continue` |
+| `--cds` | `resume --last --dangerously-bypass-...` | `--resume latest --yolo` | — | `--continue --dangerously-skip-permissions` |
+| `--fa` | `--full-auto` | — | `--yes-always --auto-commits` | — |
 
 Usage:
 
 ```bash
+itachig --ds          # gemini yolo mode
+itachig --c           # resume last gemini session
+itachig --cds         # resume last gemini session in yolo mode
 itachic --ds          # codex with full permissions
+itachic --cds         # resume last codex session with full permissions
 itachia --ds          # aider with auto-yes
-itachic --fa          # codex full-auto mode
-itachic --c           # resume last codex session
 ```
 
 ## Client-Specific Behavior
@@ -93,6 +98,7 @@ The unified hooks branch on `ITACHI_CLIENT`:
 | Client | File | Location |
 |--------|------|----------|
 | `claude` | `MEMORY.md` | `~/.claude/projects/{encoded-cwd}/memory/` |
+| `gemini` | `GEMINI.md` | Project root |
 | `codex` | `AGENTS.md` | Project root |
 | `aider` | `AGENTS.md` | Project root |
 | Others | `AGENTS.md` | Project root |
@@ -103,6 +109,7 @@ The unified hooks branch on `ITACHI_CLIENT`:
 |--------|-----------|
 | `claude` | `~/.claude/` |
 | `codex` | `~/.codex/` |
+| `gemini` | `~/.gemini/` |
 | Others | `~/.agents/` |
 
 ### Settings hooks merge
@@ -115,6 +122,7 @@ Only runs for `claude` (it has a native hook system via `settings.json`). All ot
 |--------|-------------------|--------|
 | `claude` | `~/.claude/projects/{encoded-cwd}/*.jsonl` | `type: "assistant"` with `message.content` |
 | `codex` | `~/.codex/sessions/{year}/{month}/{day}/*.jsonl` | `type: "response_item"` with `payload.role: "assistant"` |
+| `gemini` | `~/.gemini/antigravity/conversations/*.pb` | Protobuf (not yet supported) |
 | Others | Skipped (unknown format) |  |
 
 ## Adding a New Client

@@ -207,6 +207,7 @@ function mergeEnv(localContent, remoteContent) {
         $globalSyncTarget = switch ($client) {
             'claude' { Join-Path $env:USERPROFILE ".claude" }
             'codex'  { Join-Path $env:USERPROFILE ".codex" }
+            'gemini' { Join-Path $env:USERPROFILE ".gemini" }
             default  { Join-Path $env:USERPROFILE ".agents" }
         }
 
@@ -574,6 +575,9 @@ try {
         const memoryDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), 'memory');
         fs.mkdirSync(memoryDir, { recursive: true });
         targetFile = path.join(memoryDir, 'MEMORY.md');
+    } else if (client === 'gemini') {
+        // Gemini: write to GEMINI.md in project root
+        targetFile = path.join(cwd, 'GEMINI.md');
     } else {
         // Codex, Aider, etc: write to AGENTS.md in project root
         targetFile = path.join(cwd, 'AGENTS.md');

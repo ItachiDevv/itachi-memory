@@ -20,8 +20,9 @@ $HooksDest = Join-Path $ClaudeDir "hooks"
 # ============ Client configurations ============
 $Clients = @{
     claude = @{ Cli = "claude"; Short = ""; Native = $true; DsFlag = "--dangerously-skip-permissions"; FaFlag = ""; CFlag = "--continue" }
-    codex  = @{ Cli = "codex";  Short = "c"; Native = $false; DsFlag = "--dangerously-bypass-approvals-and-sandbox"; FaFlag = "--full-auto"; CFlag = "resume --last" }
+    codex  = @{ Cli = "codex";  Short = "c"; Native = $false; DsFlag = "--dangerously-bypass-approvals-and-sandbox"; FaFlag = "--full-auto"; CFlag = "resume --last"; CdsFlag = "resume --last --dangerously-bypass-approvals-and-sandbox" }
     aider  = @{ Cli = "aider";  Short = "a"; Native = $false; DsFlag = "--yes-always"; FaFlag = "--yes-always --auto-commits"; CFlag = "" }
+    gemini = @{ Cli = "gemini"; Short = "g"; Native = $false; DsFlag = "--yolo"; FaFlag = ""; CFlag = "--resume latest"; CdsFlag = "--resume latest --yolo" }
     cursor = @{ Cli = "cursor"; Short = "cur"; Native = $false; DsFlag = ""; FaFlag = ""; CFlag = "" }
 }
 
@@ -38,6 +39,7 @@ $isNative = $c["Native"]
 $dsFlag = [string]$c["DsFlag"]
 $faFlag = [string]$c["FaFlag"]
 $cFlag = [string]$c["CFlag"]
+$cdsFlag = [string]$c["CdsFlag"]
 
 $wrapperName = "itachi$shortN"
 Write-Host "[install] Installing itachi wrapper for '$Client' as '$wrapperName'"
@@ -59,9 +61,10 @@ if ($isNative) {
 
 # ============ 3. Build CMD flag mappings ============
 $cmdFlagLines = ""
-if ($dsFlag) { $cmdFlagLines += "if `"%~1`"==`"--ds`" set `"CLI_ARGS=$dsFlag %2 %3 %4 %5 %6 %7 %8 %9`"`r`n" }
-if ($faFlag) { $cmdFlagLines += "if `"%~1`"==`"--fa`" set `"CLI_ARGS=$faFlag %2 %3 %4 %5 %6 %7 %8 %9`"`r`n" }
-if ($cFlag)  { $cmdFlagLines += "if `"%~1`"==`"--c`"  set `"CLI_ARGS=$cFlag %2 %3 %4 %5 %6 %7 %8 %9`"`r`n" }
+if ($dsFlag)  { $cmdFlagLines += "if `"%~1`"==`"--ds`"  set `"CLI_ARGS=$dsFlag %2 %3 %4 %5 %6 %7 %8 %9`"`r`n" }
+if ($faFlag)  { $cmdFlagLines += "if `"%~1`"==`"--fa`"  set `"CLI_ARGS=$faFlag %2 %3 %4 %5 %6 %7 %8 %9`"`r`n" }
+if ($cFlag)   { $cmdFlagLines += "if `"%~1`"==`"--c`"   set `"CLI_ARGS=$cFlag %2 %3 %4 %5 %6 %7 %8 %9`"`r`n" }
+if ($cdsFlag) { $cmdFlagLines += "if `"%~1`"==`"--cds`" set `"CLI_ARGS=$cdsFlag %2 %3 %4 %5 %6 %7 %8 %9`"`r`n" }
 
 # ============ 4. Write .cmd wrapper using node (avoids PS parsing issues with batch syntax) ============
 $cmdContent = @"
@@ -121,6 +124,10 @@ if ($faFlag) {
 if ($cFlag) {
     $cParts = ($cFlag -split ' ' | ForEach-Object { "'$_'" }) -join ', '
     $ps1FlagCases += "    '--c'  { @($cParts) + `$rest }`n"
+}
+if ($cdsFlag) {
+    $cdsParts = ($cdsFlag -split ' ' | ForEach-Object { "'$_'" }) -join ', '
+    $ps1FlagCases += "    '--cds' { @($cdsParts) + `$rest }`n"
 }
 
 $ps1Content = @"

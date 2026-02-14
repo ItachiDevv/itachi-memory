@@ -13,6 +13,7 @@
 # Transcript location:
 #   - claude  → ~/.claude/projects/{encoded-cwd}/*.jsonl
 #   - codex   → ~/.codex/sessions/{year}/{month}/{day}/*.jsonl
+#   - gemini  → ~/.gemini/antigravity/conversations/*.pb (protobuf, not yet supported)
 #
 # Set ITACHI_DISABLED=1 to opt out.
 
@@ -307,6 +308,7 @@ function extractCodexTexts(lines) {
         } else if (client === 'codex') {
             transcriptPath = findCodexTranscript();
         }
+        // Gemini: protobuf format, not yet supported
         // Generic clients: no transcript extraction (no known format)
         if (!transcriptPath) return;
 

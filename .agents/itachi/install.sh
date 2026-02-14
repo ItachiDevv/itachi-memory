@@ -32,12 +32,20 @@ get_config() {
             FLAG_DS="--dangerously-bypass-approvals-and-sandbox"
             FLAG_FA="--full-auto"
             FLAG_C="resume --last"
+            FLAG_CDS="resume --last --dangerously-bypass-approvals-and-sandbox"
             ;;
         aider)
             CLI="aider"; SHORT="a"; HAS_NATIVE_HOOKS=0
             FLAG_DS="--yes-always"
             FLAG_FA="--yes-always --auto-commits"
             FLAG_C=""
+            ;;
+        gemini)
+            CLI="gemini"; SHORT="g"; HAS_NATIVE_HOOKS=0
+            FLAG_DS="--yolo"
+            FLAG_FA=""
+            FLAG_C="--resume latest"
+            FLAG_CDS="--resume latest --yolo"
             ;;
         cursor)
             CLI="cursor"; SHORT="cur"; HAS_NATIVE_HOOKS=0
@@ -97,9 +105,10 @@ CLI_ARGS=("\$@")
 case "\$1" in
 WRAPPER_FLAGS
 
-[ -n "$FLAG_DS" ] && echo "    --ds) shift; CLI_ARGS=($FLAG_DS \"\$@\") ;;" >> "$WRAPPER_PATH"
-[ -n "$FLAG_FA" ] && echo "    --fa) shift; CLI_ARGS=($FLAG_FA \"\$@\") ;;" >> "$WRAPPER_PATH"
-[ -n "$FLAG_C" ]  && echo "    --c)  shift; CLI_ARGS=($FLAG_C \"\$@\") ;;" >> "$WRAPPER_PATH"
+[ -n "$FLAG_DS" ]  && echo "    --ds)  shift; CLI_ARGS=($FLAG_DS \"\$@\") ;;" >> "$WRAPPER_PATH"
+[ -n "$FLAG_FA" ]  && echo "    --fa)  shift; CLI_ARGS=($FLAG_FA \"\$@\") ;;" >> "$WRAPPER_PATH"
+[ -n "$FLAG_C" ]   && echo "    --c)   shift; CLI_ARGS=($FLAG_C \"\$@\") ;;" >> "$WRAPPER_PATH"
+[ -n "$FLAG_CDS" ] && echo "    --cds) shift; CLI_ARGS=($FLAG_CDS \"\$@\") ;;" >> "$WRAPPER_PATH"
 
 cat >> "$WRAPPER_PATH" << WRAPPER_BODY
 esac
