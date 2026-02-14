@@ -31,7 +31,10 @@ function getLargeModel(runtime: IAgentRuntime): string {
 }
 
 function isLargeEnabled(runtime: IAgentRuntime): boolean {
-  const val = runtime.getSetting('USE_GEMINI_LARGE') ?? process.env.USE_GEMINI_LARGE ?? 'false';
+  const fromRuntime = runtime.getSetting('USE_GEMINI_LARGE');
+  const fromEnv = process.env.USE_GEMINI_LARGE;
+  const val = fromRuntime || fromEnv || 'false';
+  logger.info(`[Gemini] USE_GEMINI_LARGE check — runtime: '${fromRuntime}', env: '${fromEnv}', resolved: '${val}'`);
   return val === 'true' || val === '1';
 }
 
@@ -166,8 +169,8 @@ export const itachiGeminiPlugin: Plugin = {
       return;
     }
 
-    geminiLargeEnabled = isLargeEnabled(runtime);
-    logger.info(`[Gemini] Plugin active — TEXT_SMALL → ${getSmallModel(runtime)}, TEXT_LARGE → ${geminiLargeEnabled ? getLargeModel(runtime) : 'Anthropic (toggle off)'}`);
+    geminiLargeEnabled = true; // Always route TEXT_LARGE to Gemini when plugin is active
+    logger.info(`[Gemini] Plugin active — TEXT_SMALL → ${getSmallModel(runtime)}, TEXT_LARGE → ${getLargeModel(runtime)}`);
   },
 
   // Models are always registered, but handlers check geminiEnabled flag.

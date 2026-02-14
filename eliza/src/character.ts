@@ -104,7 +104,7 @@ export const character: Character = {
     ANTHROPIC_SMALL_MODEL: 'claude-haiku-4-5-20251001',
     GEMINI_SMALL_MODEL: 'gemini-3-flash-preview',
     GEMINI_LARGE_MODEL: 'gemini-2.5-pro',
-    USE_GEMINI_LARGE: 'false', // Toggle: set 'true' to route TEXT_LARGE to Gemini Pro instead of Anthropic
+    USE_GEMINI_LARGE: 'true',
     ENABLE_EXTENDED_CAPABILITIES: true,
     SHOULD_RESPOND_BYPASS_SOURCES: 'telegram',
     secrets: {
