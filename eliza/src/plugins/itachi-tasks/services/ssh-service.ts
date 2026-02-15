@@ -70,7 +70,7 @@ export class SSHService extends Service {
 
     // Scan for ITACHI_SSH_<NAME>_HOST pattern
     // Since ElizaOS settings don't enumerate, we check common names
-    const knownNames = ['coolify', 'mac', 'windows', 'vps', 'server'];
+    const knownNames = ['coolify', 'mac', 'windows', 'hetzner', 'vps', 'server'];
     for (const name of knownNames) {
       if (this.targets.has(name)) continue;
       const host = s(`ITACHI_SSH_${name.toUpperCase()}_HOST`);
