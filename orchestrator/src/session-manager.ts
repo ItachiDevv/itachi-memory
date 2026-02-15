@@ -339,7 +339,13 @@ export function resumeClaudeSession(
 
         if (proc.stdout) {
             proc.stdout.on('data', (data) => {
-                resultText += data.toString();
+                const chunk = data.toString();
+                resultText += chunk;
+                // Stream resumed session output back to Telegram
+                const trimmed = chunk.trim();
+                if (trimmed) {
+                    streamToEliza(task.id, { type: 'text', text: trimmed });
+                }
             });
         }
 

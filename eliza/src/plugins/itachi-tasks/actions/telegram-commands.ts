@@ -247,20 +247,22 @@ async function handleCloseTopics(
 
   if (withTopics.length === 0) {
     if (callback) await callback({ text: `No ${status} tasks with open topics.` });
-    return { success: true, data: { closed: 0 } };
+    return { success: true, data: { deleted: 0 } };
   }
 
-  if (callback) await callback({ text: `Closing ${withTopics.length} ${status} topic(s)...` });
+  if (callback) await callback({ text: `Deleting ${withTopics.length} ${status} topic(s)...` });
 
-  let closed = 0;
-  const label = status === 'completed' ? '✅ DONE' : '❌ FAILED';
+  let deleted = 0;
   for (const task of withTopics) {
     const topicId = (task as any).telegram_topic_id;
-    const shortId = task.id.substring(0, 8);
-    const ok = await topicsService.closeTopic(topicId, `${label} | ${shortId} | ${task.project}`);
-    if (ok) closed++;
+    const ok = await topicsService.deleteTopic(topicId);
+    if (ok) {
+      deleted++;
+      // Clear topic_id from task so it doesn't show up again
+      await taskService.updateTask(task.id, { telegram_topic_id: null } as any);
+    }
   }
 
-  if (callback) await callback({ text: `Closed ${closed}/${withTopics.length} ${status} topic(s).` });
-  return { success: true, data: { closed, total: withTopics.length } };
+  if (callback) await callback({ text: `Deleted ${deleted}/${withTopics.length} ${status} topic(s).` });
+  return { success: true, data: { deleted, total: withTopics.length } };
 }

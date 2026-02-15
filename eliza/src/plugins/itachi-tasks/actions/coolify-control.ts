@@ -8,6 +8,7 @@ import { SSHService } from '../services/ssh-service.js';
  * Commands:
  *   /ssh <target> <command>        — run arbitrary command
  *   /deploy [target]               — redeploy the bot container
+ *   /update                        — pull latest code and rebuild via Coolify API
  *   /logs [target] [lines]         — tail container logs
  *   /containers [target]           — list running containers
  *   /restart-bot [target]          — restart the ElizaOS container
@@ -15,12 +16,16 @@ import { SSHService } from '../services/ssh-service.js';
  */
 export const coolifyControlAction: Action = {
   name: 'COOLIFY_CONTROL',
-  description: 'Control remote servers via SSH. Use for /ssh, /deploy, /logs, /containers, /restart-bot, /ssh-targets commands.',
-  similes: ['ssh command', 'deploy bot', 'view logs', 'restart bot', 'list containers', 'server control'],
+  description: 'Control remote servers via SSH. Use for /ssh, /deploy, /update, /logs, /containers, /restart-bot, /ssh-targets commands.',
+  similes: ['ssh command', 'deploy bot', 'update bot', 'view logs', 'restart bot', 'list containers', 'server control', 'self update', 'pull code'],
   examples: [
     [
       { name: 'user', content: { text: '/ssh coolify docker ps' } },
       { name: 'Itachi', content: { text: '```\nCONTAINER ID  IMAGE       STATUS      NAMES\nabc123       eliza:latest Up 2 hours  eliza-bot\n```' } },
+    ],
+    [
+      { name: 'user', content: { text: '/update' } },
+      { name: 'Itachi', content: { text: 'Triggering rebuild from latest code...\nDeploy queued: iogcks0ww4osc8ckk0c088gs' } },
     ],
     [
       { name: 'user', content: { text: '/logs' } },
@@ -34,7 +39,7 @@ export const coolifyControlAction: Action = {
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text || '';
-    if (/^\/(ssh|deploy|logs|containers|restart-bot|ssh-targets)\b/.test(text)) return true;
+    if (/^\/(ssh|deploy|update|logs|containers|restart-bot|ssh-targets)\b/.test(text)) return true;
     const sshService = runtime.getService<SSHService>('ssh');
     return !!sshService;
   },
@@ -65,6 +70,11 @@ export const coolifyControlAction: Action = {
         const lines = [...targets.entries()].map(([name, t]) => `- **${name}**: ${t.user}@${t.host}:${t.port || 22}`);
         if (callback) await callback({ text: `Configured SSH targets:\n${lines.join('\n')}` });
         return { success: true, data: { targets: [...targets.keys()] } };
+      }
+
+      // /update — self-update: pull latest code from GitHub and rebuild via Coolify API
+      if (text.startsWith('/update')) {
+        return await handleSelfUpdate(runtime, sshService, callback);
       }
 
       // /ssh <target> <command>
@@ -173,7 +183,7 @@ export const coolifyControlAction: Action = {
       // Fallback
       if (callback) {
         await callback({
-          text: 'Available commands:\n- `/ssh <target> <command>` — run command\n- `/deploy` — redeploy bot\n- `/logs [lines]` — view logs\n- `/containers` — list containers\n- `/restart-bot` — restart bot\n- `/ssh-targets` — list targets',
+          text: 'Available commands:\n- `/ssh <target> <command>` — run command\n- `/deploy` — redeploy bot\n- `/update` — pull latest code & rebuild\n- `/logs [lines]` — view logs\n- `/containers` — list containers\n- `/restart-bot` — restart bot\n- `/ssh-targets` — list targets',
         });
       }
       return { success: true };
@@ -184,3 +194,47 @@ export const coolifyControlAction: Action = {
     }
   },
 };
+
+/**
+ * Self-update: triggers Coolify to rebuild from the latest GitHub code.
+ * Uses the Coolify API directly via SSH to localhost on the Hetzner host.
+ */
+async function handleSelfUpdate(
+  runtime: IAgentRuntime,
+  sshService: SSHService,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  if (callback) await callback({ text: 'Pulling latest code and triggering rebuild...' });
+
+  // Coolify API credentials — stored as env vars on the bot
+  const coolifyApiToken = String(runtime.getSetting('COOLIFY_API_TOKEN') || '3|coolify-bot-token-2026');
+  const coolifyAppUuid = String(runtime.getSetting('COOLIFY_RESOURCE_UUID') || 'swoo0o4okwk8ocww4g4ks084');
+
+  // Trigger rebuild via Coolify API (runs on the same host)
+  const curlCmd = `curl -s -X POST "http://localhost:8000/api/v1/applications/${coolifyAppUuid}/restart" -H "Authorization: Bearer ${coolifyApiToken}"`;
+
+  // Use SSH to Coolify host to reach the API
+  const target = sshService.getTarget('coolify');
+  if (!target) {
+    if (callback) await callback({ text: 'No "coolify" SSH target configured. Cannot self-update.' });
+    return { success: false, error: 'No coolify target' };
+  }
+
+  const result = await sshService.exec('coolify', curlCmd, 30_000);
+  const output = result.stdout || result.stderr || '(no output)';
+
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed.message && parsed.deployment_uuid) {
+      if (callback) await callback({
+        text: `Update triggered. Deploy ID: ${parsed.deployment_uuid}\nI will restart with the latest code shortly.`,
+      });
+      return { success: true, data: { deployment_uuid: parsed.deployment_uuid } };
+    }
+    if (callback) await callback({ text: `Coolify response: ${output.substring(0, 500)}` });
+    return { success: !parsed.error, data: parsed };
+  } catch {
+    if (callback) await callback({ text: `Update response:\n\`\`\`\n${output.substring(0, 1000)}\n\`\`\`` });
+    return { success: result.success, data: { output } };
+  }
+}

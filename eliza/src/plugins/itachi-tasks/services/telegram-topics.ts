@@ -209,6 +209,29 @@ export class TelegramTopicsService extends Service {
     }
   }
 
+  /**
+   * Delete a topic entirely (removes it from the forum).
+   */
+  async deleteTopic(topicId: number): Promise<boolean> {
+    if (!this.isEnabled() || !topicId) return false;
+
+    try {
+      const result = await this.apiCall('deleteForumTopic', {
+        chat_id: this.groupChatId,
+        message_thread_id: topicId,
+      });
+
+      if (!result.ok) {
+        this._rt.logger.error(`deleteTopic failed: ${result.description}`);
+      }
+
+      return result.ok;
+    } catch (error) {
+      this._rt.logger.error('deleteTopic error:', error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
   // ============================================================
   // Streaming buffer: accumulate text, flush every 1.5s
   // ============================================================

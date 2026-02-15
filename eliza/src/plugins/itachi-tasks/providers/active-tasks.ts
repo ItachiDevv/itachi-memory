@@ -24,11 +24,13 @@ export const activeTasksProvider: Provider = {
       const sections: string[] = [
         '## Task Status (ground truth from database)',
         '',
-        'IMPORTANT RULES:',
+        'CRITICAL RULES — FOLLOW EXACTLY:',
         '- NEVER say a task is completed unless it appears below with status [completed].',
         '- Tasks with status [queued] or [running] are NOT done. Say "still queued" or "still running".',
         '- If a task is not listed here at all, say "I don\'t have status information for that task."',
         '- NEVER fabricate or guess task progress, results, or PR URLs.',
+        '- When asked "is it done?" or "did it finish?", ONLY check this data. Do NOT make up answers.',
+        '- If you are unsure, say "Let me check" and use the /status command data below.',
         '',
       ];
 
