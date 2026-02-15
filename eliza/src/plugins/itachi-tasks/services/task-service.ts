@@ -169,10 +169,24 @@ export class TaskService extends Service {
   async getActiveTasks(): Promise<ItachiTask[]> {
     const { data, error } = await this.supabase
       .from('itachi_tasks')
-      .select('id, project, description, status, orchestrator_id, telegram_topic_id, created_at')
+      .select('id, project, description, status, orchestrator_id, assigned_machine, telegram_topic_id, created_at, started_at')
       .in('status', ['queued', 'claimed', 'running'])
       .order('priority', { ascending: false })
       .order('created_at', { ascending: true });
+
+    if (error) throw new Error(error.message || JSON.stringify(error));
+    return (data as ItachiTask[]) || [];
+  }
+
+  async getRecentlyCompletedTasks(sinceMinutes: number = 30): Promise<ItachiTask[]> {
+    const since = new Date(Date.now() - sinceMinutes * 60 * 1000).toISOString();
+    const { data, error } = await this.supabase
+      .from('itachi_tasks')
+      .select('id, project, description, status, result_summary, error_message, pr_url, completed_at')
+      .in('status', ['completed', 'failed', 'cancelled', 'timeout'])
+      .gte('completed_at', since)
+      .order('completed_at', { ascending: false })
+      .limit(10);
 
     if (error) throw new Error(error.message || JSON.stringify(error));
     return (data as ItachiTask[]) || [];

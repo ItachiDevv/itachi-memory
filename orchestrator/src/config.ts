@@ -23,7 +23,15 @@ function parseProjectPaths(raw: string): Record<string, string> {
     }
 }
 
+function parseEnginePriority(raw: string, defaultEngine: Engine): Engine[] {
+    if (!raw) return [defaultEngine];
+    const engines = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean) as Engine[];
+    const valid = engines.filter(e => ['claude', 'codex', 'gemini'].includes(e));
+    return valid.length > 0 ? valid : [defaultEngine];
+}
+
 const machineId = required('ITACHI_MACHINE_ID');
+const defaultEngine = (process.env.ITACHI_DEFAULT_ENGINE || 'claude') as Engine;
 
 export const config: Config = {
     supabaseUrl: required('SUPABASE_URL'),
@@ -39,7 +47,9 @@ export const config: Config = {
     projectFilter: process.env.ITACHI_PROJECT_FILTER || undefined,
     apiUrl: process.env.ITACHI_API_URL || 'https://itachisbrainserver.online',
     syncPassphrase: process.env.ITACHI_SYNC_PASSPHRASE || '',
-    defaultEngine: (process.env.ITACHI_DEFAULT_ENGINE || 'claude') as Engine,
+    defaultEngine,
+    enginePriority: parseEnginePriority(process.env.ITACHI_ENGINE_PRIORITY || '', defaultEngine),
     machineId,
     machineDisplayName: process.env.ITACHI_MACHINE_NAME || machineId,
+    githubOwner: process.env.GITHUB_OWNER || '',
 };

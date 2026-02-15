@@ -5,7 +5,7 @@ import { spawnSession, resumeClaudeSession, checkClaudeAuth, checkEngineAuth, st
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
-import { NoRepoError, type Task, type ActiveSession } from './types';
+import { NoRepoError, type Task, type ActiveSession, type TaskClassification, type Engine } from './types';
 
 const activeSessions = new Map<string, ActiveSession & { process: ChildProcess }>();
 
@@ -57,16 +57,31 @@ async function runTask(task: Task): Promise<void> {
         started_at: new Date().toISOString(),
     });
 
-    // Pre-check auth for the engine that will run this task
-    const engine = config.defaultEngine;
-    const auth = checkEngineAuth(engine);
-    if (!auth.valid) {
-        await failTask(task, auth.error || `${engine} auth invalid`);
+    // Try engines in priority order — use first one with valid auth
+    let selectedEngine: string | null = null;
+    for (const engine of config.enginePriority) {
+        const auth = checkEngineAuth(engine);
+        if (auth.valid) {
+            selectedEngine = engine;
+            break;
+        }
+        console.log(`[runner] Engine "${engine}" auth failed: ${auth.error} — trying next`);
+    }
+    if (!selectedEngine) {
+        const tried = config.enginePriority.join(', ');
+        await failTask(task, `All engines failed auth check (tried: ${tried})`);
         return;
     }
+    if (selectedEngine !== config.enginePriority[0]) {
+        console.log(`[runner] Fell back to engine "${selectedEngine}" for task ${shortId}`);
+    }
 
-    // Spawn session with appropriate engine (claude or codex)
+    // Spawn session with selected engine — temporarily override config.defaultEngine
+    // so spawnSession routes to the correct engine
+    const origEngine = config.defaultEngine;
+    (config as any).defaultEngine = selectedEngine;
     const { process: proc, result: resultPromise } = spawnSession(task, workspacePath, classification);
+    (config as any).defaultEngine = origEngine;
 
     // Set up timeout
     const timeoutHandle = setTimeout(() => {
@@ -103,19 +118,20 @@ async function runTask(task: Task): Promise<void> {
     // Cleanup timeout (may be re-set if we resume)
     clearTimeout(timeoutHandle);
 
-    // --- Human-in-the-loop: if Claude asked a question, wait for user reply and resume ---
-    // Detect if Claude's output looks like it asked the user something
-    const needsInput = result.sessionId && !result.isError && (
-        /\b(which|what|how|please (choose|select|specify|confirm|let me know))\b/i.test(result.resultText)
-    );
+    // --- Human-in-the-loop: detect if ANY engine asked a question ---
+    // Works for Claude, Codex, and Gemini — checks output text for question patterns
+    const questionPattern = /\b(which|what|how|where|should I|do you want|please (choose|select|specify|confirm|let me know|provide|clarify)|would you (like|prefer)|can you (confirm|clarify)|I need (to know|clarification|more info))\b/i;
+    const needsInput = !result.isError && result.resultText.length > 20 && questionPattern.test(result.resultText);
+    // For Claude, we can resume the session; for others, we re-run with the user's answer appended
+    const canResume = selectedEngine === 'claude' && !!result.sessionId;
 
     if (needsInput) {
-        console.log(`[runner] Task ${shortId} appears to need user input, waiting for Telegram reply...`);
+        console.log(`[runner] Task ${shortId} (engine: ${selectedEngine}) appears to need user input, waiting for Telegram reply...`);
 
-        // Stream Claude's question to Telegram
+        // Stream the question to Telegram
         streamToEliza(task.id, {
             type: 'text',
-            text: `Waiting for your reply:\n\n${result.resultText.substring(0, 500)}`,
+            text: `⏳ Waiting for your reply:\n\n${result.resultText.substring(0, 500)}`,
         });
 
         // Poll for user input (5 minute timeout)
@@ -136,30 +152,60 @@ async function runTask(task: Task): Promise<void> {
         if (userReply) {
             console.log(`[runner] Got user reply for ${shortId}: "${userReply.substring(0, 60)}"`);
 
-            // Resume the session with user's answer
-            const { process: resumeProc, result: resumePromise } = resumeClaudeSession(
-                task, workspacePath, result.sessionId!, userReply
-            );
+            if (canResume) {
+                // Claude: resume existing session with --continue --resume
+                const { process: resumeProc, result: resumePromise } = resumeClaudeSession(
+                    task, workspacePath, result.sessionId!, userReply
+                );
 
-            // Update active session tracker
-            const resumeTimeout = setTimeout(() => {
-                resumeProc.kill('SIGTERM');
-            }, config.taskTimeoutMs);
+                const resumeTimeout = setTimeout(() => {
+                    resumeProc.kill('SIGTERM');
+                }, config.taskTimeoutMs);
 
-            activeSessions.set(task.id, {
-                task, workspacePath, startedAt: new Date(),
-                timeoutHandle: resumeTimeout, classification, process: resumeProc,
-            });
+                activeSessions.set(task.id, {
+                    task, workspacePath, startedAt: new Date(),
+                    timeoutHandle: resumeTimeout, classification, process: resumeProc,
+                });
 
-            const resumeResult = await resumePromise;
-            clearTimeout(resumeTimeout);
+                const resumeResult = await resumePromise;
+                clearTimeout(resumeTimeout);
 
-            // Merge costs
-            result = {
-                ...resumeResult,
-                costUsd: result.costUsd + resumeResult.costUsd,
-                durationMs: result.durationMs + resumeResult.durationMs,
-            };
+                result = {
+                    ...resumeResult,
+                    costUsd: result.costUsd + resumeResult.costUsd,
+                    durationMs: result.durationMs + resumeResult.durationMs,
+                };
+            } else {
+                // Codex/Gemini: re-run with the user's answer appended to the prompt
+                console.log(`[runner] Re-running ${selectedEngine} with user reply for ${shortId}`);
+                const followUpTask = {
+                    ...task,
+                    description: `${task.description}\n\nUser clarification: ${userReply}`,
+                };
+
+                const origEng = config.defaultEngine;
+                (config as any).defaultEngine = selectedEngine;
+                const { process: retryProc, result: retryPromise } = spawnSession(followUpTask, workspacePath, classification);
+                (config as any).defaultEngine = origEng;
+
+                const retryTimeout = setTimeout(() => {
+                    retryProc.kill('SIGTERM');
+                }, config.taskTimeoutMs);
+
+                activeSessions.set(task.id, {
+                    task, workspacePath, startedAt: new Date(),
+                    timeoutHandle: retryTimeout, classification, process: retryProc,
+                });
+
+                const retryResult = await retryPromise;
+                clearTimeout(retryTimeout);
+
+                result = {
+                    ...retryResult,
+                    costUsd: result.costUsd + retryResult.costUsd,
+                    durationMs: result.durationMs + retryResult.durationMs,
+                };
+            }
         } else {
             console.log(`[runner] No user reply for ${shortId} within timeout`);
             streamToEliza(task.id, { type: 'text', text: 'No reply received. Completing task with what we have.' });

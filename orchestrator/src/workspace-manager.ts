@@ -12,15 +12,74 @@ const MACHINE_SPECIFIC_KEYS = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR',
 /** Env files to sync between machines via Supabase */
 const SYNC_ENV_FILES = ['.env', '.env.local'];
 
-// Fetch repo_url from the Itachi API when not available locally
+/**
+ * Fetch repo_url with multi-step discovery:
+ * 1. Try API lookup (existing registration)
+ * 2. If not found → trigger /api/repos/sync → retry API lookup
+ * 3. If still not found → direct GitHub API lookup using GITHUB_TOKEN
+ * 4. If found on GitHub → auto-register via /api/repos/register
+ */
 async function fetchRepoUrl(project: string): Promise<string | null> {
+    const headers: Record<string, string> = {};
+    if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
+
+    // Step 1: Try API lookup
     try {
-        const headers: Record<string, string> = {};
-        if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
         const res = await fetch(`${config.apiUrl}/api/repos/${encodeURIComponent(project)}`, { headers });
-        if (!res.ok) return null;
-        const data = await res.json() as { repo_url?: string };
-        return data.repo_url || null;
+        if (res.ok) {
+            const data = await res.json() as { repo_url?: string };
+            if (data.repo_url) return data.repo_url;
+        }
+    } catch { /* continue to next step */ }
+
+    // Step 2: Trigger repo sync and retry
+    try {
+        console.log(`[workspace] Repo "${project}" not found, triggering sync...`);
+        await fetch(`${config.apiUrl}/api/repos/sync`, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+        });
+        // Retry lookup after sync
+        const res = await fetch(`${config.apiUrl}/api/repos/${encodeURIComponent(project)}`, { headers });
+        if (res.ok) {
+            const data = await res.json() as { repo_url?: string };
+            if (data.repo_url) return data.repo_url;
+        }
+    } catch { /* continue to next step */ }
+
+    // Step 3: Direct GitHub API lookup
+    const githubToken = process.env.GITHUB_TOKEN;
+    const githubOwner = config.githubOwner;
+    if (!githubToken || !githubOwner) return null;
+
+    try {
+        console.log(`[workspace] Trying GitHub API for "${githubOwner}/${project}"...`);
+        const ghRes = await fetch(`https://api.github.com/repos/${githubOwner}/${project}`, {
+            headers: {
+                'Authorization': `token ${githubToken}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'itachi-orchestrator',
+            },
+        });
+        if (!ghRes.ok) return null;
+
+        const ghData = await ghRes.json() as { clone_url?: string; html_url?: string };
+        const repoUrl = ghData.clone_url;
+        if (!repoUrl) return null;
+
+        // Step 4: Auto-register the discovered repo
+        console.log(`[workspace] Found "${project}" on GitHub, auto-registering...`);
+        try {
+            await fetch(`${config.apiUrl}/api/repos/register`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: project, repo_url: repoUrl }),
+            });
+        } catch {
+            // Registration failed but we still have the URL
+        }
+
+        return repoUrl;
     } catch {
         return null;
     }

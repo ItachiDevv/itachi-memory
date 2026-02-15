@@ -42,7 +42,7 @@ export const machineRoutes: Route[] = [
         if (!registry) return;
 
         const body = req.body as Record<string, any>;
-        const { machine_id, display_name, projects, max_concurrent, os, specs } = body;
+        const { machine_id, display_name, projects, max_concurrent, os, specs, engine_priority, health_url } = body;
 
         if (!machine_id || typeof machine_id !== 'string') {
           res.status(400).json({ error: 'machine_id (string) required' });
@@ -56,6 +56,8 @@ export const machineRoutes: Route[] = [
           max_concurrent: typeof max_concurrent === 'number' ? max_concurrent : undefined,
           os: typeof os === 'string' ? os : undefined,
           specs: typeof specs === 'object' && specs ? specs : undefined,
+          engine_priority: Array.isArray(engine_priority) ? engine_priority : undefined,
+          health_url: typeof health_url === 'string' ? health_url : undefined,
         });
 
         res.json({ success: true, machine });
@@ -147,6 +149,162 @@ export const machineRoutes: Route[] = [
         res.json({ machine });
       } catch (error) {
         res.status(500).json({ error: 'Internal server error' });
+      }
+    },
+  },
+
+  // Update engine priority for a machine
+  {
+    type: 'PUT' as any,
+    path: '/api/machines/:id/engines',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const registry = getRegistryService(rt, res);
+        if (!registry) return;
+
+        const id = (req.params as any)?.id;
+        const body = req.body as Record<string, any>;
+        const { engine_priority } = body;
+
+        if (!id || !Array.isArray(engine_priority)) {
+          res.status(400).json({ error: 'Machine ID and engine_priority (string[]) required' });
+          return;
+        }
+
+        const valid = engine_priority.filter((e: string) => ['claude', 'codex', 'gemini'].includes(e));
+        if (valid.length === 0) {
+          res.status(400).json({ error: 'At least one valid engine required (claude, codex, gemini)' });
+          return;
+        }
+
+        const machine = await registry.updateEnginePriority(id, valid);
+        res.json({ success: true, machine });
+      } catch (error) {
+        (runtime as IAgentRuntime).logger.error('Engine priority update error:', error instanceof Error ? error.message : String(error));
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    },
+  },
+
+  // Proxy: exec command on a machine via its health_url
+  {
+    type: 'POST',
+    path: '/api/machines/:id/exec',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const registry = getRegistryService(rt, res);
+        if (!registry) return;
+
+        const id = (req.params as any)?.id;
+        const machine = await registry.getMachine(id);
+        if (!machine) {
+          res.status(404).json({ error: 'Machine not found' });
+          return;
+        }
+        if (!machine.health_url) {
+          res.status(400).json({ error: 'Machine has no health_url configured' });
+          return;
+        }
+
+        const body = req.body as Record<string, any>;
+        const proxyUrl = `${machine.health_url}/exec`;
+        const apiKey = rt.getSetting('ITACHI_API_KEY');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+        const proxyRes = await fetch(proxyUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+        const data = await proxyRes.json();
+        res.status(proxyRes.status).json(data);
+      } catch (error) {
+        res.status(502).json({ error: 'Failed to reach machine' });
+      }
+    },
+  },
+
+  // Proxy: pull & rebuild on a machine
+  {
+    type: 'POST',
+    path: '/api/machines/:id/pull',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const registry = getRegistryService(rt, res);
+        if (!registry) return;
+
+        const id = (req.params as any)?.id;
+        const machine = await registry.getMachine(id);
+        if (!machine) {
+          res.status(404).json({ error: 'Machine not found' });
+          return;
+        }
+        if (!machine.health_url) {
+          res.status(400).json({ error: 'Machine has no health_url configured' });
+          return;
+        }
+
+        const proxyUrl = `${machine.health_url}/pull`;
+        const apiKey = rt.getSetting('ITACHI_API_KEY');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+        const proxyRes = await fetch(proxyUrl, { method: 'POST', headers });
+        const data = await proxyRes.json();
+        res.status(proxyRes.status).json(data);
+      } catch (error) {
+        res.status(502).json({ error: 'Failed to reach machine' });
+      }
+    },
+  },
+
+  // Proxy: restart orchestrator on a machine
+  {
+    type: 'POST',
+    path: '/api/machines/:id/restart',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const registry = getRegistryService(rt, res);
+        if (!registry) return;
+
+        const id = (req.params as any)?.id;
+        const machine = await registry.getMachine(id);
+        if (!machine) {
+          res.status(404).json({ error: 'Machine not found' });
+          return;
+        }
+        if (!machine.health_url) {
+          res.status(400).json({ error: 'Machine has no health_url configured' });
+          return;
+        }
+
+        const proxyUrl = `${machine.health_url}/restart`;
+        const apiKey = rt.getSetting('ITACHI_API_KEY');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+        const proxyRes = await fetch(proxyUrl, { method: 'POST', headers });
+        const data = await proxyRes.json();
+        res.status(proxyRes.status).json(data);
+      } catch (error) {
+        res.status(502).json({ error: 'Failed to reach machine' });
       }
     },
   },

@@ -5,11 +5,11 @@
 #
 # What it does:
 #   1. Copies unified hooks to ~/.claude/hooks/
-#   2. Creates itachi{short} wrapper in ~/.claude/ (add to PATH if not already)
+#   2. Creates itachi{short} wrapper in ~/.local/bin/ (add to PATH if not already)
 #
 # Examples:
-#   ./install.sh codex     → creates ~/.claude/itachic with codex flags
-#   ./install.sh aider     → creates ~/.claude/itachia with aider flags
+#   ./install.sh codex     → creates ~/.local/bin/itachic with codex flags
+#   ./install.sh aider     → creates ~/.local/bin/itachia with aider flags
 
 set -e
 
@@ -18,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOKS_SOURCE="$SCRIPT_DIR/hooks"
 CLAUDE_DIR="$HOME/.claude"
 HOOKS_DEST="$CLAUDE_DIR/hooks"
+WRAPPER_DIR="$HOME/.local/bin"
 
 # ============ Known client configurations ============
 get_config() {
@@ -84,7 +85,8 @@ if [ "$HAS_NATIVE_HOOKS" = "1" ]; then
 fi
 
 # ============ 3. Generate bash wrapper ============
-WRAPPER_PATH="$CLAUDE_DIR/$WRAPPER_NAME"
+mkdir -p "$WRAPPER_DIR"
+WRAPPER_PATH="$WRAPPER_DIR/$WRAPPER_NAME"
 
 cat > "$WRAPPER_PATH" << 'WRAPPER_HEADER'
 #!/bin/bash
@@ -140,11 +142,11 @@ chmod +x "$WRAPPER_PATH"
 echo "[install] Created $WRAPPER_PATH"
 
 # ============ 4. Check PATH ============
-if ! echo "$PATH" | tr ':' '\n' | grep -q "^$CLAUDE_DIR$"; then
+if ! echo "$PATH" | tr ':' '\n' | grep -q "^$WRAPPER_DIR$"; then
     echo ""
-    echo "[install] NOTE: $CLAUDE_DIR is not in your PATH."
+    echo "[install] NOTE: $WRAPPER_DIR is not in your PATH."
     echo "  Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-    echo "    export PATH=\"\$HOME/.claude:\$PATH\""
+    echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
 echo ""

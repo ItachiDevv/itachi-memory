@@ -128,6 +128,7 @@ export interface Config {
     defaultModel: string;
     defaultBudget: number;
     defaultEngine: Engine;
+    enginePriority: Engine[];
     pollIntervalMs: number;
     projectPaths: Record<string, string>;
     projectFilter?: string;
@@ -135,4 +136,5 @@ export interface Config {
     syncPassphrase: string;
     machineId: string;
     machineDisplayName: string;
+    githubOwner: string;
 }

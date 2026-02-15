@@ -160,7 +160,7 @@ export const createTaskAction: Action = {
           if (callback) {
             const lines = results.map((r, i) => `${i + 1}. [${r.id}] ${r.project}: ${r.description}`);
             await callback({
-              text: `${results.length} tasks queued!\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nI'll notify you as they complete.`,
+              text: `${results.length} tasks QUEUED (not started yet).\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nThese tasks are waiting in the queue. I'll notify you as they actually complete.`,
             });
           }
 
@@ -201,7 +201,7 @@ export const createTaskAction: Action = {
 
       if (callback) {
         await callback({
-          text: `Task queued!\n\nID: ${shortId}\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nI'll notify you when it completes.`,
+          text: `Task QUEUED (not started yet).\n\nID: ${shortId}\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.`,
         });
       }
 

@@ -3,8 +3,8 @@
 #   client: claude, codex, aider, cursor, or any CLI name
 #
 # Examples:
-#   .\install.ps1 codex     -> creates itachic.cmd/.ps1
-#   .\install.ps1 aider     -> creates itachia.cmd/.ps1
+#   .\install.ps1 codex     -> creates itachic.cmd/.ps1 in ~/.local/bin/
+#   .\install.ps1 aider     -> creates itachia.cmd/.ps1 in ~/.local/bin/
 
 param(
     [Parameter(Position=0)]
@@ -16,6 +16,7 @@ $ScriptDir = Split-Path -Parent $PSCommandPath
 $HooksSource = Join-Path $ScriptDir "hooks"
 $ClaudeDir = Join-Path $env:USERPROFILE ".claude"
 $HooksDest = Join-Path $ClaudeDir "hooks"
+$WrapperDir = Join-Path $env:USERPROFILE ".local\bin"
 
 # ============ Client configurations ============
 $Clients = @{
@@ -106,7 +107,10 @@ if exist "%HOOKS_DIR%\session-end.ps1" (
 "@
 
 # Write cmd file via node to avoid PowerShell string escaping issues
-$cmdPath = Join-Path $ClaudeDir "$wrapperName.cmd"
+if (-not (Test-Path $WrapperDir)) {
+    New-Item -ItemType Directory -Path $WrapperDir -Force | Out-Null
+}
+$cmdPath = Join-Path $WrapperDir "$wrapperName.cmd"
 $escapedContent = $cmdContent.Replace('\', '\\').Replace('`', '\`').Replace('"', '\"')
 node -e "require('fs').writeFileSync(process.argv[1], process.argv[2])" $cmdPath $cmdContent
 Write-Host "[install] Created $cmdPath"
@@ -175,7 +179,7 @@ $cliCmd @cliArgs
 if (Test-Path `$endHook) { & `$endHook }
 "@
 
-$ps1Path = Join-Path $ClaudeDir "$wrapperName.ps1"
+$ps1Path = Join-Path $WrapperDir "$wrapperName.ps1"
 $ps1Content | Set-Content -Path $ps1Path -Encoding UTF8
 Write-Host "[install] Created $ps1Path"
 

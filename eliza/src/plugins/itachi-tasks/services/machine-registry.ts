@@ -9,6 +9,8 @@ export interface MachineRecord {
   active_tasks: number;
   os: string | null;
   specs: Record<string, unknown>;
+  engine_priority: string[];
+  health_url: string | null;
   last_heartbeat: string;
   registered_at: string;
   status: 'online' | 'offline' | 'busy';
@@ -21,6 +23,8 @@ export interface RegisterMachineParams {
   max_concurrent?: number;
   os?: string;
   specs?: Record<string, unknown>;
+  engine_priority?: string[];
+  health_url?: string;
 }
 
 export class MachineRegistryService extends Service {
@@ -65,6 +69,8 @@ export class MachineRegistryService extends Service {
     if (params.max_concurrent !== undefined) row.max_concurrent = params.max_concurrent;
     if (params.os !== undefined) row.os = params.os;
     if (params.specs !== undefined) row.specs = params.specs;
+    if (params.engine_priority !== undefined) row.engine_priority = params.engine_priority;
+    if (params.health_url !== undefined) row.health_url = params.health_url;
 
     const { data, error } = await this.supabase
       .from('machine_registry')
@@ -233,6 +239,21 @@ export class MachineRegistryService extends Service {
     // Substring machine_id
     machine = allMachines.find(m => m.machine_id.toLowerCase().includes(lower)) || null;
     return { machine, allMachines };
+  }
+
+  /**
+   * Update engine priority for a machine.
+   */
+  async updateEnginePriority(machineId: string, enginePriority: string[]): Promise<MachineRecord> {
+    const { data, error } = await this.supabase
+      .from('machine_registry')
+      .update({ engine_priority: enginePriority })
+      .eq('machine_id', machineId)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message || JSON.stringify(error));
+    return data as MachineRecord;
   }
 
   /**

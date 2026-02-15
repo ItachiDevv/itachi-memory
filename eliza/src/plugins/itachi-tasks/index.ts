@@ -4,6 +4,7 @@ import { TaskPollerService } from './services/task-poller.js';
 import { TelegramTopicsService } from './services/telegram-topics.js';
 import { MachineRegistryService } from './services/machine-registry.js';
 import { ReminderService } from './services/reminder-service.js';
+import { SSHService } from './services/ssh-service.js';
 import { spawnSessionAction } from './actions/spawn-session.js';
 import { createTaskAction } from './actions/create-task.js';
 import { listTasksAction } from './actions/list-tasks.js';
@@ -11,6 +12,8 @@ import { cancelTaskAction } from './actions/cancel-task.js';
 import { telegramCommandsAction } from './actions/telegram-commands.js';
 import { topicReplyAction } from './actions/topic-reply.js';
 import { reminderCommandsAction } from './actions/reminder-commands.js';
+import { remoteExecAction } from './actions/remote-exec.js';
+import { coolifyControlAction } from './actions/coolify-control.js';
 import { topicInputRelayEvaluator } from './evaluators/topic-input-relay.js';
 import { activeTasksProvider } from './providers/active-tasks.js';
 import { reposProvider } from './providers/repos.js';
@@ -28,10 +31,10 @@ export { reminderPollerWorker, registerReminderPollerTask } from './workers/remi
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',
   description: 'Task queue management, orchestrator integration, and completion notifications',
-  actions: [spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction, reminderCommandsAction],
+  actions: [spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction, reminderCommandsAction, remoteExecAction, coolifyControlAction],
   evaluators: [topicInputRelayEvaluator],
   providers: [topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider],
-  services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService],
+  services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService],
   // Routes registered in init() to bypass ElizaOS plugin-name prefix
   init: async (_, runtime) => {
     for (const route of taskStreamRoutes) {
@@ -59,6 +62,15 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'schedule', description: 'Schedule an action — /schedule <time> <action>' },
         { command: 'reminders', description: 'List upcoming reminders & scheduled actions' },
         { command: 'unremind', description: 'Cancel a reminder — /unremind <id>' },
+        { command: 'exec', description: 'Run command on machine — /exec @machine <cmd>' },
+        { command: 'pull', description: 'Pull & rebuild on machine — /pull @machine' },
+        { command: 'restart', description: 'Restart orchestrator — /restart @machine' },
+        { command: 'ssh', description: 'Run SSH command — /ssh <target> <command>' },
+        { command: 'deploy', description: 'Redeploy bot container — /deploy [target]' },
+        { command: 'logs', description: 'View container logs — /logs [lines]' },
+        { command: 'containers', description: 'List containers — /containers [target]' },
+        { command: 'restart_bot', description: 'Restart bot container — /restart-bot [target]' },
+        { command: 'ssh_targets', description: 'List SSH targets' },
       ];
       try {
         await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {

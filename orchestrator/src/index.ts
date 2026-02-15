@@ -1,6 +1,8 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync, spawn } from 'child_process';
+import * as os from 'os';
 import { config } from './config';
 import { startRunner, stopRunner, getActiveCount, getActiveTasks } from './task-runner';
 import { checkClaudeAuth, checkEngineAuth } from './session-manager';
@@ -65,6 +67,8 @@ async function registerMachine(): Promise<void> {
                 projects: localProjects,
                 max_concurrent: config.maxConcurrent,
                 os: process.platform,
+                engine_priority: config.enginePriority,
+                health_url: `http://localhost:${HEALTH_PORT}`,
             }),
         });
         if (!response.ok) {
@@ -128,9 +132,42 @@ function stopHeartbeat(): void {
     }
 }
 
-// Health endpoint
+/** Verify Bearer token matches ITACHI_API_KEY */
+function checkControlAuth(req: http.IncomingMessage): boolean {
+    const apiKey = process.env.ITACHI_API_KEY;
+    if (!apiKey) return true; // No key configured = no auth required
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    return token === apiKey;
+}
+
+/** Read the full request body as JSON */
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+    return new Promise((resolve) => {
+        let body = '';
+        req.on('data', (chunk) => { body += chunk.toString(); });
+        req.on('end', () => {
+            try { resolve(JSON.parse(body || '{}')); }
+            catch { resolve({}); }
+        });
+    });
+}
+
+/** Allowlisted commands for /exec endpoint */
+const EXEC_ALLOWLIST = [
+    'git status', 'git log', 'git diff', 'git branch',
+    'claude auth status', 'codex --version', 'gemini --version',
+    'npm run build', 'node --version', 'npm --version',
+    'uptime', 'df -h', 'free -h',
+];
+
+// Health + Control API server
 const server = http.createServer(async (req, res) => {
-    if (req.url === '/health' && req.method === 'GET') {
+    const url = req.url || '';
+    const method = req.method || 'GET';
+
+    // --- Public endpoints (no auth) ---
+    if (url === '/health' && method === 'GET') {
         let queuedCount = 0;
         try {
             const sb = getSupabase();
@@ -139,9 +176,7 @@ const server = http.createServer(async (req, res) => {
                 .select('*', { count: 'exact', head: true })
                 .eq('status', 'queued');
             queuedCount = count || 0;
-        } catch {
-            // ignore
-        }
+        } catch { /* ignore */ }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -153,10 +188,112 @@ const server = http.createServer(async (req, res) => {
             max_concurrent: config.maxConcurrent,
             uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
         }));
-    } else {
-        res.writeHead(404);
-        res.end('Not found');
+        return;
     }
+
+    if (url === '/status' && method === 'GET') {
+        const engineStatuses: Record<string, { valid: boolean; error?: string }> = {};
+        for (const engine of config.enginePriority) {
+            engineStatuses[engine] = checkEngineAuth(engine);
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            orchestrator_id: config.orchestratorId,
+            machine_id: config.machineId,
+            display_name: config.machineDisplayName,
+            active_tasks: getActiveCount(),
+            active_task_ids: getActiveTasks().map(id => id.substring(0, 8)),
+            max_concurrent: config.maxConcurrent,
+            engine_priority: config.enginePriority,
+            engines: engineStatuses,
+            uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
+            memory_mb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            platform: process.platform,
+            node_version: process.version,
+        }));
+        return;
+    }
+
+    // --- Authenticated endpoints ---
+    if (!checkControlAuth(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+    }
+
+    if (url === '/pull' && method === 'POST') {
+        try {
+            const orchestratorDir = path.resolve(__dirname, '..');
+            const output = execSync('git pull && npm run build', {
+                cwd: orchestratorDir,
+                encoding: 'utf8',
+                timeout: 60_000,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, output: output.substring(0, 2000) }));
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: msg.substring(0, 2000) }));
+        }
+        return;
+    }
+
+    if (url === '/restart' && method === 'POST') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, message: 'Restarting in 2s...' }));
+
+        // Graceful restart: stop everything, then re-exec
+        setTimeout(() => {
+            console.log('[control] Restart requested, shutting down...');
+            stopHeartbeat();
+            stopRunner();
+            // Re-exec the process
+            const child = spawn(process.argv[0], process.argv.slice(1), {
+                cwd: process.cwd(),
+                detached: true,
+                stdio: 'inherit',
+            });
+            child.unref();
+            process.exit(0);
+        }, 2000);
+        return;
+    }
+
+    if (url === '/exec' && method === 'POST') {
+        const body = await readBody(req);
+        const command = typeof body.command === 'string' ? body.command : '';
+
+        // Check allowlist (command must start with one of the allowed prefixes)
+        const allowed = EXEC_ALLOWLIST.some(prefix => command.startsWith(prefix));
+        if (!allowed) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Command not in allowlist',
+                allowlist: EXEC_ALLOWLIST,
+            }));
+            return;
+        }
+
+        try {
+            const output = execSync(command, {
+                encoding: 'utf8',
+                timeout: 30_000,
+                cwd: path.resolve(__dirname, '..'),
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, output: output.substring(0, 5000) }));
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: msg.substring(0, 2000) }));
+        }
+        return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found' }));
 });
 
 async function main(): Promise<void> {
@@ -173,7 +310,7 @@ async function main(): Promise<void> {
     console.log(`  API:         ${config.apiUrl}`);
     const detectedProjects = detectLocalProjects();
     console.log(`  Projects:    ${detectedProjects.join(', ') || '(auto-detect on register)'}`);
-    console.log(`  Engine:      ${config.defaultEngine}`);
+    console.log(`  Engines:     ${config.enginePriority.join(' → ')} (priority order)`);
     console.log('===========================================');
 
     // SAFETY: Warn if ANTHROPIC_API_KEY is in env — it causes Claude CLI to use
@@ -186,20 +323,22 @@ async function main(): Promise<void> {
         console.warn('');
     }
 
-    // Pre-check auth for the configured engine on startup
-    const auth = checkEngineAuth(config.defaultEngine);
-    if (!auth.valid) {
-        console.error('');
-        console.error(`  *** ${config.defaultEngine.toUpperCase()} AUTH ERROR ***`);
-        console.error(`  ${auth.error}`);
-        console.error('');
-        console.error('  Tasks will fail until auth is fixed.');
-        if (config.defaultEngine === 'claude') {
-            console.error('  Recommended: run `claude setup-token` for long-lived auth.');
+    // Pre-check auth for all engines in priority order
+    let anyValid = false;
+    for (const engine of config.enginePriority) {
+        const auth = checkEngineAuth(engine);
+        if (auth.valid) {
+            console.log(`  Auth:        ${engine} ✓`);
+            anyValid = true;
+        } else {
+            console.warn(`  Auth:        ${engine} ✗ — ${auth.error}`);
         }
+    }
+    if (!anyValid) {
         console.error('');
-    } else {
-        console.log(`  Auth:        ${config.defaultEngine} (valid)`);
+        console.error('  *** ALL ENGINES FAILED AUTH ***');
+        console.error('  Tasks will fail until at least one engine has valid auth.');
+        console.error('');
     }
 
     console.log('');
