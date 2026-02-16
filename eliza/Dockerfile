@@ -6,6 +6,7 @@ RUN apt-get update -qq && apt-get install -y -qq openssh-client && rm -rf /var/l
 
 # Install deps first (cache layer)
 COPY package.json bun.lock* ./
+COPY scripts/ scripts/
 RUN bun install --frozen-lockfile || bun install
 
 # Copy source and build

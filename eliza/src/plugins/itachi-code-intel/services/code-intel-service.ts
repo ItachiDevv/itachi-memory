@@ -89,8 +89,14 @@ export class CodeIntelService extends Service {
 
   async getEmbedding(text: string): Promise<number[]> {
     const result = await this.runtime.useModel(ModelType.TEXT_EMBEDDING, {
-      input: text,
+      text,
     });
+    if (!Array.isArray(result)) {
+      this.runtime.logger.warn(
+        `CodeIntel getEmbedding: useModel returned non-array (${typeof result}), using zero vector`
+      );
+      return new Array(1536).fill(0);
+    }
     return result as unknown as number[];
   }
 

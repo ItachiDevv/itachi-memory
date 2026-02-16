@@ -74,22 +74,44 @@ export class MemoryService extends Service {
         .single();
 
       if (cached?.embedding && Array.isArray(cached.embedding) && cached.embedding.length > 0) {
-        // Update last_used (fire-and-forget)
+        // Skip zero-fill / near-zero vectors (cached from old { input: } bug)
+        const nonZero = (cached.embedding as number[]).filter((v: number) => Math.abs(v) > 0.01).length;
+        if (nonZero > 5) {
+          // Update last_used (fire-and-forget)
+          this.supabase
+            .from('itachi_embedding_cache')
+            .update({ last_used: new Date().toISOString() })
+            .eq('content_hash', hash)
+            .then(() => {})
+            .catch(() => {});
+          return cached.embedding as unknown as number[];
+        }
+        // Bad cached embedding — delete and regenerate
         this.supabase
           .from('itachi_embedding_cache')
-          .update({ last_used: new Date().toISOString() })
+          .delete()
           .eq('content_hash', hash)
           .then(() => {})
           .catch(() => {});
-        return cached.embedding as unknown as number[];
       }
     } catch {
       // Cache miss or table doesn't exist — fall through to model call
     }
 
     const result = await this.runtime.useModel(ModelType.TEXT_EMBEDDING, {
-      input: text,
+      text,
     });
+
+    // Guard: if the embedding model returned something other than an array
+    // (e.g. undefined due to API failure), return a zero-fill vector so callers
+    // don't crash on .map() / cosine-distance calls.
+    if (!Array.isArray(result)) {
+      this.runtime.logger.warn(
+        `getEmbedding: useModel returned non-array (${typeof result}), using zero vector`
+      );
+      return new Array(1536).fill(0);
+    }
+
     const embedding = result as unknown as number[];
 
     // Upsert to cache (fire-and-forget)

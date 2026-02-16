@@ -4,6 +4,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "postinstall": "node scripts/patch-sql-plugin.mjs",
     "build": "tsup",
     "start": "elizaos start",
     "dev": "elizaos dev",
