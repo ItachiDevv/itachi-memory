@@ -24,12 +24,10 @@ export class SSHService extends Service {
   static serviceType = 'ssh';
   capabilityDescription = 'Execute commands on remote machines via SSH';
 
-  private runtime: IAgentRuntime;
   private targets: Map<string, SSHTarget> = new Map();
 
   constructor(runtime: IAgentRuntime) {
-    super();
-    this.runtime = runtime;
+    super(runtime);
     this.loadTargets();
   }
 

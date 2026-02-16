@@ -51,7 +51,7 @@ export const recentMemoriesProvider: Provider = {
         data: { recent, relevant },
       };
     } catch (error) {
-      runtime.logger.error('recentMemoriesProvider error:', error);
+      runtime.logger.error('recentMemoriesProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '', values: {}, data: {} };
     }
   },

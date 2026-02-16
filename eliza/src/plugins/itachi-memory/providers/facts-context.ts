@@ -90,7 +90,7 @@ export const factsContextProvider: Provider = {
         data: { identity: identityFacts, facts: contextFacts },
       };
     } catch (error) {
-      runtime.logger.error('factsContextProvider error:', error);
+      runtime.logger.error('factsContextProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '', values: {}, data: {} };
     }
   },

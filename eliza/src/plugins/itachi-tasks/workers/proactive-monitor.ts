@@ -137,14 +137,15 @@ export async function registerProactiveMonitorTask(runtime: IAgentRuntime): Prom
 
     await runtime.createTask({
       name: 'ITACHI_PROACTIVE_MONITOR',
+      description: 'Proactive monitor for failed tasks, stale tasks, and machine connectivity',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: MONITOR_INTERVAL_MS,
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info(`Registered ITACHI_PROACTIVE_MONITOR repeating task (${MONITOR_INTERVAL_MS / 1000}s)`);
-  } catch (error) {
-    runtime.logger.error('Failed to register proactive monitor task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register proactive monitor task:', error instanceof Error ? error.message : String(error));
   }
 }

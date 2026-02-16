@@ -298,6 +298,7 @@ async function tryLlmPipeline(
         name: 'Scheduled Actions',
         source: 'scheduler',
         type: 'DM' as any,
+        worldId: runtime.agentId,
       });
     } catch {
       // May already exist — continue
@@ -351,14 +352,15 @@ export async function registerReminderPollerTask(runtime: IAgentRuntime): Promis
 
     await runtime.createTask({
       name: 'ITACHI_REMINDER_POLLER',
+      description: 'Poll for due scheduled reminders and actions every 60 seconds',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 60_000,
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_REMINDER_POLLER repeating task (60s)');
-  } catch (error) {
-    runtime.logger.error('Failed to register reminder poller task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register reminder poller task:', error instanceof Error ? error.message : String(error));
   }
 }

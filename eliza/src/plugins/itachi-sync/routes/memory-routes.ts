@@ -10,9 +10,10 @@ export const memoryRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { files = [], summary, diff = '', category, project, branch, task_id, metadata } = req.body;
+        const body = req.body as Record<string, unknown>;
+        const { files = [], summary, diff = '', category, project, branch, task_id, metadata } = body as any;
         if (!summary) {
           res.status(400).json({ error: 'Summary required' });
           return;
@@ -68,7 +69,7 @@ export const memoryRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
         const { query, limit, project, category, branch } = req.query as Record<string, string>;
         if (!query) {
@@ -105,7 +106,7 @@ export const memoryRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
         const { limit, project, branch } = req.query as Record<string, string>;
 
@@ -133,7 +134,7 @@ export const memoryRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
         const { project } = req.query as Record<string, string>;
 

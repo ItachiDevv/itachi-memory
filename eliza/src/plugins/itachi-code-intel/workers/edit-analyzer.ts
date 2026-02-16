@@ -11,10 +11,10 @@ export const editAnalyzerWorker: TaskWorker = {
 
   validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
 
-  execute: async (runtime: IAgentRuntime): Promise<void> => {
+  execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
-      const memoryService = runtime.getService<MemoryService>('itachi-memory');
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
+      const memoryService = runtime.getService('itachi-memory') as MemoryService | null;
       if (!codeIntel || !memoryService) {
         runtime.logger.warn('[edit-analyzer] Services not available, skipping');
         return;
@@ -75,8 +75,8 @@ Respond in 2-3 sentences. Focus on actionable observations.`;
 
         runtime.logger.info(`[edit-analyzer] Stored pattern observation for ${project} (${edits.length} edits)`);
       }
-    } catch (error) {
-      runtime.logger.error('[edit-analyzer] Error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('[edit-analyzer] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -91,14 +91,15 @@ export async function registerEditAnalyzerTask(runtime: IAgentRuntime): Promise<
 
     await runtime.createTask({
       name: 'ITACHI_EDIT_ANALYZER',
+      description: 'Periodic edit pattern analysis (15min)',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 15 * 60 * 1000, // 15 minutes
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_EDIT_ANALYZER repeating task (15min)');
-  } catch (error) {
-    runtime.logger.error('Failed to register edit analyzer task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register edit analyzer task:', error instanceof Error ? error.message : String(error));
   }
 }

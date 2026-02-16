@@ -10,14 +10,14 @@ export const sessionBriefingProvider: Provider = {
   description: 'Recent session activity and hot files for the current project',
   position: 8,
 
-  get: async (runtime: IAgentRuntime, message: Memory, _state?: State): Promise<string> => {
+  get: async (runtime: IAgentRuntime, message: Memory, _state: State) => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
-      if (!codeIntel) return '## Session Briefing\nCode intelligence service unavailable. Do NOT guess about recent sessions or file changes.';
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
+      if (!codeIntel) return { text: '## Session Briefing\nCode intelligence service unavailable. Do NOT guess about recent sessions or file changes.' };
 
       // Try to determine project from message metadata or recent context
       const project = (message.metadata as Record<string, unknown>)?.project as string;
-      if (!project) return '## Session Briefing\nNo project detected for this message. Do NOT guess about session history or file changes — ask the user which project they mean.';
+      if (!project) return { text: '## Session Briefing\nNo project detected for this message. Do NOT guess about session history or file changes — ask the user which project they mean.' };
 
       const supabase = codeIntel.getSupabase();
 
@@ -29,7 +29,7 @@ export const sessionBriefingProvider: Provider = {
         .order('created_at', { ascending: false })
         .limit(3);
 
-      if (!sessions || sessions.length === 0) return `## Session Briefing (${project})\nNo recent sessions found for this project.`;
+      if (!sessions || sessions.length === 0) return { text: `## Session Briefing (${project})\nNo recent sessions found for this project.` };
 
       const hotFiles = await codeIntel.getHotFiles(project, 7);
 
@@ -49,9 +49,9 @@ export const sessionBriefingProvider: Provider = {
         }
       }
 
-      return lines.join('\n');
+      return { text: lines.join('\n') };
     } catch {
-      return '## Session Briefing\nFailed to load session data. Do NOT make up session details.';
+      return { text: '## Session Briefing\nFailed to load session data. Do NOT make up session details.' };
     }
   },
 };

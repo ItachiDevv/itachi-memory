@@ -11,12 +11,13 @@ export const taskRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
+        const body = req.body as Record<string, unknown>;
         const {
           description, project, repo_url, branch, priority,
           model, max_budget_usd, telegram_chat_id, telegram_user_id,
-        } = req.body;
+        } = body as any;
 
         if (!description || !project) {
           res.status(400).json({ error: 'description and project required' });
@@ -63,7 +64,7 @@ export const taskRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
         const { orchestrator_id, project } = req.query as Record<string, string>;
         if (!orchestrator_id) {
@@ -93,16 +94,17 @@ export const taskRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { id } = req.params;
+        const { id } = (req.params || {}) as Record<string, string>;
         if (!isValidUUID(id)) {
           res.status(400).json({ error: 'Invalid task ID format' });
           return;
         }
 
+        const updateBody = req.body as Record<string, unknown>;
         // Validate status if provided
-        if (req.body.status && !isValidStatus(req.body.status)) {
+        if (updateBody.status && !isValidStatus(updateBody.status as string)) {
           res.status(400).json({
             error: `Invalid status. Must be one of: queued, claimed, running, completed, failed, cancelled, timeout`,
           });
@@ -115,7 +117,7 @@ export const taskRoutes: Route[] = [
           return;
         }
 
-        const task = await taskService.updateTask(id, req.body);
+        const task = await taskService.updateTask(id, updateBody as Record<string, unknown>);
         res.json({ success: true, task });
       } catch (error) {
         res.status(500).json({ error: sanitizeError(error) });
@@ -131,9 +133,9 @@ export const taskRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { id } = req.params;
+        const { id } = (req.params || {}) as Record<string, string>;
         if (!isValidUUID(id)) {
           res.status(400).json({ error: 'Invalid task ID format' });
           return;
@@ -166,7 +168,7 @@ export const taskRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
         const { user_id, status, limit } = req.query as Record<string, string>;
 
@@ -209,9 +211,9 @@ export const taskRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { id } = req.params;
+        const { id } = (req.params || {}) as Record<string, string>;
         if (!isValidUUID(id)) {
           res.status(400).json({ error: 'Invalid task ID format' });
           return;

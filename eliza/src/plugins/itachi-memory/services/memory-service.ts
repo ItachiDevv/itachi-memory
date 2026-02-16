@@ -39,13 +39,11 @@ export class MemoryService extends Service {
   capabilityDescription = 'Itachi project memory storage and semantic search';
 
   private supabase: SupabaseClient;
-  private runtime: IAgentRuntime;
 
   constructor(runtime: IAgentRuntime) {
-    super();
-    this.runtime = runtime;
-    const url = runtime.getSetting('SUPABASE_URL');
-    const key = runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY');
+    super(runtime);
+    const url = String(runtime.getSetting('SUPABASE_URL') || '');
+    const key = String(runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY') || '');
     if (!url || !key) {
       throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for MemoryService');
     }
@@ -78,21 +76,23 @@ export class MemoryService extends Service {
         const nonZero = (cached.embedding as number[]).filter((v: number) => Math.abs(v) > 0.01).length;
         if (nonZero > 5) {
           // Update last_used (fire-and-forget)
-          this.supabase
-            .from('itachi_embedding_cache')
-            .update({ last_used: new Date().toISOString() })
-            .eq('content_hash', hash)
-            .then(() => {})
-            .catch(() => {});
+          Promise.resolve(
+            this.supabase
+              .from('itachi_embedding_cache')
+              .update({ last_used: new Date().toISOString() })
+              .eq('content_hash', hash)
+              .then(() => {})
+          ).catch(() => {});
           return cached.embedding as unknown as number[];
         }
         // Bad cached embedding — delete and regenerate
-        this.supabase
-          .from('itachi_embedding_cache')
-          .delete()
-          .eq('content_hash', hash)
-          .then(() => {})
-          .catch(() => {});
+        Promise.resolve(
+          this.supabase
+            .from('itachi_embedding_cache')
+            .delete()
+            .eq('content_hash', hash)
+            .then(() => {})
+        ).catch(() => {});
       }
     } catch {
       // Cache miss or table doesn't exist — fall through to model call
@@ -116,11 +116,12 @@ export class MemoryService extends Service {
 
     // Upsert to cache (fire-and-forget)
     try {
-      this.supabase
-        .from('itachi_embedding_cache')
-        .upsert({ content_hash: hash, embedding, model_id: 'text-embedding', last_used: new Date().toISOString() })
-        .then(() => {})
-        .catch(() => {});
+      Promise.resolve(
+        this.supabase
+          .from('itachi_embedding_cache')
+          .upsert({ content_hash: hash, embedding, model_id: 'text-embedding', last_used: new Date().toISOString() })
+          .then(() => {})
+      ).catch(() => {});
     } catch {
       // Cache write failure is non-critical
     }

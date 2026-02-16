@@ -36,7 +36,7 @@ export const reposProvider: Provider = {
         data: { repos },
       };
     } catch (error) {
-      runtime.logger.error('reposProvider error:', error);
+      runtime.logger.error('reposProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '', values: {}, data: {} };
     }
   },

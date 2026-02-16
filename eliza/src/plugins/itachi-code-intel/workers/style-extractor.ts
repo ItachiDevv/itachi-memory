@@ -12,10 +12,10 @@ export const styleExtractorWorker: TaskWorker = {
 
   validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
 
-  execute: async (runtime: IAgentRuntime): Promise<void> => {
+  execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
-      const memoryService = runtime.getService<MemoryService>('itachi-memory');
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
+      const memoryService = runtime.getService('itachi-memory') as MemoryService | null;
       if (!codeIntel || !memoryService) {
         runtime.logger.warn('[style-extractor] Services not available');
         return;
@@ -116,8 +116,8 @@ Respond with ONLY the JSON object, no markdown code blocks.`;
       });
 
       runtime.logger.info('[style-extractor] Updated global style profile');
-    } catch (error) {
-      runtime.logger.error('[style-extractor] Error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('[style-extractor] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -132,14 +132,15 @@ export async function registerStyleExtractorTask(runtime: IAgentRuntime): Promis
 
     await runtime.createTask({
       name: 'ITACHI_STYLE_EXTRACTOR',
+      description: 'Weekly global coding style profile extraction',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 7 * 24 * 60 * 60 * 1000, // Weekly
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_STYLE_EXTRACTOR repeating task (weekly)');
-  } catch (error) {
-    runtime.logger.error('Failed to register style extractor task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register style extractor task:', error instanceof Error ? error.message : String(error));
   }
 }

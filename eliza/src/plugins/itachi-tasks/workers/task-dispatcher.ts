@@ -78,14 +78,15 @@ export async function registerTaskDispatcherTask(runtime: IAgentRuntime): Promis
 
     await runtime.createTask({
       name: 'ITACHI_TASK_DISPATCHER',
+      description: 'Dispatch queued tasks to available machines every 10 seconds',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 10 * 1000, // 10 seconds
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_TASK_DISPATCHER repeating task (10s)');
-  } catch (error) {
-    runtime.logger.error('Failed to register task dispatcher task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register task dispatcher task:', error instanceof Error ? error.message : String(error));
   }
 }

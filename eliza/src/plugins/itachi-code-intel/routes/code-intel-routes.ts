@@ -42,14 +42,15 @@ export const codeIntelRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const project = resolveProject(req) || req.body.project;
+        const body = req.body as Record<string, any>;
+        const project = (resolveProject(req as any) || body.project) as string | null;
         const {
           session_id, file_path, edit_type, language,
           diff_content, lines_added, lines_removed,
           tool_name, branch, task_id,
-        } = req.body;
+        } = body;
 
         if (!session_id || !file_path) {
           res.status(400).json({ error: 'session_id and file_path required' });
@@ -60,7 +61,7 @@ export const codeIntelRoutes: Route[] = [
           return;
         }
 
-        const service = rt.getService<CodeIntelService>('itachi-code-intel');
+        const service = rt.getService('itachi-code-intel') as CodeIntelService | null;
         if (!service) {
           res.status(503).json({ error: 'Code intel service not available' });
           return;
@@ -96,15 +97,16 @@ export const codeIntelRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const project = resolveProject(req) || req.body.project;
+        const body = req.body as Record<string, any>;
+        const project = (resolveProject(req as any) || body.project) as string | null;
         const {
           session_id, task_id, started_at, ended_at,
           duration_ms, exit_reason, files_changed,
           total_lines_added, total_lines_removed,
           tools_used, summary, branch, orchestrator_id,
-        } = req.body;
+        } = body;
 
         if (!session_id) {
           res.status(400).json({ error: 'session_id required' });
@@ -115,7 +117,7 @@ export const codeIntelRoutes: Route[] = [
           return;
         }
 
-        const service = rt.getService<CodeIntelService>('itachi-code-intel');
+        const service = rt.getService('itachi-code-intel') as CodeIntelService | null;
         if (!service) {
           res.status(503).json({ error: 'Code intel service not available' });
           return;
@@ -154,9 +156,9 @@ export const codeIntelRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const project = resolveProject(req);
+        const project = resolveProject(req as any);
         const { branch } = req.query as Record<string, string>;
 
         if (!project) {
@@ -164,7 +166,7 @@ export const codeIntelRoutes: Route[] = [
           return;
         }
 
-        const service = rt.getService<CodeIntelService>('itachi-code-intel');
+        const service = rt.getService('itachi-code-intel') as CodeIntelService | null;
         if (!service) {
           res.status(503).json({ error: 'Code intel service not available' });
           return;
@@ -187,9 +189,9 @@ export const codeIntelRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const project = resolveProject(req);
+        const project = resolveProject(req as any);
         const { limit: limitStr, min_confidence: minConfStr } = req.query as Record<string, string>;
 
         if (!project) {
@@ -200,7 +202,7 @@ export const codeIntelRoutes: Route[] = [
         const limit = Math.min(parseInt(limitStr, 10) || 15, 50);
         const minConfidence = parseFloat(minConfStr) || 0.3;
 
-        const memoryService = rt.getService<MemoryService>('itachi-memory');
+        const memoryService = rt.getService('itachi-memory') as MemoryService | null;
         if (!memoryService) {
           res.status(503).json({ error: 'Memory service not available' });
           return;
@@ -252,13 +254,14 @@ export const codeIntelRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const project = resolveProject(req) || req.body.project;
+        const body = req.body as Record<string, any>;
+        const project = (resolveProject(req as any) || body.project) as string | null;
         const {
           session_id, conversation_text, files_changed,
           summary, duration_ms,
-        } = req.body;
+        } = body;
 
         if (!conversation_text || conversation_text.length < 50) {
           res.status(400).json({ error: 'conversation_text required (min 50 chars)' });
@@ -269,7 +272,7 @@ export const codeIntelRoutes: Route[] = [
           return;
         }
 
-        const memoryService = rt.getService<MemoryService>('itachi-memory');
+        const memoryService = rt.getService('itachi-memory') as MemoryService | null;
         if (!memoryService) {
           res.status(503).json({ error: 'Memory service not available' });
           return;
@@ -373,7 +376,7 @@ Respond ONLY with valid JSON, no markdown fences:
                   project: truncate(project, MAX_LENGTHS.project),
                   extracted_at: new Date().toISOString(),
                 },
-              });
+              } as any, 'memories');
               rlmPromoted++;
             } catch (e) {
               rt.logger.warn(`[extract-insights] RLM bridge failed: ${e instanceof Error ? e.message : String(e)}`);

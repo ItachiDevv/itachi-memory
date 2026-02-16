@@ -52,7 +52,7 @@ export const conversationContextProvider: Provider = {
         data: { conversations: significant },
       };
     } catch (error) {
-      runtime.logger.error('conversationContextProvider error:', error);
+      runtime.logger.error('conversationContextProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '## Recent Conversations\nFailed to load conversation history.', values: {}, data: {} };
     }
   },

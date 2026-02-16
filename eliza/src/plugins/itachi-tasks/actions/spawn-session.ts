@@ -55,7 +55,7 @@ export const spawnSessionAction: Action = {
       const text = message.content?.text || '';
 
       // Check allowed users
-      const allowedStr = runtime.getSetting('ITACHI_ALLOWED_USERS') || '';
+      const allowedStr = String(runtime.getSetting('ITACHI_ALLOWED_USERS') || '');
       const allowedUsers = allowedStr
         .split(',')
         .map((id: string) => id.trim())

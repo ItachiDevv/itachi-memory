@@ -11,10 +11,10 @@ export const repoExpertiseWorker: TaskWorker = {
 
   validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
 
-  execute: async (runtime: IAgentRuntime): Promise<void> => {
+  execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
-      const memoryService = runtime.getService<MemoryService>('itachi-memory');
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
+      const memoryService = runtime.getService('itachi-memory') as MemoryService | null;
       if (!codeIntel || !memoryService) {
         runtime.logger.warn('[repo-expertise] Services not available');
         return;
@@ -122,12 +122,12 @@ Keep it under 400 words. Be specific — this will be injected into Claude Code 
           });
 
           runtime.logger.info(`[repo-expertise] Updated expertise for ${project}`);
-        } catch (projErr) {
-          runtime.logger.error(`[repo-expertise] Error for project ${project}:`, projErr);
+        } catch (projErr: unknown) {
+          runtime.logger.error(`[repo-expertise] Error for project ${project}:`, projErr instanceof Error ? projErr.message : String(projErr));
         }
       }
-    } catch (error) {
-      runtime.logger.error('[repo-expertise] Error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('[repo-expertise] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -142,14 +142,15 @@ export async function registerRepoExpertiseTask(runtime: IAgentRuntime): Promise
 
     await runtime.createTask({
       name: 'ITACHI_REPO_EXPERTISE',
+      description: 'Daily per-project expertise map builder',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 24 * 60 * 60 * 1000, // Daily
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_REPO_EXPERTISE repeating task (daily)');
-  } catch (error) {
-    runtime.logger.error('Failed to register repo expertise task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register repo expertise task:', error instanceof Error ? error.message : String(error));
   }
 }

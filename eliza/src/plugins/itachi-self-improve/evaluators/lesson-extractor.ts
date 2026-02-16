@@ -1,10 +1,12 @@
-import { type Evaluator, type IAgentRuntime, type Memory, type State, ModelType, MemoryType } from '@elizaos/core';
+import { type Evaluator, type IAgentRuntime, type Memory, type State, ModelType } from '@elizaos/core';
+import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 interface ExtractedLesson {
   text: string;
   category: string;
   confidence: number;
   taskId?: string;
+  project?: string;
   outcome: 'success' | 'failure' | 'partial';
 }
 
@@ -38,7 +40,7 @@ export const lessonExtractor: Evaluator = {
 
     // Run when a task completed/failed (check recent action results)
     const hasTaskResult = Array.isArray(state?.data?.actionResults) &&
-      state.data.actionResults.some(
+      (state.data.actionResults as unknown as Array<Record<string, unknown>>).some(
         (r: Record<string, unknown>) =>
           r.data && typeof r.data === 'object' && 'taskId' in (r.data as Record<string, unknown>)
       );
@@ -52,8 +54,16 @@ export const lessonExtractor: Evaluator = {
     return hasTaskResult || hasFeedback || hasCompletion;
   },
 
-  handler: async (runtime: IAgentRuntime, message: Memory, state?: State): Promise<{ lessons: ExtractedLesson[] }> => {
+  handler: async (runtime: IAgentRuntime, message: Memory, state?: State): Promise<void> => {
     try {
+      // Use MemoryService (itachi_memories table) so lessons are visible to
+      // enrichWithLessons(), /recall, lessonsProvider, and reflection worker.
+      const memoryService = runtime.getService<MemoryService>('itachi-memory');
+      if (!memoryService) {
+        runtime.logger.warn('LESSON_EXTRACTOR: MemoryService not available, skipping');
+        return;
+      }
+
       const recentMessages = state?.data?.recentMessages || [];
       const recentContext = Array.isArray(recentMessages)
         ? recentMessages
@@ -84,6 +94,7 @@ Return a JSON array of lessons. Each lesson must have:
 - "category": one of the categories above
 - "confidence": 0.0-1.0 how confident this lesson is
 - "outcome": "success" | "failure" | "partial"
+- "project": project name if identifiable, or "general"
 
 If no meaningful lessons can be extracted, return an empty array.
 Respond ONLY with valid JSON array, no markdown fences.`;
@@ -96,48 +107,48 @@ Respond ONLY with valid JSON array, no markdown fences.`;
       const raw = typeof result === 'string' ? result : String(result);
       let lessons: ExtractedLesson[];
       try {
-        lessons = JSON.parse(raw.trim());
+        // Strip markdown fences if present
+        const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+        lessons = JSON.parse(cleaned);
       } catch {
         runtime.logger.warn('Lesson extractor: unparseable LLM output');
-        return { lessons: [] };
+        return;
       }
 
-      if (!Array.isArray(lessons)) return { lessons: [] };
+      if (!Array.isArray(lessons)) return;
 
-      // Validate and store each lesson
-      const stored: ExtractedLesson[] = [];
+      // Validate and store each lesson via MemoryService (itachi_memories)
+      let storedCount = 0;
       for (const lesson of lessons) {
         if (!lesson.text || !lesson.category || typeof lesson.confidence !== 'number') continue;
         if (lesson.confidence < 0.5) continue; // Skip low-confidence lessons
 
         try {
-          await runtime.createMemory({
-            type: MemoryType.CUSTOM,
-            content: { text: lesson.text },
+          await memoryService.storeMemory({
+            project: lesson.project || 'general',
+            category: 'task_lesson',
+            content: `Lesson: ${lesson.text}\nCategory: ${lesson.category}\nOutcome: ${lesson.outcome || 'partial'}`,
+            summary: lesson.text,
+            files: [],
             metadata: {
-              type: 'management-lesson',
-              category: lesson.category,
+              source: 'lesson_extractor',
+              lesson_category: lesson.category,
               confidence: lesson.confidence,
               outcome: lesson.outcome || 'partial',
               extracted_at: new Date().toISOString(),
             },
-            roomId: message.roomId,
-            entityId: message.entityId,
           });
-          stored.push(lesson);
-        } catch (err) {
-          runtime.logger.error('Failed to store lesson:', err);
+          storedCount++;
+        } catch (err: unknown) {
+          runtime.logger.error('Failed to store lesson:', err instanceof Error ? err.message : String(err));
         }
       }
 
-      if (stored.length > 0) {
-        runtime.logger.info(`Extracted ${stored.length} management lessons`);
+      if (storedCount > 0) {
+        runtime.logger.info(`LESSON_EXTRACTOR: stored ${storedCount} management lessons in itachi_memories`);
       }
-
-      return { lessons: stored };
-    } catch (error) {
-      runtime.logger.error('Lesson extractor error:', error);
-      return { lessons: [] };
+    } catch (error: unknown) {
+      runtime.logger.error('Lesson extractor error:', error instanceof Error ? error.message : String(error));
     }
   },
 };

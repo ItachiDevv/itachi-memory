@@ -161,8 +161,8 @@ export const createTaskAction: Action = {
         }
 
         // Resolve machine from NL parse (first task's machine applies to all)
-        if (parsed[0].machine && machineRegistry) {
-          const { machine, allMachines } = await machineRegistry.resolveMachine(parsed[0].machine);
+        if ((parsed[0] as any).machine && machineRegistry) {
+          const { machine, allMachines } = await machineRegistry.resolveMachine((parsed[0] as any).machine);
           if (machine && machine.status !== 'offline') {
             targetMachine = machine.machine_id;
           }
@@ -176,8 +176,11 @@ export const createTaskAction: Action = {
             const telegramChatId = (message.content as Record<string, unknown>).telegram_chat_id as number
               || parseInt(String(runtime.getSetting('TELEGRAM_GROUP_CHAT_ID') || '0'), 10);
 
+            // Enrich each task with relevant lessons from previous tasks
+            const enrichedDesc = await enrichWithLessons(runtime, task.project, task.description);
+
             const created = await taskService.createTask({
-              description: task.description,
+              description: enrichedDesc,
               project: task.project,
               telegram_chat_id: telegramChatId,
               telegram_user_id: telegramUserId,
@@ -350,7 +353,7 @@ async function parseNaturalLanguageTask(
 
     console.log(`[create-task] LLM parse: text="${text.substring(0, 80)}", projects=${knownProjects.length}, context=${conversationContext.length}chars`);
 
-    const result = await runtime.useModel(ModelType.TEXT, {
+    const result = await runtime.useModel(ModelType.TEXT_SMALL, {
       prompt: `You are extracting coding task(s) from a conversation to queue them for execution.
 
 Known projects: ${knownProjects.join(', ') || '(none)'}${machineClause}

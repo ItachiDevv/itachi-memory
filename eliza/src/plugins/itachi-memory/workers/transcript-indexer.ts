@@ -175,7 +175,7 @@ export const transcriptIndexerWorker: TaskWorker = {
         runtime.logger.info(`[transcript-indexer] Indexed ${totalIndexed} transcript chunks`);
       }
     } catch (error) {
-      runtime.logger.error('[transcript-indexer] Error:', error);
+      runtime.logger.error('[transcript-indexer] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -190,14 +190,15 @@ export async function registerTranscriptIndexerTask(runtime: IAgentRuntime): Pro
 
     await runtime.createTask({
       name: 'ITACHI_TRANSCRIPT_INDEXER',
+      description: 'Indexes Claude Code session transcripts into memory',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 60 * 60 * 1000, // 1 hour
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_TRANSCRIPT_INDEXER repeating task (1hr)');
   } catch (error) {
-    runtime.logger.error('Failed to register transcript indexer task:', error);
+    runtime.logger.error('Failed to register transcript indexer task:', error instanceof Error ? error.message : String(error));
   }
 }

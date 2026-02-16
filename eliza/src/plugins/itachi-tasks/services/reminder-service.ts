@@ -24,13 +24,11 @@ export class ReminderService extends Service {
   capabilityDescription = 'Scheduled reminders and actions via Telegram';
 
   private supabase: SupabaseClient;
-  private runtime: IAgentRuntime;
 
   constructor(runtime: IAgentRuntime) {
-    super();
-    this.runtime = runtime;
-    const url = runtime.getSetting('SUPABASE_URL');
-    const key = runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY');
+    super(runtime);
+    const url = String(runtime.getSetting('SUPABASE_URL') || '');
+    const key = String(runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY') || '');
     if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required for ReminderService');
     this.supabase = createClient(url, key);
   }

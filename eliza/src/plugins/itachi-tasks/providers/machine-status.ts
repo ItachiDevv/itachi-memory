@@ -45,7 +45,7 @@ export const machineStatusProvider: Provider = {
         data: { machines },
       };
     } catch (error) {
-      runtime.logger.error('machineStatusProvider error:', error);
+      runtime.logger.error('machineStatusProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '## Orchestrator Machines\nFailed to load machine data. Do NOT make up machine statuses.', values: {}, data: {} };
     }
   },

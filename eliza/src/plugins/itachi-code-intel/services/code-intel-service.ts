@@ -53,17 +53,15 @@ export class CodeIntelService extends Service {
   capabilityDescription = 'Deep code intelligence: session tracking, pattern detection, expertise mapping';
 
   private supabase: SupabaseClient;
-  private runtime: IAgentRuntime;
 
   constructor(runtime: IAgentRuntime) {
-    super();
-    this.runtime = runtime;
+    super(runtime);
     const url = runtime.getSetting('SUPABASE_URL');
     const key = runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY');
     if (!url || !key) {
       throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for CodeIntelService');
     }
-    this.supabase = createClient(url, key);
+    this.supabase = createClient(String(url), String(key));
   }
 
   static async start(runtime: IAgentRuntime): Promise<CodeIntelService> {

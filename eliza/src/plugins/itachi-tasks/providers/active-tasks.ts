@@ -71,7 +71,7 @@ export const activeTasksProvider: Provider = {
         data: { activeTasks, recentTasks },
       };
     } catch (error) {
-      runtime.logger.error('activeTasksProvider error:', error);
+      runtime.logger.error('activeTasksProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '## Active Tasks\nFailed to load task data. Do NOT make up task statuses.', values: {}, data: {} };
     }
   },

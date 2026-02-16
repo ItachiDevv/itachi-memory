@@ -24,15 +24,13 @@ export class TelegramTopicsService extends Service {
   static serviceType = 'telegram-topics';
   capabilityDescription = 'Telegram forum topic management for task progress streaming';
 
-  private _rt: IAgentRuntime;
   private botToken: string;
   private groupChatId: number;
   private baseUrl: string;
   private buffers: Map<string, StreamBuffer> = new Map();
 
   constructor(runtime: IAgentRuntime) {
-    super();
-    this._rt = runtime;
+    super(runtime);
     this.botToken = String(runtime.getSetting('TELEGRAM_BOT_TOKEN') || '');
     const chatId = String(runtime.getSetting('TELEGRAM_GROUP_CHAT_ID') || process.env.TELEGRAM_GROUP_CHAT_ID || '');
     this.groupChatId = parseInt(chatId, 10) || 0;
@@ -64,7 +62,7 @@ export class TelegramTopicsService extends Service {
       }
     }
     this.buffers.clear();
-    this._rt.logger.info('TelegramTopicsService stopped');
+    this.runtime.logger.info('TelegramTopicsService stopped');
   }
 
   private isEnabled(): boolean {
@@ -98,7 +96,7 @@ export class TelegramTopicsService extends Service {
       });
 
       if (!topicResult.ok || !topicResult.result?.message_thread_id) {
-        this._rt.logger.error(`Failed to create topic: ${topicResult.description}`);
+        this.runtime.logger.error(`Failed to create topic: ${topicResult.description}`);
         return null;
       }
 
@@ -115,17 +113,17 @@ export class TelegramTopicsService extends Service {
       const messageId = msgResult.result?.message_id || 0;
 
       // Store topic ID on task
-      const taskService = this._rt.getService<TaskService>('itachi-tasks') as TaskService | undefined;
+      const taskService = this.runtime.getService('itachi-tasks') as TaskService | null;
       if (taskService) {
         await taskService.updateTask(task.id, {
           telegram_topic_id: topicId,
         } as any);
       }
 
-      this._rt.logger.info(`Created topic ${topicId} for task ${slug}`);
+      this.runtime.logger.info(`Created topic ${topicId} for task ${slug}`);
       return { topicId, messageId };
     } catch (error) {
-      this._rt.logger.error('Failed to create forum topic:', error instanceof Error ? error.message : String(error));
+      this.runtime.logger.error('Failed to create forum topic:', error instanceof Error ? error.message : String(error));
       return null;
     }
   }
@@ -151,12 +149,12 @@ export class TelegramTopicsService extends Service {
         });
 
         if (!result.ok) {
-          this._rt.logger.error(`sendToTopic failed: ${result.description}`);
+          this.runtime.logger.error(`sendToTopic failed: ${result.description}`);
         } else {
           lastMsgId = result.result?.message_id || null;
         }
       } catch (error) {
-        this._rt.logger.error('sendToTopic error:', error instanceof Error ? error.message : String(error));
+        this.runtime.logger.error('sendToTopic error:', error instanceof Error ? error.message : String(error));
       }
     }
 
@@ -178,7 +176,7 @@ export class TelegramTopicsService extends Service {
 
       return result.ok;
     } catch (error) {
-      this._rt.logger.error('updateTopicMessage error:', error instanceof Error ? error.message : String(error));
+      this.runtime.logger.error('updateTopicMessage error:', error instanceof Error ? error.message : String(error));
       return false;
     }
   }
@@ -197,7 +195,7 @@ export class TelegramTopicsService extends Service {
       });
 
       if (!result.ok) {
-        this._rt.logger.error(`closeTopic failed: ${result.description}`);
+        this.runtime.logger.error(`closeTopic failed: ${result.description}`);
       }
 
       // Edit topic name to include status if provided
@@ -211,7 +209,7 @@ export class TelegramTopicsService extends Service {
 
       return result.ok;
     } catch (error) {
-      this._rt.logger.error('closeTopic error:', error instanceof Error ? error.message : String(error));
+      this.runtime.logger.error('closeTopic error:', error instanceof Error ? error.message : String(error));
       return false;
     }
   }
@@ -229,12 +227,12 @@ export class TelegramTopicsService extends Service {
       });
 
       if (!result.ok) {
-        this._rt.logger.error(`deleteTopic failed: ${result.description}`);
+        this.runtime.logger.error(`deleteTopic failed: ${result.description}`);
       }
 
       return result.ok;
     } catch (error) {
-      this._rt.logger.error('deleteTopic error:', error instanceof Error ? error.message : String(error));
+      this.runtime.logger.error('deleteTopic error:', error instanceof Error ? error.message : String(error));
       return false;
     }
   }
@@ -305,7 +303,7 @@ export class TelegramTopicsService extends Service {
       const msgId = await this.sendToTopic(buffer.topicId, text);
       if (msgId) buffer.messageId = msgId;
     } catch (error) {
-      this._rt.logger.error(`flushBuffer error for ${taskId}:`, error instanceof Error ? error.message : String(error));
+      this.runtime.logger.error(`flushBuffer error for ${taskId}:`, error instanceof Error ? error.message : String(error));
     }
   }
 

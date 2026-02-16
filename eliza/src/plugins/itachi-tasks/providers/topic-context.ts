@@ -1,11 +1,15 @@
 import type { Provider, IAgentRuntime, Memory, State, ProviderResult } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
+import { getTopicThreadId } from '../utils/telegram.js';
 
 /**
  * When a message is in a Telegram forum topic linked to an active task,
  * injects strong context telling the LLM to only acknowledge — not converse.
  * This prevents the bot from "hallucinating" responses to user input meant
  * for the orchestrator.
+ *
+ * NOTE: Uses `getTopicThreadId()` to extract the Telegram thread ID from the
+ * Room metadata, since ElizaOS's Telegram plugin does not put it in `content`.
  */
 export const topicContextProvider: Provider = {
   name: 'TASK_TOPIC_CONTEXT',
@@ -18,8 +22,12 @@ export const topicContextProvider: Provider = {
     message: Memory,
     _state?: State
   ): Promise<ProviderResult> => {
-    const content = message.content as Record<string, unknown>;
-    const threadId = content.message_thread_id as number | undefined;
+    // Quick check: skip non-Telegram messages to avoid unnecessary room lookups
+    if (message.content?.source !== 'telegram') {
+      return { text: '', values: {}, data: {} };
+    }
+
+    const threadId = await getTopicThreadId(runtime, message);
 
     if (!threadId) {
       return { text: '', values: {}, data: {} };

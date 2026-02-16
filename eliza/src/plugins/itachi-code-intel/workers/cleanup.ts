@@ -11,9 +11,9 @@ export const cleanupWorker: TaskWorker = {
 
   validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
 
-  execute: async (runtime: IAgentRuntime): Promise<void> => {
+  execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
       if (!codeIntel) {
         runtime.logger.warn('[cleanup] CodeIntelService not available');
         return;
@@ -21,8 +21,8 @@ export const cleanupWorker: TaskWorker = {
 
       await codeIntel.runCleanup();
       runtime.logger.info('[cleanup] Intelligence data cleanup completed');
-    } catch (error) {
-      runtime.logger.error('[cleanup] Error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('[cleanup] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -37,14 +37,15 @@ export async function registerCleanupTask(runtime: IAgentRuntime): Promise<void>
 
     await runtime.createTask({
       name: 'ITACHI_CLEANUP',
+      description: 'Monthly cleanup of old intelligence data',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 30 * 24 * 60 * 60 * 1000, // Monthly
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_CLEANUP repeating task (monthly)');
-  } catch (error) {
-    runtime.logger.error('Failed to register cleanup task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register cleanup task:', error instanceof Error ? error.message : String(error));
   }
 }

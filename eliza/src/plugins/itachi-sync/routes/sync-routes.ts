@@ -11,9 +11,10 @@ export const syncRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { repo_name, file_path, encrypted_data, salt, content_hash, updated_by } = req.body;
+        const body = req.body as any;
+        const { repo_name, file_path, encrypted_data, salt, content_hash, updated_by } = body;
 
         if (!repo_name || !file_path || !encrypted_data || !salt || !content_hash || !updated_by) {
           res.status(400).json({
@@ -63,15 +64,16 @@ export const syncRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const repo = req.params.repo;
+        const params = (req.params || {}) as Record<string, string>;
+        const repo = params.repo;
         // Try param first, then parse from URL for multi-segment paths
-        let filePath = req.params.filePath;
+        let filePath = params.filePath;
         if (!filePath) {
           // Fallback: extract everything after /api/sync/pull/<repo>/
           const prefix = `/api/sync/pull/${repo}/`;
-          const urlPath = (req.url || req.originalUrl || '').split('?')[0];
+          const urlPath = (req.url || (req as any).originalUrl || '').split('?')[0];
           const idx = urlPath.indexOf(prefix);
           if (idx >= 0) filePath = urlPath.substring(idx + prefix.length);
         }
@@ -110,9 +112,9 @@ export const syncRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const repo = req.params.repo;
+        const repo = ((req.params || {}) as Record<string, string>).repo;
 
         const syncService = rt.getService<SyncService>('itachi-sync');
         if (!syncService) {

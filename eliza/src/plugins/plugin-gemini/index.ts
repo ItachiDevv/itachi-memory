@@ -19,15 +19,15 @@ let geminiEnabled = false;
 let geminiLargeEnabled = false;
 
 function getApiKey(runtime: IAgentRuntime): string {
-  return runtime.getSetting('GEMINI_API_KEY') ?? process.env.GEMINI_API_KEY ?? '';
+  return String(runtime.getSetting('GEMINI_API_KEY') ?? process.env.GEMINI_API_KEY ?? '');
 }
 
 function getSmallModel(runtime: IAgentRuntime): string {
-  return runtime.getSetting('GEMINI_SMALL_MODEL') ?? process.env.GEMINI_SMALL_MODEL ?? 'gemini-3-flash-preview';
+  return String(runtime.getSetting('GEMINI_SMALL_MODEL') ?? process.env.GEMINI_SMALL_MODEL ?? 'gemini-3-flash-preview');
 }
 
 function getLargeModel(runtime: IAgentRuntime): string {
-  return runtime.getSetting('GEMINI_LARGE_MODEL') ?? process.env.GEMINI_LARGE_MODEL ?? 'gemini-2.5-pro';
+  return String(runtime.getSetting('GEMINI_LARGE_MODEL') ?? process.env.GEMINI_LARGE_MODEL ?? 'gemini-2.5-pro');
 }
 
 function isLargeEnabled(runtime: IAgentRuntime): boolean {

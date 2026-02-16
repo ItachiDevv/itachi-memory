@@ -1,13 +1,18 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService, type ItachiTask, type CreateTaskParams } from '../services/task-service.js';
 import { pendingInputs } from '../routes/task-stream.js';
+import { getTopicThreadId } from '../utils/telegram.js';
 
 /**
  * Detects when a user replies in a Telegram forum topic associated with an Itachi task.
  *
- * - If the task is running/claimed: queues the message as pending input for the orchestrator.
+ * - If the task is running/claimed: acknowledges the relay (evaluator already queued it).
  * - If the task is completed/failed/cancelled: offers to create a follow-up task.
- * - If the task is queued: acknowledges and queues the input.
+ * - If the task is queued: acknowledges and confirms input was queued.
+ *
+ * NOTE: The `topicInputRelayEvaluator` (alwaysRun: true) already queues user
+ * input into `pendingInputs` before this action runs. This action only provides
+ * the user-facing acknowledgment. It does NOT re-queue to avoid duplicates.
  */
 export const topicReplyAction: Action = {
   name: 'TOPIC_REPLY',
@@ -35,13 +40,14 @@ export const topicReplyAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    // Only trigger for messages in a forum topic (message_thread_id present)
-    const content = message.content as Record<string, unknown>;
-    const threadId = content.message_thread_id as number | undefined;
+    // Quick check: skip non-Telegram messages
+    if (message.content?.source !== 'telegram') return false;
+    // Only trigger for messages in a forum topic
+    const threadId = await getTopicThreadId(runtime, message);
     if (!threadId) return false;
 
     // Skip messages that are explicit commands handled by other actions
-    const text = (content.text as string)?.trim() || '';
+    const text = (message.content?.text as string)?.trim() || '';
     if (/^\/[a-z_]/i.test(text)) {
       return false;
     }
@@ -71,12 +77,11 @@ export const topicReplyAction: Action = {
         return { success: false, error: 'Task service not available' };
       }
 
-      const content = message.content as Record<string, unknown>;
-      const threadId = content.message_thread_id as number;
-      const text = ((content.text as string) || '').trim();
+      const threadId = await getTopicThreadId(runtime, message);
+      const text = ((message.content?.text as string) || '').trim();
 
-      if (!text) {
-        return { success: false, error: 'Empty message' };
+      if (!text || !threadId) {
+        return { success: false, error: 'Empty message or not in a topic' };
       }
 
       const task = await findTaskByTopicId(taskService, threadId);
@@ -85,13 +90,18 @@ export const topicReplyAction: Action = {
       }
 
       const shortId = task.id.substring(0, 8);
+      const content = message.content as Record<string, unknown>;
+      const alreadyQueued = !!content._topicRelayQueued;
 
-      // Active tasks: queue input for orchestrator
+      // Active tasks: acknowledge relay (evaluator already queued it)
       if (task.status === 'running' || task.status === 'claimed' || task.status === 'waiting_input') {
-        if (!pendingInputs.has(task.id)) {
-          pendingInputs.set(task.id, []);
+        // Only queue if the evaluator didn't already do it
+        if (!alreadyQueued) {
+          if (!pendingInputs.has(task.id)) {
+            pendingInputs.set(task.id, []);
+          }
+          pendingInputs.get(task.id)!.push({ text, timestamp: Date.now() });
         }
-        pendingInputs.get(task.id)!.push({ text, timestamp: Date.now() });
 
         if (callback) {
           await callback({
@@ -101,12 +111,15 @@ export const topicReplyAction: Action = {
         return { success: true, data: { taskId: task.id, action: 'queued_input' } };
       }
 
-      // Queued tasks: acknowledge and store the input for when the task starts
+      // Queued tasks: acknowledge and confirm input was queued
       if (task.status === 'queued') {
-        if (!pendingInputs.has(task.id)) {
-          pendingInputs.set(task.id, []);
+        // Only queue if the evaluator didn't already do it
+        if (!alreadyQueued) {
+          if (!pendingInputs.has(task.id)) {
+            pendingInputs.set(task.id, []);
+          }
+          pendingInputs.get(task.id)!.push({ text, timestamp: Date.now() });
         }
-        pendingInputs.get(task.id)!.push({ text, timestamp: Date.now() });
 
         if (callback) {
           await callback({

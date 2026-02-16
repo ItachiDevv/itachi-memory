@@ -159,7 +159,7 @@ Respond ONLY with valid JSON, no markdown fences:
         `CONVERSATION_MEMORY: stored (significance=${significance.toFixed(2)}, project=${project}, facts=${factsStored}, identity=${identityStored})`
       );
     } catch (error) {
-      runtime.logger.error('CONVERSATION_MEMORY error:', error);
+      runtime.logger.error('CONVERSATION_MEMORY error:', error instanceof Error ? error.message : String(error));
     }
   },
 };

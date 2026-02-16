@@ -30,7 +30,7 @@ export const memoryStatsProvider: Provider = {
         data: { stats },
       };
     } catch (error) {
-      runtime.logger.error('memoryStatsProvider error:', error);
+      runtime.logger.error('memoryStatsProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '', values: {}, data: {} };
     }
   },

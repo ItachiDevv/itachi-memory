@@ -12,9 +12,10 @@ export const repoRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { name, repo_url } = req.body;
+        const body = req.body as any;
+        const { name, repo_url } = body;
         if (!name) {
           res.status(400).json({ error: 'name required' });
           return;
@@ -43,7 +44,7 @@ export const repoRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
         const taskService = rt.getService<TaskService>('itachi-tasks');
         if (!taskService) {
@@ -67,9 +68,9 @@ export const repoRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { name } = req.params;
+        const { name } = (req.params || {}) as Record<string, string>;
 
         const taskService = rt.getService<TaskService>('itachi-tasks');
         if (!taskService) {
@@ -98,7 +99,7 @@ export const repoRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
         const result = await syncGitHubRepos(rt);
         res.json({ synced: result.synced, total: result.total, errors: result.errors.slice(0, 5) });
@@ -116,15 +117,16 @@ export const repoRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
-        if (!checkAuth(req, res, rt)) return;
+        if (!checkAuth(req as any, res, rt)) return;
 
-        const { name } = req.body;
-        if (!name) {
+        const createBody = req.body as any;
+        const { name: createName } = createBody;
+        if (!createName) {
           res.status(400).json({ error: 'name required' });
           return;
         }
 
-        const safeName = truncate(name, MAX_LENGTHS.project);
+        const safeName = truncate(createName, MAX_LENGTHS.project);
         const result = await createGitHubRepo(rt, safeName);
         if (!result) {
           res.status(503).json({ error: 'GITHUB_TOKEN not configured' });

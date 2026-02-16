@@ -1,8 +1,11 @@
-import { type TaskWorker, type IAgentRuntime, ModelType, MemoryType } from '@elizaos/core';
+import { type TaskWorker, type IAgentRuntime, ModelType } from '@elizaos/core';
+import type { MemoryService, ItachiMemory } from '../../itachi-memory/services/memory-service.js';
 
 /**
  * Weekly reflection worker: synthesizes individual lessons into strategy documents.
- * Registered as a repeating task with 7-day interval.
+ * Reads task_lesson memories from itachi_memories (the same table where task-poller,
+ * topic-input-relay, lesson-extractor, and /feedback store lessons).
+ * Produces a strategy_document in itachi_memories.
  */
 export const reflectionWorker: TaskWorker = {
   name: 'ITACHI_REFLECTION',
@@ -13,33 +16,45 @@ export const reflectionWorker: TaskWorker = {
 
   execute: async (runtime: IAgentRuntime, _options: unknown, _task: unknown): Promise<void> => {
     try {
-      // 1. Query all lessons from the last 7 days
-      const recentLessons = await runtime.searchMemories({
-        type: MemoryType.CUSTOM,
-        query: 'management lesson task outcome',
-        limit: 50,
-        threshold: 0.3,
-      });
+      const memoryService = runtime.getService<MemoryService>('itachi-memory');
+      if (!memoryService) {
+        runtime.logger.warn('Reflection: MemoryService not available, skipping');
+        return;
+      }
 
-      const lessons = recentLessons.filter(
-        (m) => m.metadata?.type === 'management-lesson'
-      );
+      // 1. Query recent task_lesson memories
+      let lessons: ItachiMemory[];
+      try {
+        lessons = await memoryService.searchMemories(
+          'task lesson outcome success failure error budget',
+          undefined,  // all projects
+          50,
+          undefined,
+          'task_lesson',
+        );
+      } catch {
+        runtime.logger.warn('Reflection: Failed to search for lessons');
+        return;
+      }
 
       if (lessons.length < 3) {
-        runtime.logger.info('Reflection: Not enough lessons to synthesize (need 3+)');
+        runtime.logger.info(`Reflection: Not enough lessons to synthesize (found ${lessons.length}, need 3+)`);
         return;
       }
 
       // 2. Format lessons for synthesis
       const lessonText = lessons
         .map((l) => {
-          const meta = l.metadata || {};
-          return `- [${meta.category}] ${l.content?.text} (confidence: ${meta.confidence}, outcome: ${meta.outcome})`;
+          const meta = (l.metadata || {}) as Record<string, unknown>;
+          const category = meta.lesson_category || l.category || 'task_lesson';
+          const confidence = meta.confidence ?? '';
+          const outcome = meta.outcome ?? '';
+          return `- [${category}] ${l.summary} (confidence: ${confidence}, outcome: ${outcome}, project: ${l.project})`;
         })
         .join('\n');
 
       // 3. Use LLM to synthesize into a strategy document
-      const prompt = `You are Itachi, an AI project manager that learns from experience. Review these management lessons from the past week and synthesize them into updated strategies.
+      const prompt = `You are Itachi, an AI project manager that learns from experience. Review these management lessons from recent tasks and synthesize them into updated strategies.
 
 Lessons (${lessons.length} total):
 ${lessonText}
@@ -65,49 +80,54 @@ Keep it under 500 words. Be specific and actionable.`;
         return;
       }
 
-      // 4. Delete old strategy documents (keep max 4 — monthly rolling window)
-      const existingStrategies = await runtime.searchMemories({
-        type: MemoryType.CUSTOM,
-        query: 'strategy document management',
-        limit: 10,
-        threshold: 0.3,
-      });
-
-      const stratDocs = existingStrategies
-        .filter((m) => m.metadata?.type === 'strategy-document')
-        .sort((a, b) => {
-          const aDate = a.metadata?.generated_at || '';
-          const bDate = b.metadata?.generated_at || '';
-          return bDate.localeCompare(aDate);
-        });
+      // 4. Check for existing strategy documents and clean up old ones (keep max 4)
+      let existingStrategies: ItachiMemory[] = [];
+      try {
+        existingStrategies = await memoryService.searchMemories(
+          'strategy document management',
+          undefined,
+          10,
+          undefined,
+          'strategy_document',
+        );
+      } catch {
+        // Non-critical — if we can't find old ones, just store the new one
+      }
 
       // Remove oldest if we have 4+
-      if (stratDocs.length >= 4) {
-        for (const old of stratDocs.slice(3)) {
+      if (existingStrategies.length >= 4) {
+        const supabase = memoryService.getSupabase();
+        const sorted = existingStrategies.sort((a, b) => {
+          return (b.created_at || '').localeCompare(a.created_at || '');
+        });
+        for (const old of sorted.slice(3)) {
           try {
-            await runtime.deleteMemory(old.id);
+            await supabase.from('itachi_memories').delete().eq('id', old.id);
           } catch {
             // Silent — old doc cleanup is best-effort
           }
         }
       }
 
-      // 5. Store new strategy document
-      await runtime.createMemory({
-        type: MemoryType.CUSTOM,
-        content: { text: strategy },
+      // 5. Store new strategy document in itachi_memories
+      await memoryService.storeMemory({
+        project: 'general',
+        category: 'strategy_document',
+        content: strategy,
+        summary: `Strategy document synthesized from ${lessons.length} lessons on ${new Date().toISOString().split('T')[0]}`,
+        files: [],
         metadata: {
-          type: 'strategy-document',
+          source: 'reflection_worker',
           generated_at: new Date().toISOString(),
           lesson_count: lessons.length,
         },
       });
 
       runtime.logger.info(
-        `Reflection complete: synthesized ${lessons.length} lessons into strategy document`
+        `Reflection complete: synthesized ${lessons.length} lessons into strategy document (stored in itachi_memories)`
       );
-    } catch (error) {
-      runtime.logger.error('Reflection worker error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('Reflection worker error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -126,14 +146,15 @@ export async function registerReflectionTask(runtime: IAgentRuntime): Promise<vo
 
     await runtime.createTask({
       name: 'ITACHI_REFLECTION',
+      description: 'Weekly reflection that synthesizes lessons into strategy documents',
       worldId: runtime.agentId, // Use agent's default world for background tasks
       metadata: {
         updateInterval: 7 * 24 * 60 * 60 * 1000, // 7 days
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_REFLECTION repeating task (weekly)');
-  } catch (error) {
-    runtime.logger.error('Failed to register reflection task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register reflection task:', error instanceof Error ? error.message : String(error));
   }
 }

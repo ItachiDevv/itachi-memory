@@ -198,7 +198,7 @@ async function handleSyncRepos(
   }
 
   if (callback) await callback({ text: response });
-  return { success: true, data: result };
+  return { success: true, data: result as unknown as Record<string, unknown> };
 }
 
 async function handleCloseTopics(

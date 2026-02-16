@@ -11,15 +11,15 @@ export const repoExpertiseProvider: Provider = {
   description: 'Project-specific expertise map built from session history',
   position: 9,
 
-  get: async (runtime: IAgentRuntime, message: Memory, _state?: State): Promise<string> => {
+  get: async (runtime: IAgentRuntime, message: Memory, _state: State) => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
-      if (!codeIntel) return '## Repo Expertise\nCode intelligence service unavailable. Do NOT guess about project architecture or patterns.';
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
+      if (!codeIntel) return { text: '## Repo Expertise\nCode intelligence service unavailable. Do NOT guess about project architecture or patterns.' };
 
       // Determine which project the user is asking about
       const messageText = message.content?.text || '';
       const project = extractProjectName(messageText, runtime);
-      if (!project) return '## Repo Expertise\nNo project detected in this message. Do NOT invent project details — ask the user which project they mean.';
+      if (!project) return { text: '## Repo Expertise\nNo project detected in this message. Do NOT invent project details — ask the user which project they mean.' };
 
       const supabase = codeIntel.getSupabase();
 
@@ -32,11 +32,11 @@ export const repoExpertiseProvider: Provider = {
         .limit(1)
         .single();
 
-      if (!data?.content) return `## Repo Expertise (${project})\nNo expertise data found for this project yet.`;
+      if (!data?.content) return { text: `## Repo Expertise (${project})\nNo expertise data found for this project yet.` };
 
-      return `## Project Expertise: ${project}\n${data.content}`;
+      return { text: `## Project Expertise: ${project}\n${data.content}` };
     } catch {
-      return '## Repo Expertise\nFailed to load expertise data. Do NOT make up project details.';
+      return { text: '## Repo Expertise\nFailed to load expertise data. Do NOT make up project details.' };
     }
   },
 };

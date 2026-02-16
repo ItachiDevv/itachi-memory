@@ -10,9 +10,9 @@ export const crossProjectWorker: TaskWorker = {
 
   validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
 
-  execute: async (runtime: IAgentRuntime): Promise<void> => {
+  execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
       if (!codeIntel) {
         runtime.logger.warn('[cross-project] CodeIntelService not available');
         return;
@@ -91,14 +91,14 @@ Respond as a JSON array. No markdown code blocks.`;
             confidence: Math.max(0, Math.min(1, insight.confidence || 0.5)),
             evidence: [{ source: 'cross-project-worker', generated_at: new Date().toISOString() }],
           });
-        } catch (err) {
-          runtime.logger.error(`[cross-project] Failed to store insight "${insight.title}":`, err);
+        } catch (err: unknown) {
+          runtime.logger.error(`[cross-project] Failed to store insight "${insight.title}":`, err instanceof Error ? err.message : String(err));
         }
       }
 
       runtime.logger.info(`[cross-project] Stored ${Math.min(insights.length, 5)} cross-project insights`);
-    } catch (error) {
-      runtime.logger.error('[cross-project] Error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('[cross-project] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -113,14 +113,15 @@ export async function registerCrossProjectTask(runtime: IAgentRuntime): Promise<
 
     await runtime.createTask({
       name: 'ITACHI_CROSS_PROJECT',
+      description: 'Weekly cross-project pattern analysis',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 7 * 24 * 60 * 60 * 1000, // Weekly
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_CROSS_PROJECT repeating task (weekly)');
-  } catch (error) {
-    runtime.logger.error('Failed to register cross-project task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register cross-project task:', error instanceof Error ? error.message : String(error));
   }
 }

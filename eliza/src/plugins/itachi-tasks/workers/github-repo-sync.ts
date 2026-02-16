@@ -35,14 +35,15 @@ export async function registerGithubRepoSyncTask(runtime: IAgentRuntime): Promis
 
     await runtime.createTask({
       name: 'ITACHI_GITHUB_REPO_SYNC',
+      description: 'Sync GitHub repos into project registry every 24 hours',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 86_400_000, // 24 hours
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_GITHUB_REPO_SYNC repeating task (24h)');
-  } catch (error) {
-    runtime.logger.error('Failed to register github repo sync task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register github repo sync task:', error instanceof Error ? error.message : String(error));
   }
 }

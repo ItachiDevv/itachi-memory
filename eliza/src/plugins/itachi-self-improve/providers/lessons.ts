@@ -1,4 +1,5 @@
-import { type Provider, type IAgentRuntime, type Memory, type State, type ProviderResult, MemoryType } from '@elizaos/core';
+import { type Provider, type IAgentRuntime, type Memory, type State, type ProviderResult } from '@elizaos/core';
+import type { MemoryService, ItachiMemory } from '../../itachi-memory/services/memory-service.js';
 
 export const lessonsProvider: Provider = {
   name: 'MANAGEMENT_LESSONS',
@@ -15,50 +16,60 @@ export const lessonsProvider: Provider = {
       const query = message.content?.text || '';
       if (query.length < 5) return { text: '', values: {}, data: {} };
 
-      // Search for relevant lessons — embedding search can fail if the
-      // embedding service is unavailable, so catch gracefully.
-      let results;
+      // Use MemoryService (itachi_memories table) to search for task lessons.
+      // This is the same storage that task-poller, topic-input-relay, lesson-extractor,
+      // and /feedback write to — all with category='task_lesson'.
+      const memoryService = runtime.getService<MemoryService>('itachi-memory');
+      if (!memoryService) return { text: '', values: {}, data: {} };
+
+      let lessons;
       try {
-        results = await runtime.searchMemories({
-          type: MemoryType.CUSTOM,
+        lessons = await memoryService.searchMemories(
           query,
-          limit: 5,
-          threshold: 0.6,
-        });
+          undefined,  // all projects
+          5,
+          undefined,
+          'task_lesson',
+        );
       } catch {
-        // Embedding generation failed — return empty gracefully instead of
-        // spamming logs with "embedding.map is not a function" retries
+        // Embedding generation failed — return empty gracefully
         return { text: '', values: {}, data: {} };
       }
 
-      // Filter to management-lesson type
-      const lessons = (results || []).filter(
-        (m) => m.metadata?.type === 'management-lesson'
-      );
-
-      if (lessons.length === 0) return { text: '', values: {}, data: {} };
-
-      // Also look for strategy documents (higher-level synthesized lessons)
-      const strategies = (results || []).filter(
-        (m) => m.metadata?.type === 'strategy-document'
-      );
+      if (!lessons || lessons.length === 0) return { text: '', values: {}, data: {} };
 
       const parts: string[] = ['## Past Management Lessons'];
 
-      // Add individual lessons
       for (const l of lessons) {
         const meta = l.metadata || {};
+        const confidence = (meta as Record<string, unknown>).confidence ?? '';
+        const outcome = (meta as Record<string, unknown>).outcome ?? '';
+        const category = (meta as Record<string, unknown>).lesson_category || l.category || 'task_lesson';
+        const sim = l.similarity != null ? ` (relevance: ${l.similarity.toFixed(2)})` : '';
         parts.push(
-          `- [${meta.category}] ${l.content?.text} (confidence: ${meta.confidence}, outcome: ${meta.outcome})`
+          `- [${category}] ${l.summary}${confidence ? ` (confidence: ${confidence})` : ''}${outcome ? ` (outcome: ${outcome})` : ''}${sim}`
         );
       }
 
-      // Add most recent strategy if available
-      if (strategies.length > 0) {
+      // Also search for strategy documents (synthesized by reflection worker)
+      let strategies: ItachiMemory[] = [];
+      try {
+        strategies = await memoryService.searchMemories(
+          'strategy management',
+          undefined,
+          2,
+          undefined,
+          'strategy_document',
+        );
+      } catch {
+        strategies = [];
+      }
+
+      if (strategies && strategies.length > 0) {
         const latest = strategies[0];
         parts.push('');
         parts.push('## Current Strategy');
-        parts.push(latest.content?.text?.substring(0, 500) || '');
+        parts.push(latest.summary?.substring(0, 500) || latest.content?.substring(0, 500) || '');
       }
 
       return {
@@ -66,8 +77,8 @@ export const lessonsProvider: Provider = {
         values: { lessonCount: String(lessons.length) },
         data: { lessons, strategies },
       };
-    } catch (error) {
-      runtime.logger.error('lessonsProvider error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('lessonsProvider error:', error instanceof Error ? error.message : String(error));
       return { text: '', values: {}, data: {} };
     }
   },

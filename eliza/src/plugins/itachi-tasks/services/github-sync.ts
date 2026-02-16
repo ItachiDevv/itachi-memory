@@ -18,8 +18,8 @@ interface SyncResult {
 }
 
 function getSupabase(runtime: IAgentRuntime): SupabaseClient {
-  const url = runtime.getSetting('SUPABASE_URL');
-  const key = runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY');
+  const url = String(runtime.getSetting('SUPABASE_URL') || '');
+  const key = String(runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY') || '');
   if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required');
   return createClient(url, key);
 }
@@ -63,7 +63,7 @@ async function fetchAllGitHubRepos(token: string): Promise<GitHubRepo[]> {
  * Only updates repo_url and metadata — does NOT overwrite user-configured fields.
  */
 export async function syncGitHubRepos(runtime: IAgentRuntime): Promise<SyncResult> {
-  const token = runtime.getSetting('GITHUB_TOKEN');
+  const token = String(runtime.getSetting('GITHUB_TOKEN') || '');
   if (!token) {
     return { synced: 0, total: 0, errors: ['GITHUB_TOKEN not configured'] };
   }
@@ -123,7 +123,7 @@ export async function createGitHubRepo(
   runtime: IAgentRuntime,
   name: string
 ): Promise<{ repo_url: string; html_url: string } | null> {
-  const token = runtime.getSetting('GITHUB_TOKEN');
+  const token = String(runtime.getSetting('GITHUB_TOKEN') || '');
   if (!token) return null;
 
   // Create private repo

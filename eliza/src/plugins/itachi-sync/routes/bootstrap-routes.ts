@@ -79,7 +79,8 @@ export const bootstrapRoutes: Route[] = [
           ],
         });
       } catch {
-        const telegramToken = rt.getSetting('TELEGRAM_BOT_TOKEN');
+        const rtFallback = runtime as IAgentRuntime;
+        const telegramToken = rtFallback.getSetting('TELEGRAM_BOT_TOKEN');
         res.json({ status: 'degraded', telegram: telegramToken ? 'active' : false });
       }
     },

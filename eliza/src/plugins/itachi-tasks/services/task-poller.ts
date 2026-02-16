@@ -11,14 +11,12 @@ export class TaskPollerService extends Service {
   static serviceType = 'itachi-task-poller';
   capabilityDescription = 'Polls for task completions and sends Telegram notifications';
 
-  private runtime: IAgentRuntime;
   private interval: ReturnType<typeof setInterval> | null = null;
   private notifiedTasks = new Set<string>();
   private static readonly MAX_NOTIFIED_CACHE = 500;
 
   constructor(runtime: IAgentRuntime) {
-    super();
-    this.runtime = runtime;
+    super(runtime);
   }
 
   static async start(runtime: IAgentRuntime): Promise<TaskPollerService> {
@@ -48,7 +46,7 @@ export class TaskPollerService extends Service {
    * Extract a management lesson from a completed/failed task and store it.
    */
   private async extractLessonFromCompletion(task: any): Promise<void> {
-    const memoryService = this.runtime.getService<MemoryService>('itachi-memory');
+    const memoryService = this.runtime.getService('itachi-memory') as MemoryService | null;
     if (!memoryService) return;
 
     const isFailure = task.status === 'failed' || task.status === 'timeout';
@@ -75,13 +73,13 @@ export class TaskPollerService extends Service {
         },
       });
       this.runtime.logger.info(`[poller] Stored ${isFailure ? 'failure' : 'success'} lesson for task ${task.id.substring(0, 8)}`);
-    } catch (err) {
-      this.runtime.logger.error(`[poller] Failed to store lesson:`, err);
+    } catch (err: unknown) {
+      this.runtime.logger.error(`[poller] Failed to store lesson:`, err instanceof Error ? err.message : String(err));
     }
   }
 
   private async poll(): Promise<void> {
-    const taskService = this.runtime.getService<TaskService>('itachi-tasks');
+    const taskService = this.runtime.getService('itachi-tasks') as TaskService | null;
     if (!taskService) return;
 
     const supabase = taskService.getSupabase();
@@ -139,15 +137,10 @@ export class TaskPollerService extends Service {
 
       try {
         // Send Telegram notification via ElizaOS message routing
-        // sendMessageToTarget sends to a specific room/chat by ID
-        await this.runtime.sendMessageToTarget({
-          content: { text: msg },
-          target: {
-            type: 'chat',
-            id: String(task.telegram_chat_id),
-            source: 'telegram',
-          },
-        });
+        await this.runtime.sendMessageToTarget(
+          { source: 'telegram', channelId: String(task.telegram_chat_id) },
+          { text: msg },
+        );
 
         // Mark as notified in DB
         await supabase
@@ -157,7 +150,7 @@ export class TaskPollerService extends Service {
 
         // Close & rename the Telegram topic with descriptive name
         if (task.telegram_topic_id) {
-          const topicsService = this.runtime.getService<TelegramTopicsService>('telegram-topics') as TelegramTopicsService | undefined;
+          const topicsService = this.runtime.getService('telegram-topics') as TelegramTopicsService | null;
           if (topicsService) {
             const statusLabel = task.status === 'completed' ? '✅ DONE' : '❌ FAILED';
             await topicsService.closeTopic(task.telegram_topic_id, `${statusLabel} | ${title} | ${task.project}`);
@@ -165,13 +158,13 @@ export class TaskPollerService extends Service {
         }
 
         // Extract a lesson from the task outcome (fire-and-forget)
-        this.extractLessonFromCompletion(task).catch((err) => {
-          this.runtime.logger.error(`Lesson extraction failed for ${task.id.substring(0, 8)}:`, err);
+        this.extractLessonFromCompletion(task).catch((err: unknown) => {
+          this.runtime.logger.error(`Lesson extraction failed for ${task.id.substring(0, 8)}:`, err instanceof Error ? err.message : String(err));
         });
-      } catch (sendErr) {
+      } catch (sendErr: unknown) {
         this.runtime.logger.error(
           `Failed to notify chat ${task.telegram_chat_id}:`,
-          sendErr
+          sendErr instanceof Error ? sendErr.message : String(sendErr)
         );
       }
     }

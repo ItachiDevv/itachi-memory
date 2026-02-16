@@ -1,6 +1,7 @@
 import type { Evaluator, IAgentRuntime, Memory } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
 import { pendingInputs } from '../routes/task-stream.js';
+import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 /**
@@ -8,6 +9,10 @@ import type { MemoryService } from '../../itachi-memory/services/memory-service.
  * Runs on EVERY message (alwaysRun: true) BEFORE the LLM generates a response.
  * If the message is in a task topic, it queues the input for the orchestrator
  * so the input relay works regardless of which action the LLM selects.
+ *
+ * NOTE: The ElizaOS Telegram plugin does NOT put `message_thread_id` in
+ * `message.content`. Instead, the thread ID is stored in the Room's metadata
+ * and channelId. We use `getTopicThreadId()` to extract it from the room.
  */
 export const topicInputRelayEvaluator: Evaluator = {
   name: 'TOPIC_INPUT_RELAY',
@@ -24,17 +29,17 @@ export const topicInputRelayEvaluator: Evaluator = {
     },
   ],
 
-  validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const content = message.content as Record<string, unknown>;
-    const threadId = content.message_thread_id as number | undefined;
-    // Only run if this is a forum topic message
-    return !!threadId;
+  validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+    // Quick check: skip non-Telegram messages to avoid unnecessary room lookups
+    if (message.content?.source !== 'telegram') return false;
+    // Check if this message is in a Telegram forum topic by looking up the room
+    const threadId = await getTopicThreadId(runtime, message);
+    return threadId !== null;
   },
 
   handler: async (runtime: IAgentRuntime, message: Memory): Promise<void> => {
-    const content = message.content as Record<string, unknown>;
-    const threadId = content.message_thread_id as number | undefined;
-    const text = ((content.text as string) || '').trim();
+    const threadId = await getTopicThreadId(runtime, message);
+    const text = ((message.content?.text as string) || '').trim();
 
     if (!threadId || !text) return;
 
@@ -62,6 +67,9 @@ export const topicInputRelayEvaluator: Evaluator = {
           pendingInputs.set(task.id, []);
         }
         pendingInputs.get(task.id)!.push({ text, timestamp: Date.now() });
+
+        // Mark the message so the TOPIC_REPLY action doesn't double-queue
+        (message.content as Record<string, unknown>)._topicRelayQueued = true;
 
         const shortId = task.id.substring(0, 8);
         runtime.logger.info(`[topic-relay] Queued input for task ${shortId}: "${text.substring(0, 40)}"`);

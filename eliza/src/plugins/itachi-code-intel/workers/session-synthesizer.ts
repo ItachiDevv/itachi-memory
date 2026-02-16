@@ -10,9 +10,9 @@ export const sessionSynthesizerWorker: TaskWorker = {
 
   validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
 
-  execute: async (runtime: IAgentRuntime): Promise<void> => {
+  execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
-      const codeIntel = runtime.getService<CodeIntelService>('itachi-code-intel');
+      const codeIntel = runtime.getService('itachi-code-intel') as CodeIntelService | null;
       if (!codeIntel) {
         runtime.logger.warn('[session-synthesizer] CodeIntelService not available');
         return;
@@ -138,12 +138,12 @@ Be specific and technical.`;
             .eq('id', session.id);
 
           runtime.logger.info(`[session-synthesizer] Enriched session ${session.session_id} for ${session.project}`);
-        } catch (sessionErr) {
-          runtime.logger.error(`[session-synthesizer] Error processing session ${session.session_id}:`, sessionErr);
+        } catch (sessionErr: unknown) {
+          runtime.logger.error(`[session-synthesizer] Error processing session ${session.session_id}:`, sessionErr instanceof Error ? sessionErr.message : String(sessionErr));
         }
       }
-    } catch (error) {
-      runtime.logger.error('[session-synthesizer] Error:', error);
+    } catch (error: unknown) {
+      runtime.logger.error('[session-synthesizer] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
@@ -158,14 +158,15 @@ export async function registerSessionSynthesizerTask(runtime: IAgentRuntime): Pr
 
     await runtime.createTask({
       name: 'ITACHI_SESSION_SYNTHESIZER',
+      description: 'Session summary enrichment via LLM',
       worldId: runtime.agentId,
       metadata: {
         updateInterval: 30 * 60 * 1000, // 30 minutes — sessions complete infrequently
       },
       tags: ['repeat'],
-    });
+    } as any);
     runtime.logger.info('Registered ITACHI_SESSION_SYNTHESIZER repeating task (5min)');
-  } catch (error) {
-    runtime.logger.error('Failed to register session synthesizer task:', error);
+  } catch (error: unknown) {
+    runtime.logger.error('Failed to register session synthesizer task:', error instanceof Error ? error.message : String(error));
   }
 }
