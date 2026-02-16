@@ -1,5 +1,5 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
-import { TaskService, type ItachiTask } from './task-service.js';
+import { TaskService, generateTaskTitle, type ItachiTask } from './task-service.js';
 
 interface TelegramApiResponse {
   ok: boolean;
@@ -87,13 +87,7 @@ export class TelegramTopicsService extends Service {
   async createTopicForTask(task: ItachiTask): Promise<{ topicId: number; messageId: number } | null> {
     if (!this.isEnabled()) return null;
 
-    const slug = task.description
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .split(/\s+/)
-        .filter((w: string) => w.length > 0 && !new Set(['the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'is', 'it', 'that', 'this', 'with']).has(w))
-        .slice(0, 3)
-        .join('-') || 'task';
+    const slug = generateTaskTitle(task.description);
     const topicName = `${slug} | ${task.project}`;
 
     try {

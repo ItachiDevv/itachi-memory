@@ -145,10 +145,11 @@ export class TaskService extends Service {
   async getTaskByPrefix(prefix: string, userId?: number): Promise<ItachiTask | null> {
     if (!prefix || prefix.length < 4) return null; // min 4 chars to avoid broad scans
 
+    // UUID columns need text cast for prefix matching
     let query = this.supabase
       .from('itachi_tasks')
       .select('*')
-      .ilike('id', `${prefix}%`)
+      .filter('id::text', 'ilike', `${prefix}%`)
       .limit(1);
 
     if (userId) query = query.eq('telegram_user_id', userId);

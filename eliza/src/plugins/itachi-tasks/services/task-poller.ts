@@ -1,5 +1,6 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
 import { TaskService, generateTaskTitle } from './task-service.js';
+import { TelegramTopicsService } from './telegram-topics.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 /**
@@ -153,6 +154,15 @@ export class TaskPollerService extends Service {
           .from('itachi_tasks')
           .update({ notified_at: new Date().toISOString() })
           .eq('id', task.id);
+
+        // Close & rename the Telegram topic with descriptive name
+        if (task.telegram_topic_id) {
+          const topicsService = this.runtime.getService<TelegramTopicsService>('telegram-topics') as TelegramTopicsService | undefined;
+          if (topicsService) {
+            const statusLabel = task.status === 'completed' ? '✅ DONE' : '❌ FAILED';
+            await topicsService.closeTopic(task.telegram_topic_id, `${statusLabel} | ${title} | ${task.project}`);
+          }
+        }
 
         // Extract a lesson from the task outcome (fire-and-forget)
         this.extractLessonFromCompletion(task).catch((err) => {
