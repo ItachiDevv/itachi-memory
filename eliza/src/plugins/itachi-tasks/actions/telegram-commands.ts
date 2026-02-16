@@ -158,59 +158,29 @@ async function handleRecall(
 
 async function handleRepos(
   runtime: IAgentRuntime,
-  callback?: HandlerCallback
+  _callback?: HandlerCallback
 ): Promise<ActionResult> {
+  // NOTE: No callback — reposProvider already feeds data to LLM.
+  // Calling callback would produce a duplicate message.
   const taskService = runtime.getService<TaskService>('itachi-tasks');
   if (!taskService) {
-    if (callback) await callback({ text: 'Task service not available.' });
     return { success: false, error: 'Task service not available' };
   }
-
   const repos = await taskService.getMergedRepos();
-
-  if (repos.length === 0) {
-    if (callback) await callback({ text: 'No repositories registered.' });
-    return { success: true, data: { repos: [] } };
-  }
-
-  let response = 'Registered repositories:\n\n';
-  repos.forEach((r, i) => {
-    const url = r.repo_url ? ` — ${r.repo_url}` : ' — (no URL)';
-    response += `${i + 1}. ${r.name}${url}\n`;
-  });
-
-  if (callback) await callback({ text: response });
   return { success: true, data: { repos } };
 }
 
 async function handleMachines(
   runtime: IAgentRuntime,
-  callback?: HandlerCallback
+  _callback?: HandlerCallback
 ): Promise<ActionResult> {
+  // NOTE: No callback — machineStatusProvider already feeds data to LLM.
+  // Calling callback would produce a duplicate message.
   const registry = runtime.getService<MachineRegistryService>('machine-registry');
   if (!registry) {
-    if (callback) await callback({ text: 'Machine registry service not available.' });
     return { success: false, error: 'Machine registry service not available' };
   }
-
   const machines = await registry.getAllMachines();
-
-  if (machines.length === 0) {
-    if (callback) await callback({ text: 'No orchestrator machines registered.' });
-    return { success: true, data: { machines: [] } };
-  }
-
-  const online = machines.filter(m => m.status === 'online' || m.status === 'busy');
-  let response = 'Orchestrator machines:\n\n';
-  machines.forEach((m, i) => {
-    const name = m.display_name || m.machine_id;
-    const projects = m.projects.length > 0 ? m.projects.join(', ') : 'any';
-    const icon = m.status === 'online' ? '🟢' : m.status === 'busy' ? '🟡' : '⚫';
-    response += `${i + 1}. ${icon} ${name} (${m.machine_id}) — ${m.status} | ${m.active_tasks}/${m.max_concurrent} tasks | projects: ${projects} | ${m.os || 'unknown'}\n`;
-  });
-  response += `\n${online.length} machine${online.length !== 1 ? 's' : ''} online, ${machines.reduce((sum, m) => sum + m.active_tasks, 0)} task${machines.reduce((sum, m) => sum + m.active_tasks, 0) !== 1 ? 's' : ''} running.`;
-
-  if (callback) await callback({ text: response });
   return { success: true, data: { machines } };
 }
 

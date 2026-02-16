@@ -67,72 +67,30 @@ export const listTasksAction: Action = {
 
       const text = stripBotMention(message.content?.text || '');
 
+      // NOTE: We intentionally do NOT call callback() here.
+      // The activeTasksProvider and machineStatusProvider already feed task/machine
+      // data into the LLM context, so the LLM generates the response.
+      // Calling callback would produce a DUPLICATE message.
+
       // Check if asking about a specific task
       const statusMatch = text.match(/\/status\s+(\S+)/);
       if (statusMatch) {
         const task = await taskService.getTaskByPrefix(statusMatch[1]);
         if (!task) {
-          if (callback) await callback({ text: `Task not found: ${statusMatch[1]}` });
           return { success: false, error: 'Task not found' };
         }
-
-        const shortId = task.id.substring(0, 8);
-        let msg = `Task ${shortId}:\n\n` +
-          `Status: ${task.status}\n` +
-          `Project: ${task.project}\n` +
-          `Description: ${task.description}\n`;
-
-        if (task.orchestrator_id) msg += `Runner: ${task.orchestrator_id}\n`;
-        if (task.started_at) msg += `Started: ${new Date(task.started_at).toLocaleString()}\n`;
-        if (task.completed_at) msg += `Completed: ${new Date(task.completed_at).toLocaleString()}\n`;
-        if (task.result_summary) msg += `\nResult: ${task.result_summary}\n`;
-        if (task.error_message) msg += `\nError: ${task.error_message}\n`;
-        if (task.pr_url) msg += `\nPR: ${task.pr_url}\n`;
-        if (task.files_changed?.length > 0) msg += `\nFiles: ${task.files_changed.join(', ')}\n`;
-
-        if (callback) await callback({ text: msg });
         return { success: true, data: { task } };
       }
 
       // Check if asking for active queue
       const isQueueQuery = text.includes('queue') || text.includes('running') || text.includes('active');
-
       if (isQueueQuery) {
         const tasks = await taskService.getActiveTasks();
-        if (tasks.length === 0) {
-          if (callback) await callback({ text: 'Queue is empty.' });
-          return { success: true, data: { tasks: [] } };
-        }
-
-        let response = `Active queue (${tasks.length} tasks):\n\n`;
-        tasks.forEach((t, i) => {
-          const runner = t.orchestrator_id ? ` [${t.orchestrator_id}]` : '';
-          response += `${i + 1}. [${t.status}]${runner} ${t.project}: ${t.description.substring(0, 100)}\n`;
-        });
-
-        if (callback) await callback({ text: response });
         return { success: true, data: { tasks } };
       }
 
       // Default: show recent tasks
       const tasks = await taskService.listTasks({ limit: 5 });
-      if (tasks.length === 0) {
-        if (callback) await callback({ text: 'No tasks found.' });
-        return { success: true, data: { tasks: [] } };
-      }
-
-      const statusIcon: Record<string, string> = {
-        queued: '[]', claimed: '..', running: '>>', completed: 'OK',
-        failed: '!!', cancelled: '--', timeout: 'TO',
-      };
-
-      let response = 'Recent tasks:\n\n';
-      for (const t of tasks) {
-        const icon = statusIcon[t.status] || '??';
-        response += `[${icon}] ${t.id.substring(0, 8)} | ${t.project} | ${t.description.substring(0, 80)}\n`;
-      }
-
-      if (callback) await callback({ text: response });
       return { success: true, data: { tasks } };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
