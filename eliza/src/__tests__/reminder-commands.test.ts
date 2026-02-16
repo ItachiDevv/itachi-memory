@@ -13,6 +13,7 @@ mock.module('@elizaos/core', () => ({
   Service: class Service {
     static serviceType = 'base';
     capabilityDescription = '';
+    constructor(runtime?: any) { (this as any).runtime = runtime; }
   },
 }));
 

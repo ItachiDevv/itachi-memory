@@ -286,9 +286,11 @@ describe('Embedding Cache Edge Cases', () => {
     const supabase = makeBasicSupabase();
     const service = createService(supabase, runtime);
 
-    // Should return null (or whatever the model returns) without crashing on cache upsert
+    // When model returns null, getEmbedding returns a zero-fill vector (defensive fallback)
     const result = await service.getEmbedding('model returns null');
-    expect(result).toBeNull();
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBe(1536);
+    expect(result.every((v: number) => v === 0)).toBe(true);
   });
 
   it('should not crash on fire-and-forget rejection (Bug #1 fix)', async () => {

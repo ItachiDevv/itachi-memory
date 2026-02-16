@@ -538,7 +538,7 @@ describe('Fix 5: CREATE_TASK — handler() /task command path', () => {
     expect(createdTasks).toHaveLength(1);
     expect(createdTasks[0].project).toBe('my-app');
     expect(createdTasks[0].description).toBe('Fix the login bug');
-    expect(callbackText).toContain('Task queued!');
+    expect(callbackText).toContain('QUEUED');
     expect(callbackText).toContain('my-app');
   });
 });
@@ -613,7 +613,7 @@ describe('Fix 5: CREATE_TASK — handler() natural language with conversation co
     expect(createdTasks[0].description).toContain('Remotion');
     expect(createdTasks[1].description).toContain('Remotion');
     // Callback must report both tasks
-    expect(callbackText).toContain('2 tasks queued');
+    expect(callbackText).toContain('2 tasks QUEUED');
     expect(callbackText).toContain('lotitachi');
     expect(callbackText).toContain('elizapets');
   });
@@ -657,7 +657,7 @@ describe('Fix 5: CREATE_TASK — handler() natural language with conversation co
     expect(result.success).toBe(true);
     expect(createdTasks).toHaveLength(1);
     expect(createdTasks[0].project).toBe('lotitachi');
-    expect(callbackText).toContain('Task queued!');
+    expect(callbackText).toContain('QUEUED');
     expect(callbackText).toContain('lotitachi');
   });
 
