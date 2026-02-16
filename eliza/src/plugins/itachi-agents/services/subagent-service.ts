@@ -67,8 +67,8 @@ export class SubagentService extends Service {
       .select()
       .single();
 
-    if (error) {
-      this.runtime.logger.error('[subagents] spawn error:', error.message);
+    if (error || !data) {
+      this.runtime.logger.error('[subagents] spawn error:', error?.message || 'no data returned');
       return null;
     }
 
