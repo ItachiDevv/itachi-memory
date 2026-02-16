@@ -117,7 +117,7 @@ async function handleCreate(
 
   const parsed = parseTimeAndMessage(input);
   if (!parsed) {
-    if (callback) await callback({ text: 'Could not parse time. Try:\n  /remind 9am message\n  /remind tomorrow 3pm message\n  /remind in 2h message\n  /remind daily 8:30am message' });
+    if (callback) await callback({ text: 'Could not parse time. Try:\n  /remind 5m message\n  /remind 2h message\n  /remind 9am message\n  /remind tomorrow 3pm message\n  /remind daily 8:30am message' });
     return { success: false, error: 'Could not parse time' };
   }
 
@@ -310,8 +310,8 @@ export function parseTimeAndMessage(input: string): ParsedTimeMessage | null {
     rest = rest.substring(recurMatch[0].length);
   }
 
-  // Try "in Xh/Xm"
-  const relMatch = rest.match(/^in\s+(\d+)\s*(h|hr|hrs|hours?|m|min|mins|minutes?)\s+(.+)/i);
+  // Try "in Xh/Xm" or bare "5m", "2h" shorthand
+  const relMatch = rest.match(/^(?:in\s+)?(\d+)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)\s+(.+)/i);
   if (relMatch) {
     const amount = parseInt(relMatch[1], 10);
     const unit = relMatch[2].toLowerCase();
@@ -319,6 +319,8 @@ export function parseTimeAndMessage(input: string): ParsedTimeMessage | null {
     const now = new Date();
     if (unit.startsWith('h')) {
       now.setHours(now.getHours() + amount);
+    } else if (unit.startsWith('s')) {
+      now.setSeconds(now.getSeconds() + amount);
     } else {
       now.setMinutes(now.getMinutes() + amount);
     }
