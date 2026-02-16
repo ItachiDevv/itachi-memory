@@ -82,6 +82,13 @@ export const createTaskAction: Action = {
         project = slashMatch[2];
         description = slashMatch[3].trim();
 
+        // Resolve project name case-insensitively against known repos
+        const repos = await taskService.getMergedRepos();
+        const matchedRepo = repos.find((r) => r.name.toLowerCase() === project!.toLowerCase());
+        if (matchedRepo) {
+          project = matchedRepo.name; // Use canonical cased name
+        }
+
         // Resolve machine if @machine was specified
         if (machineInput) {
           const machineRegistry = runtime.getService<MachineRegistryService>('machine-registry');
@@ -107,11 +114,15 @@ export const createTaskAction: Action = {
         const repoNames = repos.map((r) => r.name);
 
         // Build conversation context from state
-        const recentMessages = state?.data?.recentMessages || [];
+        const recentMessages = state?.data?.recentMessages || state?.data?.recentMessagesData || [];
         const conversationContext = Array.isArray(recentMessages)
           ? recentMessages
               .slice(-8)
-              .map((m: { role: string; content: string }) => `${m.role}: ${m.content}`)
+              .map((m: any) => {
+                const role = m.role || m.user || 'unknown';
+                const content = m.content || m.text || '';
+                return `${role}: ${content}`;
+              })
               .join('\n')
           : '';
 
@@ -235,7 +246,7 @@ async function parseNaturalLanguageTask(
       : '';
 
     const result = await runtime.useModel(ModelType.TEXT_SMALL, {
-      prompt: `You are extracting task(s) from a conversation. The user wants to create coding task(s).
+      prompt: `You are extracting coding task(s) from a conversation to queue them for execution.
 
 Known projects: ${knownProjects.join(', ') || '(none)'}${machineClause}
 
@@ -244,16 +255,24 @@ ${conversationContext}
 
 Current user message: "${text}"
 
-Extract the task(s) the user wants created. Look at the FULL conversation — the user may be confirming a previous offer (e.g. "yeah do that", "yes please", "go ahead").
+IMPORTANT: The current message may be a CONFIRMATION of a previously discussed task. Common confirmations include: "yes", "yeah", "do it", "go ahead", "sure", "yep", "ok", "please", "sounds good", "that would be great", "yes create those tasks", etc.
 
-Return ONLY valid JSON array, no markdown fences:
-[{"project": "<project name>", "description": "<what to do>", "machine": "<optional machine name>"}]
+If the current message is a confirmation:
+1. Look at the assistant's PREVIOUS messages in the conversation for any mentioned tasks, projects, or proposed work
+2. Extract the task details (project + description) from what the assistant previously described or offered to do
+3. The assistant may have described work like "I can scaffold X for project Y" or "want me to create a task for Z?" — extract those as tasks
+
+If the current message directly describes a task (e.g. "create a task for X to do Y"), extract it directly.
+
+Return ONLY a valid JSON array, no markdown fences, no explanation:
+[{"project": "<exact project name from known projects>", "description": "<specific, actionable description of what to do>"}]
 
 Rules:
-- project must be one of the known projects, or best guess from conversation
-- description should be specific and actionable
-- If multiple tasks are implied (e.g. "for lotitachi and elizapets"), return multiple objects
-- If you truly cannot determine any task, return []`,
+- project MUST match one of the known projects (case-insensitive match is fine, but use the exact known project name in output)
+- description should be specific and actionable — summarize what needs to be done
+- If multiple tasks are implied, return multiple objects
+- If the conversation has enough context to determine a task, ALWAYS extract it — do not return [] just because the current message is short
+- Only return [] if there is genuinely no task information anywhere in the conversation`,
       temperature: 0.1,
     });
 

@@ -87,8 +87,14 @@ export class TelegramTopicsService extends Service {
   async createTopicForTask(task: ItachiTask): Promise<{ topicId: number; messageId: number } | null> {
     if (!this.isEnabled()) return null;
 
-    const shortId = task.id.substring(0, 8);
-    const topicName = `${shortId} | ${task.project}: ${task.description.substring(0, 60)}`;
+    const slug = task.description
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter((w: string) => w.length > 0 && !new Set(['the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'is', 'it', 'that', 'this', 'with']).has(w))
+        .slice(0, 3)
+        .join('-') || 'task';
+    const topicName = `${slug} | ${task.project}`;
 
     try {
       // Create forum topic
@@ -105,7 +111,7 @@ export class TelegramTopicsService extends Service {
       const topicId = topicResult.result.message_thread_id;
 
       // Send initial message
-      const initMsg = `Task ${shortId}\nProject: ${task.project}\nDescription: ${task.description}\n\nStatus: queued`;
+      const initMsg = `Task: ${slug}\nProject: ${task.project}\nDescription: ${task.description}\n\nStatus: queued`;
       const msgResult = await this.apiCall('sendMessage', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
@@ -122,7 +128,7 @@ export class TelegramTopicsService extends Service {
         } as any);
       }
 
-      this._rt.logger.info(`Created topic ${topicId} for task ${shortId}`);
+      this._rt.logger.info(`Created topic ${topicId} for task ${slug}`);
       return { topicId, messageId };
     } catch (error) {
       this._rt.logger.error('Failed to create forum topic:', error instanceof Error ? error.message : String(error));

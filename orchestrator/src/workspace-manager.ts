@@ -63,7 +63,7 @@ async function fetchRepoUrl(project: string): Promise<string | null> {
         });
         if (!ghRes.ok) return null;
 
-        const ghData = await ghRes.json() as { clone_url?: string; html_url?: string };
+        const ghData = await ghRes.json() as { clone_url?: string; html_url?: string; name?: string };
         const repoUrl = ghData.clone_url;
         if (!repoUrl) return null;
 
@@ -73,7 +73,7 @@ async function fetchRepoUrl(project: string): Promise<string | null> {
             await fetch(`${config.apiUrl}/api/repos/register`, {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: project, repo_url: repoUrl }),
+                body: JSON.stringify({ name: ghData.name || project, repo_url: repoUrl }),
             });
         } catch {
             // Registration failed but we still have the URL
@@ -174,13 +174,27 @@ async function ensureBaseClone(task: Task): Promise<string> {
     return basePath;
 }
 
+/** Generate a short slug from a task description for use in branch/worktree names */
+export function slugifyDescription(description: string): string {
+    // Common filler words to skip
+    const stopWords = new Set(['the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'is', 'it', 'that', 'this', 'with']);
+    const words = description
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter(w => w.length > 0 && !stopWords.has(w));
+    const slug = words.slice(0, 3).join('-');
+    return slug ? slug.substring(0, 30) : 'task';
+}
+
 export async function setupWorkspace(task: Task): Promise<string> {
     fs.mkdirSync(config.workspaceDir, { recursive: true });
 
+    const slug = slugifyDescription(task.description);
     const shortId = task.id.substring(0, 8);
-    const workspaceName = `${task.project}-${shortId}`;
+    const workspaceName = `${task.project}-${slug}`;
     const workspacePath = path.join(config.workspaceDir, workspaceName);
-    const branchName = `task/${shortId}`;
+    const branchName = `task/${slug}`;
 
     const { basePath, isLocal } = getBasePath(task);
 
@@ -315,6 +329,7 @@ export async function getFilesChanged(workspacePath: string): Promise<string[]> 
 }
 
 export async function commitAndPush(workspacePath: string, task: Task): Promise<string | null> {
+    const slug = slugifyDescription(task.description);
     const shortId = task.id.substring(0, 8);
 
     // Check if there are uncommitted changes
@@ -336,7 +351,7 @@ export async function commitAndPush(workspacePath: string, task: Task): Promise<
         if (!staged.stdout.trim()) {
             console.log(`[workspace] No non-env changes to commit for task ${shortId}`);
         } else {
-            const commitMsg = `task/${shortId}: ${task.description.substring(0, 72)}`;
+            const commitMsg = `${slug}: ${task.description.substring(0, 72)}`;
             await exec('git', ['commit', '-m', commitMsg], workspacePath);
         }
     }
@@ -361,7 +376,7 @@ export async function commitAndPush(workspacePath: string, task: Task): Promise<
     }
 
     const lastCommit = await exec('git', ['log', '-1', '--pretty=%s'], workspacePath);
-    return lastCommit.stdout || `task/${shortId}`;
+    return lastCommit.stdout || `task/${slug}`;
 }
 
 /** Ensure .gitignore contains the given patterns. Appends missing ones. */
@@ -379,7 +394,7 @@ function ensureGitignoreExcludes(gitignorePath: string, patterns: string[]): voi
 }
 
 export async function createPR(workspacePath: string, task: Task): Promise<string | null> {
-    const shortId = task.id.substring(0, 8);
+    const slug = slugifyDescription(task.description);
 
     // Detect actual default branch (task.branch may say "main" when repo uses "master")
     let baseBranch = task.branch;
@@ -389,7 +404,7 @@ export async function createPR(workspacePath: string, task: Task): Promise<strin
     }
 
     // Use shell-safe quoting for args with spaces
-    const title = `task/${shortId}: ${task.description.substring(0, 72)}`.replace(/"/g, '\\"');
+    const title = `${slug}: ${task.description.substring(0, 72)}`.replace(/"/g, '\\"');
     const body = `Automated task via Itachi orchestrator.\n\nTask ID: ${task.id}\nProject: ${task.project}`.replace(/"/g, '\\"');
 
     const result = await exec(

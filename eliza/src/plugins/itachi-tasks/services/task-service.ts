@@ -80,7 +80,7 @@ export class TaskService extends Service {
     const { data } = await this.supabase
       .from('project_registry')
       .select('default_branch')
-      .eq('name', project)
+      .ilike('name', project)
       .eq('active', true)
       .single();
     return data?.default_branch || 'master';
@@ -289,19 +289,19 @@ export class TaskService extends Service {
   }
 
   async getRepo(name: string): Promise<RepoInfo | null> {
-    // Check repos table first (legacy, manual registrations)
+    // Check repos table first (legacy, manual registrations) — case-insensitive
     const { data } = await this.supabase
       .from('repos')
       .select('name, repo_url, created_at')
-      .eq('name', name)
+      .ilike('name', name)
       .single();
     if (data?.repo_url) return data as RepoInfo;
 
-    // Fall back to project_registry (GitHub-synced repos)
+    // Fall back to project_registry (GitHub-synced repos) — case-insensitive
     const { data: reg } = await this.supabase
       .from('project_registry')
       .select('name, repo_url')
-      .eq('name', name)
+      .ilike('name', name)
       .eq('active', true)
       .single();
     if (reg?.repo_url) return reg as RepoInfo;
