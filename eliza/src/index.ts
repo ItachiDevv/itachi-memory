@@ -14,6 +14,7 @@ import {
   crossProjectWorker, registerCrossProjectTask,
   cleanupWorker, registerCleanupTask,
 } from './plugins/itachi-code-intel/index.js';
+import { itachiAgentsPlugin, subagentLifecycleWorker, registerSubagentLifecycleTask } from './plugins/itachi-agents/index.js';
 
 /**
  * ElizaOS TaskWorker scheduler is non-functional (tasks never execute).
@@ -55,6 +56,7 @@ const agent: ProjectAgent = {
     itachiSyncPlugin,
     itachiSelfImprovePlugin,
     itachiCodeIntelPlugin,
+    itachiAgentsPlugin,
   ],
   init: async (runtime) => {
     runtime.logger.info('Itachi agent initialized');
@@ -74,6 +76,7 @@ const agent: ProjectAgent = {
       { worker: githubRepoSyncWorker, register: registerGithubRepoSyncTask, name: 'github-repo-sync' },
       { worker: reminderPollerWorker, register: registerReminderPollerTask, name: 'reminder-poller' },
       { worker: proactiveMonitorWorker, register: registerProactiveMonitorTask, name: 'proactive-monitor' },
+      { worker: subagentLifecycleWorker, register: registerSubagentLifecycleTask, name: 'subagent-lifecycle' },
     ];
 
     for (const { worker, register, name } of allWorkers) {
@@ -120,6 +123,9 @@ const agent: ProjectAgent = {
       { name: 'reminder-poller', intervalMs: 60_000, delayMs: 15_000,
         validate: (rt) => reminderPollerWorker.validate!(rt, {} as any, {} as any),
         execute: (rt) => reminderPollerWorker.execute(rt, {}, { name: 'ITACHI_REMINDER_POLLER', tags: [], description: '' }) },
+      // Agents: subagent lifecycle (30s, start after 20s)
+      { name: 'subagent-lifecycle', intervalMs: 30_000, delayMs: 20_000,
+        execute: (rt) => subagentLifecycleWorker.execute(rt, {}, { name: 'ITACHI_SUBAGENT_LIFECYCLE', tags: [], description: '' }) },
     ]);
   },
 };
