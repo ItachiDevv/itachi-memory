@@ -43,7 +43,7 @@ export const topicContextProvider: Provider = {
       }
 
       const shortId = task.id.substring(0, 8);
-      const isActive = task.status === 'running' || task.status === 'claimed' || task.status === 'queued';
+      const isActive = task.status === 'running' || task.status === 'claimed' || task.status === 'queued' || task.status === 'waiting_input';
 
       if (isActive) {
         return {

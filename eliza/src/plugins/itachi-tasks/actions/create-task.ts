@@ -1,6 +1,7 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
-import { TaskService, type CreateTaskParams } from '../services/task-service.js';
+import { TaskService, type CreateTaskParams, generateTaskTitle } from '../services/task-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
+import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 export const createTaskAction: Action = {
   name: 'CREATE_TASK',
@@ -117,7 +118,7 @@ export const createTaskAction: Action = {
         const recentMessages = state?.data?.recentMessages || state?.data?.recentMessagesData || [];
         const conversationContext = Array.isArray(recentMessages)
           ? recentMessages
-              .slice(-8)
+              .slice(-12)
               .map((m: any) => {
                 const role = m.role || m.user || 'unknown';
                 const content = m.content || m.text || '';
@@ -130,7 +131,19 @@ export const createTaskAction: Action = {
         const machineRegistry = runtime.getService<MachineRegistryService>('machine-registry');
         const knownMachines = machineRegistry ? (await machineRegistry.getAllMachines()).map(m => m.display_name || m.machine_id) : [];
 
-        const parsed = await parseNaturalLanguageTask(runtime, text, repoNames, conversationContext, knownMachines);
+        // Strategy 1: Try regex extraction from the bot's own previous messages.
+        // This handles confirmations like "Yes, please do that" by finding the task
+        // details in the bot's earlier offer (e.g. "CREATE_TASK: Project: X, Description: Y").
+        let parsed = extractTaskFromBotMessages(
+          Array.isArray(recentMessages) ? recentMessages : [],
+          repoNames
+        );
+
+        // Strategy 2: Fall back to LLM extraction if regex didn't find anything
+        if (!parsed || parsed.length === 0) {
+          parsed = await parseNaturalLanguageTask(runtime, text, repoNames, conversationContext, knownMachines);
+        }
+
         if (!parsed || parsed.length === 0) {
           if (callback) {
             await callback({
@@ -163,13 +176,13 @@ export const createTaskAction: Action = {
               telegram_user_id: telegramUserId,
               assigned_machine: targetMachine,
             });
-            results.push({ id: created.id.substring(0, 8), project: task.project, description: task.description });
+            results.push({ id: created.id.substring(0, 8), title: generateTaskTitle(task.description), project: task.project, description: task.description });
           }
 
           const queuedCount = await taskService.getQueuedCount();
           const machineLabel = targetMachine || 'auto-dispatch';
           if (callback) {
-            const lines = results.map((r, i) => `${i + 1}. [${r.id}] ${r.project}: ${r.description}`);
+            const lines = results.map((r, i) => `${i + 1}. [${r.id}] ${r.title} — ${r.project}: ${r.description}`);
             await callback({
               text: `${results.length} tasks QUEUED (not started yet).\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nThese tasks are waiting in the queue. I'll notify you as they actually complete.`,
             });
@@ -197,8 +210,11 @@ export const createTaskAction: Action = {
       const telegramChatId = (message.content as Record<string, unknown>).telegram_chat_id as number
         || parseInt(String(runtime.getSetting('TELEGRAM_GROUP_CHAT_ID') || '0'), 10);
 
+      // Inject relevant lessons from previous tasks into the description
+      const enrichedDescription = await enrichWithLessons(runtime, project, description);
+
       const params: CreateTaskParams = {
-        description,
+        description: enrichedDescription,
         project,
         telegram_chat_id: telegramChatId,
         telegram_user_id: telegramUserId,
@@ -208,11 +224,12 @@ export const createTaskAction: Action = {
       const task = await taskService.createTask(params);
       const queuedCount = await taskService.getQueuedCount();
       const shortId = task.id.substring(0, 8);
+      const title = generateTaskTitle(description);
       const machineLabel = targetMachine || 'auto-dispatch';
 
       if (callback) {
         await callback({
-          text: `Task QUEUED (not started yet).\n\nID: ${shortId}\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.`,
+          text: `Task QUEUED (not started yet).\n\nID: ${shortId} (${title})\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.`,
         });
       }
 
@@ -226,6 +243,56 @@ export const createTaskAction: Action = {
     }
   },
 };
+
+/**
+ * Extract task details from the bot's own previous messages using regex.
+ * This handles the common case where the LLM already identified the task
+ * in its text response (e.g. "CREATE_TASK: Project: X, Description: Y")
+ * but the user's message was just a confirmation like "Yes, please do that".
+ */
+function extractTaskFromBotMessages(
+  recentMessages: any[],
+  knownProjects: string[]
+): Array<{ project: string; description: string }> | null {
+  const patterns = [
+    // "CREATE_TASK: Project: itachi-memory, Description: Audit all branches..."
+    /CREATE_TASK:\s*Project:\s*(\S+),?\s*Description:\s*(.+)/i,
+    // "Project: itachi-memory\nDescription: Audit all branches"
+    /Project:\s*(\S+)\s*[\n,].*?Description:\s*(.+)/is,
+    // "I can run a task on itachi-memory to list exactly how many..."
+    /task\s+(?:for|on)\s+(\S+)\s+(?:to|that will|which will)\s+(.+?)(?:\.|$)/im,
+    // "queue a task for itachi-memory: audit all branches"
+    /task\s+(?:for|on)\s+(\S+)\s*(?::|—|-)\s*(.+?)(?:\.|$)/im,
+    // "create a task for itachi-memory to do X"
+    /create\s+(?:a\s+)?task\s+(?:for|on)\s+(\S+)\s+to\s+(.+?)(?:\.|$)/im,
+  ];
+
+  // Scan bot messages in reverse (most recent first)
+  for (let i = recentMessages.length - 1; i >= 0; i--) {
+    const m = recentMessages[i];
+    const role = (m.role || m.user || '').toLowerCase();
+    // Only check assistant/bot messages
+    if (role === 'user' || role === 'human') continue;
+    const content = typeof m.content === 'string'
+      ? m.content
+      : (m.content?.text || m.text || '');
+    if (!content) continue;
+
+    for (const pattern of patterns) {
+      const match = content.match(pattern);
+      if (match) {
+        const proj = match[1].trim().replace(/[,;:.]$/, '');
+        const desc = match[2].trim().replace(/\n.*/s, '').substring(0, 500); // first line only
+        // Validate against known projects (case-insensitive)
+        const matched = knownProjects.find(p => p.toLowerCase() === proj.toLowerCase());
+        if (matched) {
+          return [{ project: matched, description: desc }];
+        }
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * Use LLM to extract task(s) from message + conversation context.
@@ -245,7 +312,7 @@ async function parseNaturalLanguageTask(
       ? `\nKnown machines: ${knownMachines.join(', ')}\n- If the user mentions a specific machine (e.g. "on air", "on my mac", "@air"), set "machine" to the matching name\n- If no machine is mentioned, omit the "machine" field`
       : '';
 
-    const result = await runtime.useModel(ModelType.TEXT_SMALL, {
+    const result = await runtime.useModel(ModelType.TEXT, {
       prompt: `You are extracting coding task(s) from a conversation to queue them for execution.
 
 Known projects: ${knownProjects.join(', ') || '(none)'}${machineClause}
@@ -255,12 +322,17 @@ ${conversationContext}
 
 Current user message: "${text}"
 
-IMPORTANT: The current message may be a CONFIRMATION of a previously discussed task. Common confirmations include: "yes", "yeah", "do it", "go ahead", "sure", "yep", "ok", "please", "sounds good", "that would be great", "yes create those tasks", etc.
+CRITICAL: If the current message is SHORT (under 10 words) — like "yes", "do it", "yeah", "please do that", "sounds good", "go ahead" — it is ALMOST CERTAINLY a confirmation of something the assistant previously offered.
 
-If the current message is a confirmation:
-1. Look at the assistant's PREVIOUS messages in the conversation for any mentioned tasks, projects, or proposed work
-2. Extract the task details (project + description) from what the assistant previously described or offered to do
-3. The assistant may have described work like "I can scaffold X for project Y" or "want me to create a task for Z?" — extract those as tasks
+When the current message is a confirmation:
+1. Look at the ASSISTANT's previous messages in the conversation above for any mentioned tasks, projects, or proposed work
+2. The assistant may have said things like:
+   - "I can run a task on <project> to <description>"
+   - "Want me to create a task for <project>?"
+   - "CREATE_TASK: Project: <project>, Description: <description>"
+   - "I could queue: 1) project: description  2) project: description"
+3. Extract the task details (project + description) from those assistant messages
+4. DO NOT return an empty array for short confirmation messages when the assistant clearly offered a task above
 
 If the current message directly describes a task (e.g. "create a task for X to do Y"), extract it directly.
 
@@ -284,5 +356,39 @@ Rules:
     return valid.length > 0 ? valid : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Query memory for relevant lessons from previous tasks on this project
+ * and append them to the task description so the agent can learn from past mistakes.
+ */
+async function enrichWithLessons(
+  runtime: IAgentRuntime,
+  project: string,
+  description: string,
+): Promise<string> {
+  try {
+    const memoryService = runtime.getService<MemoryService>('itachi-memory');
+    if (!memoryService) return description;
+
+    const lessons = await memoryService.searchMemories(
+      description,
+      project,
+      3,          // top 3 lessons
+      undefined,
+      'task_lesson',
+    );
+
+    if (lessons.length === 0) return description;
+
+    const lessonBlock = lessons
+      .map((l, i) => `${i + 1}. ${l.summary}`)
+      .join('\n');
+
+    return `${description}\n\n--- Lessons from previous tasks on this project ---\n${lessonBlock}`;
+  } catch {
+    // Non-critical — return original description if lesson lookup fails
+    return description;
   }
 }

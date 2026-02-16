@@ -118,24 +118,35 @@ async function runTask(task: Task): Promise<void> {
     // Cleanup timeout (may be re-set if we resume)
     clearTimeout(timeoutHandle);
 
-    // --- Human-in-the-loop: detect if ANY engine asked a question ---
-    // Works for Claude, Codex, and Gemini — checks output text for question patterns
-    const questionPattern = /\b(which|what|how|where|should I|do you want|please (choose|select|specify|confirm|let me know|provide|clarify)|would you (like|prefer)|can you (confirm|clarify)|I need (to know|clarification|more info))\b/i;
-    const needsInput = !result.isError && result.resultText.length > 20 && questionPattern.test(result.resultText);
-    // For Claude, we can resume the session; for others, we re-run with the user's answer appended
-    const canResume = selectedEngine === 'claude' && !!result.sessionId;
+    // --- Unlimited conversation loop ---
+    // Detect if the session needs user input and loop until it completes naturally
+    let turnCount = 0;
 
-    if (needsInput) {
-        console.log(`[runner] Task ${shortId} (engine: ${selectedEngine}) appears to need user input, waiting for Telegram reply...`);
+    while (true) {
+        // Detect if output contains a question/prompt for user
+        const needsInput = !result.isError
+            && result.resultText.length > 20
+            && detectUserPrompt(result.resultText);
 
-        // Stream the question to Telegram
-        streamToEliza(task.id, {
-            type: 'text',
-            text: `⏳ Waiting for your reply:\n\n${result.resultText.substring(0, 500)}`,
+        if (!needsInput) break; // Session truly completed
+
+        turnCount++;
+        console.log(`[runner] Task ${shortId} turn ${turnCount} (engine: ${selectedEngine}): session needs user input`);
+
+        // Update task status to waiting_input
+        await updateTask(task.id, {
+            status: 'waiting_input' as any,
+            result_summary: `Turn ${turnCount}: waiting for reply`,
         });
 
-        // Poll for user input (5 minute timeout)
-        const maxWaitMs = 5 * 60 * 1000;
+        // Stream the FULL output to Telegram (no truncation)
+        streamToEliza(task.id, {
+            type: 'text',
+            text: `⏳ Waiting for your reply (turn ${turnCount})...`,
+        });
+
+        // Poll for user input — 30 min timeout per turn, no turn limit
+        const maxWaitMs = 30 * 60 * 1000;
         const pollMs = 5_000;
         const waitStart = Date.now();
         let userReply: string | null = null;
@@ -144,72 +155,67 @@ async function runTask(task: Task): Promise<void> {
             await sleep(pollMs);
             const inputs = await fetchUserInput(task.id);
             if (inputs.length > 0) {
-                userReply = typeof inputs[0] === 'string' ? inputs[0] : (inputs[0] as any).text || String(inputs[0]);
+                userReply = typeof inputs[0] === 'string'
+                    ? inputs[0]
+                    : (inputs[0] as any).text || String(inputs[0]);
                 break;
             }
         }
 
-        if (userReply) {
-            console.log(`[runner] Got user reply for ${shortId}: "${userReply.substring(0, 60)}"`);
-
-            if (canResume) {
-                // Claude: resume existing session with --continue --resume
-                const { process: resumeProc, result: resumePromise } = resumeClaudeSession(
-                    task, workspacePath, result.sessionId!, userReply
-                );
-
-                const resumeTimeout = setTimeout(() => {
-                    resumeProc.kill('SIGTERM');
-                }, config.taskTimeoutMs);
-
-                activeSessions.set(task.id, {
-                    task, workspacePath, startedAt: new Date(),
-                    timeoutHandle: resumeTimeout, classification, process: resumeProc,
-                });
-
-                const resumeResult = await resumePromise;
-                clearTimeout(resumeTimeout);
-
-                result = {
-                    ...resumeResult,
-                    costUsd: result.costUsd + resumeResult.costUsd,
-                    durationMs: result.durationMs + resumeResult.durationMs,
-                };
-            } else {
-                // Codex/Gemini: re-run with the user's answer appended to the prompt
-                console.log(`[runner] Re-running ${selectedEngine} with user reply for ${shortId}`);
-                const followUpTask = {
-                    ...task,
-                    description: `${task.description}\n\nUser clarification: ${userReply}`,
-                };
-
-                const origEng = config.defaultEngine;
-                (config as any).defaultEngine = selectedEngine;
-                const { process: retryProc, result: retryPromise } = spawnSession(followUpTask, workspacePath, classification);
-                (config as any).defaultEngine = origEng;
-
-                const retryTimeout = setTimeout(() => {
-                    retryProc.kill('SIGTERM');
-                }, config.taskTimeoutMs);
-
-                activeSessions.set(task.id, {
-                    task, workspacePath, startedAt: new Date(),
-                    timeoutHandle: retryTimeout, classification, process: retryProc,
-                });
-
-                const retryResult = await retryPromise;
-                clearTimeout(retryTimeout);
-
-                result = {
-                    ...retryResult,
-                    costUsd: result.costUsd + retryResult.costUsd,
-                    durationMs: result.durationMs + retryResult.durationMs,
-                };
-            }
-        } else {
-            console.log(`[runner] No user reply for ${shortId} within timeout`);
-            streamToEliza(task.id, { type: 'text', text: 'No reply received. Completing task with what we have.' });
+        if (!userReply) {
+            console.log(`[runner] No reply for ${shortId} after 30 min (turn ${turnCount})`);
+            streamToEliza(task.id, {
+                type: 'text',
+                text: 'No reply received after 30 minutes. Completing task with current state.',
+            });
+            break;
         }
+
+        console.log(`[runner] Got reply for ${shortId} turn ${turnCount}: "${userReply.substring(0, 80)}"`);
+        await updateTask(task.id, { status: 'running' });
+
+        // Resume session
+        if (selectedEngine === 'claude') {
+            // Claude: --continue auto-resumes in this worktree
+            const { process: resumeProc, result: resumePromise } =
+                resumeClaudeSession(task, workspacePath, userReply);
+            const newTimeout = setTimeout(() => resumeProc.kill('SIGTERM'), config.taskTimeoutMs);
+            activeSessions.set(task.id, {
+                task, workspacePath, startedAt: new Date(),
+                timeoutHandle: newTimeout, classification, process: resumeProc,
+            });
+            const resumeResult = await resumePromise;
+            clearTimeout(newTimeout);
+            result = {
+                ...resumeResult,
+                costUsd: result.costUsd + resumeResult.costUsd,
+                durationMs: result.durationMs + resumeResult.durationMs,
+            };
+        } else {
+            // Codex/Gemini: re-run with accumulated context
+            const followUpTask = {
+                ...task,
+                description: `${task.description}\n\nUser reply (turn ${turnCount}): ${userReply}`,
+            };
+            const origEng = config.defaultEngine;
+            (config as any).defaultEngine = selectedEngine;
+            const { process: retryProc, result: retryPromise } =
+                spawnSession(followUpTask, workspacePath, classification);
+            (config as any).defaultEngine = origEng;
+            const newTimeout = setTimeout(() => retryProc.kill('SIGTERM'), config.taskTimeoutMs);
+            activeSessions.set(task.id, {
+                task, workspacePath, startedAt: new Date(),
+                timeoutHandle: newTimeout, classification, process: retryProc,
+            });
+            const retryResult = await retryPromise;
+            clearTimeout(newTimeout);
+            result = {
+                ...retryResult,
+                costUsd: result.costUsd + retryResult.costUsd,
+                durationMs: result.durationMs + retryResult.durationMs,
+            };
+        }
+        // Loop: check if NEW result also needs input
     }
 
     activeSessions.delete(task.id);
@@ -270,6 +276,31 @@ export function stopRunner(): void {
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Detect if session output ends with a question or prompt for user input.
+ * Checks the last 500 chars for various question/prompt patterns.
+ */
+function detectUserPrompt(text: string): boolean {
+    const tail = text.substring(text.length - 500);
+    const patterns = [
+        // Direct questions
+        /\b(which|what|how|where|should I|do you want|would you)\b.*\?/i,
+        // Prompts for input
+        /\b(please (choose|select|specify|confirm|provide|clarify|let me know))\b/i,
+        /\b(can you (confirm|clarify|tell me|provide))\b/i,
+        /\b(I need (to know|clarification|more info|your input))\b/i,
+        // Plan mode / AskUserQuestion patterns
+        /\b(waiting for (your|user) (approval|input|response|reply|confirmation))\b/i,
+        /\b(approve|reject)\s+(this|the) plan/i,
+        /\b(option [A-D]|choose between)\b/i,
+        // Permission prompts
+        /\b(allow|deny|permit|authorize)\b.*\?/i,
+        // Open-ended: line ending with ?
+        /\?\s*$/m,
+    ];
+    return patterns.some(p => p.test(tail));
 }
 
 function getApiHeaders(): Record<string, string> {

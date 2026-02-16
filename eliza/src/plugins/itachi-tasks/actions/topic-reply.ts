@@ -91,7 +91,7 @@ export const topicReplyAction: Action = {
       const shortId = task.id.substring(0, 8);
 
       // Active tasks: queue input for orchestrator
-      if (task.status === 'running' || task.status === 'claimed') {
+      if (task.status === 'running' || task.status === 'claimed' || task.status === 'waiting_input') {
         if (!pendingInputs.has(task.id)) {
           pendingInputs.set(task.id, []);
         }

@@ -28,11 +28,19 @@ export const remoteExecAction: Action = {
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text || '';
+    // Explicit slash commands
     if (text.startsWith('/exec ')) return true;
     if (text.startsWith('/pull ')) return true;
     if (text.startsWith('/restart ')) return true;
+    // Natural language: require BOTH a machine mention AND an action keyword
     const registry = runtime.getService<MachineRegistryService>('machine-registry');
-    return !!registry;
+    if (!registry) return false;
+    const machines = await registry.getAllMachines();
+    const machineNames = machines.flatMap(m => [m.machine_id, m.display_name || ''].filter(Boolean).map(n => n.toLowerCase()));
+    const lower = text.toLowerCase();
+    const mentionsMachine = machineNames.some(name => lower.includes(name)) || lower.includes('@');
+    const mentionsAction = /\b(status|check|pull|restart|exec|run command|uptime)\b/i.test(text);
+    return mentionsMachine && mentionsAction;
   },
 
   handler: async (

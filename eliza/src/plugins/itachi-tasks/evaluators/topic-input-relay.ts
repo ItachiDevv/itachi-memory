@@ -1,6 +1,7 @@
 import type { Evaluator, IAgentRuntime, Memory } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
 import { pendingInputs } from '../routes/task-stream.js';
+import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 /**
  * Evaluator that intercepts messages in Telegram forum topics linked to tasks.
@@ -55,8 +56,8 @@ export const topicInputRelayEvaluator: Evaluator = {
 
       if (!task) return;
 
-      // Only queue for active tasks
-      if (task.status === 'running' || task.status === 'claimed' || task.status === 'queued') {
+      // Only queue for active tasks (including waiting_input)
+      if (task.status === 'running' || task.status === 'claimed' || task.status === 'queued' || task.status === 'waiting_input') {
         if (!pendingInputs.has(task.id)) {
           pendingInputs.set(task.id, []);
         }
@@ -64,9 +65,46 @@ export const topicInputRelayEvaluator: Evaluator = {
 
         const shortId = task.id.substring(0, 8);
         runtime.logger.info(`[topic-relay] Queued input for task ${shortId}: "${text.substring(0, 40)}"`);
+
+        // Detect user corrections/feedback and extract lessons
+        const correctionPattern = /\b(that'?s wrong|bad|incorrect|try again|don'?t do that|wrong approach|not what I|revert|undo|shouldn'?t have|mistake)\b|\bno\b(?=[,.\s!?]|$)/i;
+        if (correctionPattern.test(text)) {
+          extractCorrectionLesson(runtime, task, text).catch(() => {});
+        }
       }
     } catch (error) {
       runtime.logger.error('[topic-relay] Error:', error instanceof Error ? error.message : String(error));
     }
   },
 };
+
+/**
+ * Extract a correction/feedback lesson from a user's reply in a task topic.
+ * Stores as a high-confidence lesson since the user explicitly provided feedback.
+ */
+async function extractCorrectionLesson(
+  runtime: IAgentRuntime,
+  task: any,
+  userText: string,
+): Promise<void> {
+  const memoryService = runtime.getService<MemoryService>('itachi-memory');
+  if (!memoryService) return;
+
+  const shortId = task.id.substring(0, 8);
+  const lesson = `User correction on task ${shortId} (${task.project}): "${userText.substring(0, 200)}". Task was: ${task.description.substring(0, 100)}`;
+
+  await memoryService.storeMemory({
+    project: task.project,
+    category: 'task_lesson',
+    content: `User feedback during task ${shortId}: ${userText}\nTask description: ${task.description}`,
+    summary: lesson,
+    files: [],
+    task_id: task.id,
+    metadata: {
+      source: 'user_correction',
+      confidence: 0.9,
+      task_status: task.status,
+    },
+  });
+  runtime.logger.info(`[topic-relay] Stored correction lesson for task ${shortId}`);
+}

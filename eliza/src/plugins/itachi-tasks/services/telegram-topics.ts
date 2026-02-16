@@ -138,28 +138,35 @@ export class TelegramTopicsService extends Service {
 
   /**
    * Send a standalone message to a task's topic.
+   * Long messages are split instead of truncated.
    */
   async sendToTopic(topicId: number, text: string): Promise<number | null> {
     if (!this.isEnabled() || !topicId) return null;
 
-    try {
-      const result = await this.apiCall('sendMessage', {
-        chat_id: this.groupChatId,
-        message_thread_id: topicId,
-        text: text.substring(0, 4096),
-        parse_mode: 'HTML',
-      });
+    // Split long messages instead of truncating
+    const chunks = splitMessage(text, 4000);
+    let lastMsgId: number | null = null;
 
-      if (!result.ok) {
-        this._rt.logger.error(`sendToTopic failed: ${result.description}`);
-        return null;
+    for (const chunk of chunks) {
+      try {
+        const result = await this.apiCall('sendMessage', {
+          chat_id: this.groupChatId,
+          message_thread_id: topicId,
+          text: chunk,
+          parse_mode: 'HTML',
+        });
+
+        if (!result.ok) {
+          this._rt.logger.error(`sendToTopic failed: ${result.description}`);
+        } else {
+          lastMsgId = result.result?.message_id || null;
+        }
+      } catch (error) {
+        this._rt.logger.error('sendToTopic error:', error instanceof Error ? error.message : String(error));
       }
-
-      return result.result?.message_id || null;
-    } catch (error) {
-      this._rt.logger.error('sendToTopic error:', error instanceof Error ? error.message : String(error));
-      return null;
     }
+
+    return lastMsgId;
   }
 
   /**
@@ -335,4 +342,26 @@ export class TelegramTopicsService extends Service {
     if (!buffer) return null;
     return { topicId: buffer.topicId, messageId: buffer.messageId };
   }
+}
+
+/**
+ * Split a long message into chunks that fit within Telegram's limit.
+ * Prefers splitting at newlines near the boundary.
+ */
+function splitMessage(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      chunks.push(remaining);
+      break;
+    }
+    // Try to split at newline near maxLen
+    let splitAt = remaining.lastIndexOf('\n', maxLen);
+    if (splitAt < maxLen * 0.5) splitAt = maxLen; // no good newline, hard split
+    chunks.push(remaining.substring(0, splitAt));
+    remaining = remaining.substring(splitAt);
+  }
+  return chunks;
 }

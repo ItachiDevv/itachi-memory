@@ -267,15 +267,12 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
                 return;
             }
 
-            // Use last ~2000 chars of stdout as result text (Claude's final output)
+            // Keep full text — no truncation, let downstream decide how to display
             const trimmedResult = resultText.trim();
-            const lastChunk = trimmedResult.length > 2000
-                ? trimmedResult.substring(trimmedResult.length - 2000)
-                : trimmedResult;
 
             resolve({
                 sessionId: null,
-                resultText: lastChunk || '(no output)',
+                resultText: trimmedResult || '(no output)',
                 costUsd: 0,
                 durationMs,
                 isError: exitCode !== 0,
@@ -300,15 +297,17 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
 }
 
 /**
- * Resume a Claude session with user input via --continue --resume.
- * Used when the first session completed but needs user feedback.
+ * Resume a Claude session with user input via --continue.
+ * Uses `itachi --cds` which maps to `claude --continue --dangerously-skip-permissions`.
+ * Since each task gets its own worktree (unique CWD), --continue auto-resumes
+ * the correct session without needing an explicit session ID.
  */
 export function resumeClaudeSession(
-    task: Task, workspacePath: string, sessionId: string, userInput: string
+    task: Task, workspacePath: string, userInput: string
 ): { process: ChildProcess; result: Promise<SessionResult> } {
     const shortId = task.id.substring(0, 8);
 
-    // Write user input to temp file, pipe to claude --continue --resume
+    // Write user input to temp file, pipe to itachi --cds (--continue)
     const inputFile = path.join(PROMPT_DIR, `${shortId}-resume.txt`);
     fs.writeFileSync(inputFile, userInput, 'utf8');
 
@@ -317,8 +316,8 @@ export function resumeClaudeSession(
         : `cat "${inputFile}"`;
 
     // itachi --cds = claude --continue --dangerously-skip-permissions
-    const fullCmd = `${readCmd} | itachi --cds --resume ${sessionId}`;
-    console.log(`[session] Resuming session ${sessionId.substring(0, 8)} for task ${shortId} (itachi --cds)`);
+    const fullCmd = `${readCmd} | itachi --cds`;
+    console.log(`[session] Resuming session for task ${shortId} in ${workspacePath} (itachi --cds)`);
 
     const envVars: Record<string, string> = {
         ...process.env as Record<string, string>,
@@ -326,6 +325,7 @@ export function resumeClaudeSession(
     };
     delete envVars.ANTHROPIC_API_KEY;
     delete envVars.CLAUDECODE;
+    delete envVars.GITHUB_TOKEN;
 
     const proc = spawn(fullCmd, [], {
         cwd: workspacePath,
@@ -361,10 +361,9 @@ export function resumeClaudeSession(
             const durationMs = Date.now() - startTime;
             console.log(`[session] Resume exited with code ${exitCode} for task ${shortId} (${Math.round(durationMs / 1000)}s)`);
             const trimmed = resultText.trim();
-            const lastChunk = trimmed.length > 2000 ? trimmed.substring(trimmed.length - 2000) : trimmed;
             resolve({
-                sessionId,
-                resultText: lastChunk || '(no output)',
+                sessionId: null,
+                resultText: trimmed || '(no output)',
                 costUsd: 0, durationMs,
                 isError: exitCode !== 0,
                 exitCode,
@@ -595,13 +594,10 @@ export function spawnGeminiSession(task: Task, workspacePath: string, classifica
             console.log(`[session] Gemini exited with code ${exitCode} for task ${shortId} (${Math.round(durationMs / 1000)}s)`);
 
             const trimmedResult = resultText.trim();
-            const lastChunk = trimmedResult.length > 2000
-                ? trimmedResult.substring(trimmedResult.length - 2000)
-                : trimmedResult;
 
             resolve({
                 sessionId: null,
-                resultText: lastChunk || '(no output)',
+                resultText: trimmedResult || '(no output)',
                 costUsd: 0,
                 durationMs,
                 isError: exitCode !== 0,

@@ -73,6 +73,8 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'containers', description: 'List containers — /containers [target]' },
         { command: 'restart_bot', description: 'Restart bot container — /restart-bot [target]' },
         { command: 'ssh_targets', description: 'List SSH targets' },
+        { command: 'ssh_test', description: 'Test SSH connectivity to all targets' },
+        { command: 'feedback', description: 'Rate a task — /feedback <id> <good|bad> <reason>' },
       ];
       try {
         await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {

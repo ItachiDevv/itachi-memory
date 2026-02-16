@@ -1,5 +1,5 @@
 import type { Provider, IAgentRuntime, Memory, State, ProviderResult } from '@elizaos/core';
-import { TaskService } from '../services/task-service.js';
+import { TaskService, generateTaskTitle } from '../services/task-service.js';
 
 export const activeTasksProvider: Provider = {
   name: 'ACTIVE_TASKS',
@@ -37,11 +37,13 @@ export const activeTasksProvider: Provider = {
       if (activeTasks.length > 0) {
         sections.push(`### Active Tasks (${activeTasks.length})`);
         for (const t of activeTasks) {
-          const id = t.id.substring(0, 8);
+          const title = generateTaskTitle(t.description);
+          const shortId = t.id.substring(0, 8);
           const machine = t.assigned_machine ? ` machine:${t.assigned_machine}` : ' machine:unassigned';
           const age = t.created_at ? ` created:${new Date(t.created_at).toISOString()}` : '';
           const started = t.started_at ? ` started:${new Date(t.started_at).toISOString()}` : '';
-          sections.push(`- [${t.status}] ${id} | ${t.project}: ${t.description.substring(0, 80)}${machine}${age}${started}`);
+          const waitingLabel = t.status === 'waiting_input' ? ' (WAITING FOR YOUR REPLY)' : '';
+          sections.push(`- [${t.status}] ${title} (${shortId}) | ${t.project}: ${t.description.substring(0, 80)}${waitingLabel}${machine}${age}${started}`);
         }
         sections.push('');
       } else {

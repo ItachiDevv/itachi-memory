@@ -36,6 +36,13 @@ export class SSHService extends Service {
   static async start(runtime: IAgentRuntime): Promise<SSHService> {
     const service = new SSHService(runtime);
     const count = service.targets.size;
+    if (count === 0) {
+      runtime.logger.warn('SSHService: No SSH targets configured! Set COOLIFY_SSH_HOST or ITACHI_SSH_<NAME>_HOST env vars.');
+    } else {
+      for (const [name, target] of service.targets) {
+        runtime.logger.info(`SSHService: target "${name}" → ${target.user}@${target.host}:${target.port || 22}${target.keyPath ? ` (key: ${target.keyPath})` : ''}`);
+      }
+    }
     runtime.logger.info(`SSHService started with ${count} target(s)`);
     return service;
   }

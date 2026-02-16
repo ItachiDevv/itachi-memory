@@ -1,5 +1,6 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
-import { TaskService } from './task-service.js';
+import { TaskService, generateTaskTitle } from './task-service.js';
+import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 /**
  * Polls for completed/failed tasks and sends Telegram notifications.
@@ -42,6 +43,42 @@ export class TaskPollerService extends Service {
     }, 10_000);
   }
 
+  /**
+   * Extract a management lesson from a completed/failed task and store it.
+   */
+  private async extractLessonFromCompletion(task: any): Promise<void> {
+    const memoryService = this.runtime.getService<MemoryService>('itachi-memory');
+    if (!memoryService) return;
+
+    const isFailure = task.status === 'failed' || task.status === 'timeout';
+    const outcome = isFailure
+      ? `FAILED: ${task.error_message || 'unknown error'}`
+      : `COMPLETED: ${task.result_summary || 'no summary'}`;
+
+    const lesson = isFailure
+      ? `Task failed on project "${task.project}": ${task.description.substring(0, 100)}. Error: ${task.error_message?.substring(0, 200) || 'unknown'}. Consider: what prerequisites or validations could prevent this failure?`
+      : `Task succeeded on project "${task.project}": ${task.description.substring(0, 100)}. ${task.result_summary?.substring(0, 200) || ''}`;
+
+    try {
+      await memoryService.storeMemory({
+        project: task.project,
+        category: 'task_lesson',
+        content: `Task: ${task.description}\nOutcome: ${outcome}\nFiles: ${(task.files_changed || []).join(', ') || 'none'}`,
+        summary: lesson,
+        files: task.files_changed || [],
+        task_id: task.id,
+        metadata: {
+          task_status: task.status,
+          is_failure: isFailure,
+          source: 'task_completion',
+        },
+      });
+      this.runtime.logger.info(`[poller] Stored ${isFailure ? 'failure' : 'success'} lesson for task ${task.id.substring(0, 8)}`);
+    } catch (err) {
+      this.runtime.logger.error(`[poller] Failed to store lesson:`, err);
+    }
+  }
+
   private async poll(): Promise<void> {
     const taskService = this.runtime.getService<TaskService>('itachi-tasks');
     if (!taskService) return;
@@ -82,17 +119,18 @@ export class TaskPollerService extends Service {
       this.notifiedTasks.add(task.id);
 
       const shortId = task.id.substring(0, 8);
+      const title = generateTaskTitle(task.description);
       let msg: string;
 
       if (task.status === 'completed') {
-        msg = `Task ${shortId} completed!\n\n` +
+        msg = `${title} (${shortId}) completed!\n\n` +
           `Project: ${task.project}\n` +
           `Description: ${task.description.substring(0, 100)}\n`;
         if (task.result_summary) msg += `\nResult: ${task.result_summary}\n`;
         if (task.pr_url) msg += `\nPR: ${task.pr_url}\n`;
         if (task.files_changed?.length > 0) msg += `\nFiles changed: ${task.files_changed.join(', ')}\n`;
       } else {
-        msg = `Task ${shortId} ${task.status}!\n\n` +
+        msg = `${title} (${shortId}) ${task.status}!\n\n` +
           `Project: ${task.project}\n` +
           `Description: ${task.description.substring(0, 100)}\n`;
         if (task.error_message) msg += `\nError: ${task.error_message}\n`;
@@ -115,6 +153,11 @@ export class TaskPollerService extends Service {
           .from('itachi_tasks')
           .update({ notified_at: new Date().toISOString() })
           .eq('id', task.id);
+
+        // Extract a lesson from the task outcome (fire-and-forget)
+        this.extractLessonFromCompletion(task).catch((err) => {
+          this.runtime.logger.error(`Lesson extraction failed for ${task.id.substring(0, 8)}:`, err);
+        });
       } catch (sendErr) {
         this.runtime.logger.error(
           `Failed to notify chat ${task.telegram_chat_id}:`,

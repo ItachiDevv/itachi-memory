@@ -133,7 +133,7 @@ export const coolifyControlAction: Action = {
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text || '';
     // Always match explicit slash commands
-    if (/^\/(ssh|deploy|update|logs|containers|restart-bot|ssh-targets)\b/.test(text)) return true;
+    if (/^\/(ssh|deploy|update|logs|containers|restart-bot|ssh-targets|ssh-test|ssh_test)\b/.test(text)) return true;
     // Match natural language about machines/servers
     const lower = text.toLowerCase();
     const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias => lower.includes(alias));
@@ -243,6 +243,30 @@ async function handleSlashCommand(
   runtime: IAgentRuntime,
   callback?: HandlerCallback,
 ): Promise<ActionResult> {
+  // /ssh-test — test connectivity to all SSH targets
+  if (text.startsWith('/ssh-test') || text.startsWith('/ssh_test')) {
+    const targets = sshService.getTargets();
+    if (targets.size === 0) {
+      if (callback) await callback({ text: 'No SSH targets configured.' });
+      return { success: true, data: { targets: [] } };
+    }
+    if (callback) await callback({ text: `Testing ${targets.size} SSH target(s)...` });
+    const results: string[] = [];
+    for (const [name] of targets) {
+      const start = Date.now();
+      const result = await sshService.exec(name, 'echo ok', 10_000);
+      const elapsed = Date.now() - start;
+      if (result.success && result.stdout.includes('ok')) {
+        results.push(`✅ ${name} — connected (${elapsed}ms)`);
+      } else {
+        const err = result.stderr || `exit code ${result.code}`;
+        results.push(`❌ ${name} — failed: ${err.substring(0, 100)} (${elapsed}ms)`);
+      }
+    }
+    if (callback) await callback({ text: `SSH connectivity test:\n${results.join('\n')}` });
+    return { success: true, data: { results } };
+  }
+
   // /ssh-targets
   if (text.startsWith('/ssh-targets') || text.startsWith('/ssh_targets')) {
     const targets = sshService.getTargets();
@@ -342,7 +366,7 @@ async function handleSlashCommand(
   // Fallback help
   if (callback) {
     await callback({
-      text: 'Available commands:\n- `/ssh <target> <command>` — run command\n- `/deploy` — redeploy bot\n- `/update` — pull latest code & rebuild\n- `/logs [lines]` — view logs\n- `/containers` — list containers\n- `/restart-bot` — restart bot\n- `/ssh-targets` — list targets\n\nOr just say things naturally: "check the mac", "why is the server failing"',
+      text: 'Available commands:\n- `/ssh <target> <command>` — run command\n- `/deploy` — redeploy bot\n- `/update` — pull latest code & rebuild\n- `/logs [lines]` — view logs\n- `/containers` — list containers\n- `/restart-bot` — restart bot\n- `/ssh-targets` — list targets\n- `/ssh-test` — test connectivity to all targets\n\nOr just say things naturally: "check the mac", "why is the server failing"',
     });
   }
   return { success: true };

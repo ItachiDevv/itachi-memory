@@ -48,6 +48,17 @@ export interface RepoInfo {
   repo_url: string | null;
 }
 
+/** Generate a short human-readable title from a task description (e.g. "audit-branches-clean") */
+export function generateTaskTitle(description: string): string {
+  const stopWords = new Set(['the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'is', 'it', 'that', 'this', 'with', 'all', 'from', 'by', 'at', 'be', 'as']);
+  const words = description
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length > 1 && !stopWords.has(w));
+  return words.slice(0, 3).join('-') || 'task';
+}
+
 export class TaskService extends Service {
   static serviceType = 'itachi-tasks';
   capabilityDescription = 'Itachi task queue management for orchestrator';
@@ -170,7 +181,7 @@ export class TaskService extends Service {
     const { data, error } = await this.supabase
       .from('itachi_tasks')
       .select('id, project, description, status, orchestrator_id, assigned_machine, telegram_topic_id, created_at, started_at')
-      .in('status', ['queued', 'claimed', 'running'])
+      .in('status', ['queued', 'claimed', 'running', 'waiting_input'])
       .order('priority', { ascending: false })
       .order('created_at', { ascending: true });
 

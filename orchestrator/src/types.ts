@@ -5,7 +5,7 @@ export interface Task {
     repo_url: string | null;
     branch: string;
     target_branch: string | null;
-    status: 'queued' | 'claimed' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timeout';
+    status: 'queued' | 'claimed' | 'running' | 'waiting_input' | 'completed' | 'failed' | 'cancelled' | 'timeout';
     priority: number;
     model: string;
     max_budget_usd: number;

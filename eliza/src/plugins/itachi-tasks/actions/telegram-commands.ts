@@ -12,8 +12,8 @@ import { syncGitHubRepos } from '../services/github-sync.js';
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /recall, /repos, /machines, /sync_repos, /close_done, and /close_failed Telegram commands',
-  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics'],
+  description: 'Handle /recall, /repos, /machines, /sync_repos, /close_done, /close_failed, and /feedback Telegram commands',
+  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics', 'task feedback', 'rate task'],
   examples: [
     [
       { name: 'user', content: { text: '/recall auth middleware changes' } },
@@ -46,7 +46,8 @@ export const telegramCommandsAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.trim() || '';
-    return text.startsWith('/recall ') || text === '/repos' || text === '/machines' ||
+    return text.startsWith('/recall ') || text.startsWith('/feedback ') ||
+      text === '/repos' || text === '/machines' ||
       text === '/sync-repos' || text === '/sync_repos' ||
       text === '/close-done' || text === '/close_done' ||
       text === '/close-failed' || text === '/close_failed';
@@ -62,6 +63,11 @@ export const telegramCommandsAction: Action = {
     const text = message.content?.text?.trim() || '';
 
     try {
+      // /feedback <taskId> <good|bad> <reason>
+      if (text.startsWith('/feedback ')) {
+        return await handleFeedback(runtime, text, callback);
+      }
+
       // /recall <query> [project]
       if (text.startsWith('/recall ')) {
         return await handleRecall(runtime, text, callback);
@@ -265,4 +271,60 @@ async function handleCloseTopics(
 
   if (callback) await callback({ text: `Deleted ${deleted}/${withTopics.length} ${status} topic(s).` });
   return { success: true, data: { deleted, total: withTopics.length } };
+}
+
+async function handleFeedback(
+  runtime: IAgentRuntime,
+  text: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  // Parse: /feedback <taskId> <good|bad> <reason>
+  const match = text.match(/^\/feedback\s+([a-f0-9-]+)\s+(good|bad)\s+(.+)/i);
+  if (!match) {
+    if (callback) await callback({ text: 'Usage: /feedback <taskId> <good|bad> <reason>' });
+    return { success: false, error: 'Invalid format' };
+  }
+
+  const [, taskIdPrefix, sentiment, reason] = match;
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  if (!taskService) {
+    if (callback) await callback({ text: 'Task service not available.' });
+    return { success: false, error: 'Task service not available' };
+  }
+
+  // Find task by prefix
+  const task = await taskService.getTaskByPrefix(taskIdPrefix);
+  if (!task) {
+    if (callback) await callback({ text: `Task "${taskIdPrefix}" not found.` });
+    return { success: false, error: 'Task not found' };
+  }
+
+  const memoryService = runtime.getService<MemoryService>('itachi-memory');
+  if (!memoryService) {
+    if (callback) await callback({ text: 'Memory service not available.' });
+    return { success: false, error: 'Memory service not available' };
+  }
+
+  const isGood = sentiment.toLowerCase() === 'good';
+  const shortId = task.id.substring(0, 8);
+  const summary = isGood
+    ? `Positive feedback on task ${shortId} (${task.project}): ${reason}. Task: ${task.description.substring(0, 100)}`
+    : `Negative feedback on task ${shortId} (${task.project}): ${reason}. Task: ${task.description.substring(0, 100)}. Avoid this pattern in future.`;
+
+  await memoryService.storeMemory({
+    project: task.project,
+    category: 'task_lesson',
+    content: `User feedback for task ${shortId}:\nSentiment: ${sentiment}\nReason: ${reason}\nTask: ${task.description}`,
+    summary,
+    files: task.files_changed || [],
+    task_id: task.id,
+    metadata: {
+      source: 'user_feedback',
+      sentiment,
+      confidence: 0.95, // High confidence — explicit user feedback
+    },
+  });
+
+  if (callback) await callback({ text: `${isGood ? '👍' : '👎'} Feedback recorded for task ${shortId}. This will inform future similar tasks.` });
+  return { success: true, data: { taskId: task.id, sentiment, reason } };
 }

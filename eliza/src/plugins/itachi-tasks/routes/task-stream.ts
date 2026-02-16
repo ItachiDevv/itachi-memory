@@ -1,5 +1,5 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
-import { TaskService } from '../services/task-service.js';
+import { TaskService, generateTaskTitle } from '../services/task-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 
 /** In-memory store for user input waiting to be consumed by orchestrator */
@@ -117,9 +117,9 @@ export const taskStreamRoutes: Route[] = [
         if (eventType === 'result') {
           await topicsService.finalFlush(id);
           // Close the topic
-          const shortId = task.id.substring(0, 8);
+          const title = generateTaskTitle(task.description);
           const statusLabel = resultData?.is_error ? '❌ FAILED' : '✅ DONE';
-          await topicsService.closeTopic(topicId, `${statusLabel} | ${shortId} | ${task.project}`);
+          await topicsService.closeTopic(topicId, `${statusLabel} | ${title} | ${task.project}`);
         }
 
         res.json({ success: true, topicId });
