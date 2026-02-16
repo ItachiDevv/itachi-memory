@@ -46,7 +46,7 @@ export const telegramCommandsAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.trim() || '';
-    return text.startsWith('/recall ') || text.startsWith('/feedback ') ||
+    return text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text === '/repos' || text === '/machines' ||
       text === '/sync-repos' || text === '/sync_repos' ||
       text === '/close-done' || text === '/close_done' ||
@@ -64,7 +64,7 @@ export const telegramCommandsAction: Action = {
 
     try {
       // /feedback <taskId> <good|bad> <reason>
-      if (text.startsWith('/feedback ')) {
+      if (text === '/feedback' || text.startsWith('/feedback ')) {
         return await handleFeedback(runtime, text, callback);
       }
 
