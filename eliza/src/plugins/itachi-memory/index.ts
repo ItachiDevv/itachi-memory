@@ -6,7 +6,6 @@ import { memoryStatsProvider } from './providers/memory-stats.js';
 import { conversationContextProvider } from './providers/conversation-context.js';
 import { factsContextProvider } from './providers/facts-context.js';
 import { conversationMemoryEvaluator } from './evaluators/conversation-memory.js';
-export { transcriptIndexerWorker, registerTranscriptIndexerTask } from './workers/transcript-indexer.js';
 // factExtractorEvaluator merged into conversationMemoryEvaluator (single LLM call)
 
 export const itachiMemoryPlugin: Plugin = {

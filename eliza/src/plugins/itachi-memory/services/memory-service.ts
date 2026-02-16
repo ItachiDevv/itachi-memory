@@ -16,7 +16,7 @@ export interface ItachiMemory {
   similarity?: number;
 }
 
-export interface StoreMemoryParams {
+interface StoreMemoryParams {
   project: string;
   category: string;
   content: string;
@@ -27,7 +27,7 @@ export interface StoreMemoryParams {
   metadata?: Record<string, unknown>;
 }
 
-export interface MemoryStats {
+interface MemoryStats {
   total: number;
   byCategory: Record<string, number>;
   topFiles: Array<{ file: string; count: number }>;

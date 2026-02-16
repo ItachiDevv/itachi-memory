@@ -186,16 +186,10 @@ describe('E2E Test Definitions', () => {
   });
 });
 
-// ============================================================
-// Export for use by browser automation scripts
-// ============================================================
-
-export { E2E_TESTS, type E2ETestCase };
-
 /**
  * Helper: validate a bot response against a test case
  */
-export function validateResponse(testCase: E2ETestCase, responseText: string): {
+function validateResponse(testCase: E2ETestCase, responseText: string): {
   passed: boolean;
   matchedPatterns: string[];
   missingPatterns: string[];

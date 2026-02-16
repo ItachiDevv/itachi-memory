@@ -1,7 +1,7 @@
 import { Service, type IAgentRuntime, ModelType } from '@elizaos/core';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-export interface StoreEditParams {
+interface StoreEditParams {
   session_id: string;
   project: string;
   file_path: string;
@@ -15,7 +15,7 @@ export interface StoreEditParams {
   task_id?: string;
 }
 
-export interface StoreSessionCompleteParams {
+interface StoreSessionCompleteParams {
   session_id: string;
   project: string;
   task_id?: string;
@@ -32,13 +32,13 @@ export interface StoreSessionCompleteParams {
   orchestrator_id?: string;
 }
 
-export interface HotFile {
+interface HotFile {
   path: string;
   editCount: number;
   lastEdit: string;
 }
 
-export interface SessionBriefing {
+interface SessionBriefing {
   project: string;
   recentSessions: Array<{ summary: string; filesChanged: string[]; when: string }>;
   hotFiles: HotFile[];

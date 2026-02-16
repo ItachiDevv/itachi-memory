@@ -5,7 +5,6 @@ import * as path from 'path';
 import * as os from 'os';
 import { config } from './config';
 import type { Task, TaskClassification, ClaudeStreamEvent, CodexStreamEvent, ElizaStreamEvent } from './types';
-import { getBudgetForClassification } from './task-classifier';
 
 /** Directory for temp prompt files (avoids shell quoting issues) */
 const PROMPT_DIR = path.join(os.tmpdir(), 'itachi-prompts');
