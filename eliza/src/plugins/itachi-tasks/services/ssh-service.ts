@@ -1,5 +1,5 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
-import { execFile } from 'child_process';
+import { execFile, spawn, type ChildProcess } from 'child_process';
 
 export interface SSHTarget {
   host: string;
@@ -20,11 +20,18 @@ export interface SSHResult {
  * Uses the system `ssh` binary — works from Docker containers
  * if an SSH key is mounted and the target is reachable (e.g. via Tailscale).
  */
+export interface InteractiveSession {
+  pid: number;
+  write: (data: string) => void;
+  kill: () => void;
+}
+
 export class SSHService extends Service {
   static serviceType = 'ssh';
   capabilityDescription = 'Execute commands on remote machines via SSH';
 
   private targets: Map<string, SSHTarget> = new Map();
+  private activeSessions: Map<string, ChildProcess> = new Map();
 
   constructor(runtime: IAgentRuntime) {
     super(runtime);
@@ -46,6 +53,12 @@ export class SSHService extends Service {
   }
 
   async stop(): Promise<void> {
+    // Kill all active interactive sessions
+    for (const [id, proc] of this.activeSessions) {
+      try { proc.kill('SIGTERM'); } catch { /* best-effort */ }
+      this.runtime.logger.info(`SSHService: killed session ${id}`);
+    }
+    this.activeSessions.clear();
     this.runtime.logger.info('SSHService stopped');
   }
 
@@ -112,6 +125,85 @@ export class SSHService extends Service {
     }
 
     return this.execOnTarget(target, command, timeoutMs);
+  }
+
+  /**
+   * Spawn a long-running interactive SSH session.
+   * Returns a handle with write() (stdin), kill(), and pid.
+   * Callbacks fire on stdout/stderr chunks and on process exit.
+   */
+  spawnInteractiveSession(
+    targetName: string,
+    command: string,
+    onStdout: (chunk: string) => void,
+    onStderr: (chunk: string) => void,
+    onExit: (code: number) => void,
+    timeoutMs: number = 600_000,
+  ): InteractiveSession | null {
+    const target = this.targets.get(targetName.toLowerCase());
+    if (!target) return null;
+
+    const args: string[] = [
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ConnectTimeout=10',
+      '-tt', // Force PTY allocation for interactive CLI
+    ];
+
+    if (target.keyPath) {
+      args.push('-i', target.keyPath);
+    }
+    if (target.port && target.port !== 22) {
+      args.push('-p', String(target.port));
+    }
+
+    args.push(`${target.user}@${target.host}`, command);
+
+    const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const sessionId = `${targetName}-${proc.pid || Date.now()}`;
+
+    this.activeSessions.set(sessionId, proc);
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      onStdout(data.toString());
+    });
+
+    proc.stderr?.on('data', (data: Buffer) => {
+      onStderr(data.toString());
+    });
+
+    proc.on('exit', (code) => {
+      this.activeSessions.delete(sessionId);
+      onExit(code ?? 1);
+    });
+
+    proc.on('error', (err) => {
+      this.runtime.logger.error(`SSH session ${sessionId} error: ${err.message}`);
+      this.activeSessions.delete(sessionId);
+      onExit(1);
+    });
+
+    // Timeout safety net
+    const timer = setTimeout(() => {
+      if (this.activeSessions.has(sessionId)) {
+        this.runtime.logger.warn(`SSH session ${sessionId} timed out after ${timeoutMs}ms`);
+        try { proc.kill('SIGTERM'); } catch { /* best-effort */ }
+      }
+    }, timeoutMs);
+
+    // Clear timeout when process exits naturally
+    proc.on('exit', () => clearTimeout(timer));
+
+    this.runtime.logger.info(`Spawned interactive session ${sessionId}: ssh ${target.user}@${target.host}`);
+
+    return {
+      pid: proc.pid || 0,
+      write: (data: string) => { proc.stdin?.write(data); },
+      kill: () => {
+        clearTimeout(timer);
+        try { proc.kill('SIGTERM'); } catch { /* best-effort */ }
+        this.activeSessions.delete(sessionId);
+      },
+    };
   }
 
   /** Execute on a specific target config */

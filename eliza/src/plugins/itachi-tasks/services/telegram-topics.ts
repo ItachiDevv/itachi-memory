@@ -227,7 +227,7 @@ export class TelegramTopicsService extends Service {
       });
 
       if (!result.ok) {
-        this.runtime.logger.error(`deleteTopic failed: ${result.description}`);
+        this.runtime.logger.error(`deleteTopic ${topicId} failed: ${result.description || 'unknown'} (code: ${(result as any).error_code || '?'})`);
       }
 
       return result.ok;

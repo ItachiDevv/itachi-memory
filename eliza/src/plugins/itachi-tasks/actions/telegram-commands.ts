@@ -234,7 +234,13 @@ async function handleCloseTopics(
     const topicId = (task as any).telegram_topic_id;
     // Telegram requires closing a topic before deleting it
     await topicsService.closeTopic(topicId);
-    const ok = await topicsService.deleteTopic(topicId);
+    await new Promise(r => setTimeout(r, 500)); // Let Telegram propagate
+    let ok = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      ok = await topicsService.deleteTopic(topicId);
+      if (ok) break;
+      await new Promise(r => setTimeout(r, attempt * 1000));
+    }
     if (ok) {
       deleted++;
       // Clear topic_id from task so it doesn't show up again

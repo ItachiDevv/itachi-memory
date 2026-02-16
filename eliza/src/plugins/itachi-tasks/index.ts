@@ -14,6 +14,8 @@ import { topicReplyAction } from './actions/topic-reply.js';
 import { reminderCommandsAction } from './actions/reminder-commands.js';
 import { remoteExecAction } from './actions/remote-exec.js';
 import { coolifyControlAction } from './actions/coolify-control.js';
+import { interactiveSessionAction } from './actions/interactive-session.js';
+import { githubDirectAction } from './actions/github-direct.js';
 import { topicInputRelayEvaluator } from './evaluators/topic-input-relay.js';
 import { activeTasksProvider } from './providers/active-tasks.js';
 import { reposProvider } from './providers/repos.js';
@@ -34,7 +36,7 @@ export { proactiveMonitorWorker, registerProactiveMonitorTask } from './workers/
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',
   description: 'Task queue management, orchestrator integration, and completion notifications',
-  actions: [spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction, reminderCommandsAction, remoteExecAction, coolifyControlAction],
+  actions: [interactiveSessionAction, githubDirectAction, spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction, reminderCommandsAction, remoteExecAction, coolifyControlAction],
   evaluators: [topicInputRelayEvaluator],
   providers: [commandSuppressorProvider, topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
   services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService],
@@ -52,6 +54,12 @@ export const itachiTasksPlugin: Plugin = {
     const botToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
     if (botToken) {
       const commands = [
+        { command: 'session', description: 'Start interactive CLI session — /session <target> <prompt>' },
+        { command: 'chat', description: 'Alias for /session — /chat <target> <prompt>' },
+        { command: 'gh', description: 'Query GitHub — /gh prs|issues|branches <repo>' },
+        { command: 'prs', description: 'List pull requests — /prs <repo>' },
+        { command: 'issues', description: 'List issues — /issues <repo>' },
+        { command: 'branches', description: 'List branches — /branches <repo>' },
         { command: 'task', description: 'Create a task — /task [@machine] <project> <description>' },
         { command: 'status', description: 'Show task queue status' },
         { command: 'cancel', description: 'Cancel a task — /cancel <id>' },

@@ -156,10 +156,18 @@ export const createTaskAction: Action = {
         }
 
         if (!parsed || parsed.length === 0) {
+          const words = text.split(/\s+/).length;
           if (callback) {
-            await callback({
-              text: "I couldn't figure out what task to create from that. Try: /task <project> <description>\nOr be specific: \"create a task for <project> to <description>\"",
-            });
+            if (words >= 8 && repoNames.length > 0) {
+              const truncated = text.length > 200 ? text.substring(0, text.lastIndexOf(' ', 200) || 200) + '...' : text;
+              await callback({
+                text: `I couldn't determine which project for this task.\n\nYour request: "${truncated}"\n\nAvailable projects: ${repoNames.join(', ')}\n\nTry: /task <project> <description>`,
+              });
+            } else {
+              await callback({
+                text: "I couldn't figure out what task to create from that. Try: /task <project> <description>\nOr be specific: \"create a task for <project> to <description>\"",
+              });
+            }
           }
           return { success: false, error: 'Could not parse task from message + context' };
         }
@@ -389,6 +397,7 @@ Rules:
 - description should be specific and actionable — summarize what needs to be done
 - If multiple tasks are implied, return multiple objects
 - If the conversation has enough context to determine a task, ALWAYS extract it — do not return [] just because the current message is short
+- If the user is asking a QUESTION (about PRs, status, builds, branches, "what", "show me", "how many", "any open", "check") rather than requesting WORK to be done, return [] — questions are not tasks
 - Only return [] if there is genuinely no task information anywhere in the conversation`,
       temperature: 0.1,
     });

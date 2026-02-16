@@ -124,23 +124,32 @@ export class TaskPollerService extends Service {
       if (task.status === 'completed') {
         msg = `${title} (${shortId}) completed!\n\n` +
           `Project: ${task.project}\n` +
-          `Description: ${task.description.substring(0, 100)}\n`;
-        if (task.result_summary) msg += `\nResult: ${task.result_summary}\n`;
+          `Description: ${truncateAtWord(task.description, 200)}\n`;
+        if (task.result_summary) msg += `\nResult: ${truncateAtWord(task.result_summary, 2000)}\n`;
         if (task.pr_url) msg += `\nPR: ${task.pr_url}\n`;
-        if (task.files_changed?.length > 0) msg += `\nFiles changed: ${task.files_changed.join(', ')}\n`;
+        if (task.files_changed?.length > 0) {
+          const files = task.files_changed.slice(0, 15);
+          const extra = task.files_changed.length > 15 ? `\n... and ${task.files_changed.length - 15} more` : '';
+          msg += `\nFiles changed: ${files.join(', ')}${extra}\n`;
+        }
       } else {
         msg = `${title} (${shortId}) ${task.status}!\n\n` +
           `Project: ${task.project}\n` +
-          `Description: ${task.description.substring(0, 100)}\n`;
-        if (task.error_message) msg += `\nError: ${task.error_message}\n`;
+          `Description: ${truncateAtWord(task.description, 200)}\n`;
+        if (task.error_message) msg += `\nError: ${truncateAtWord(task.error_message, 2000)}\n`;
       }
+
+      // Split long messages for Telegram's 4096 char limit
+      const msgChunks = splitMessage(msg, 4000);
 
       try {
         // Send Telegram notification via ElizaOS message routing
-        await this.runtime.sendMessageToTarget(
-          { source: 'telegram', channelId: String(task.telegram_chat_id) },
-          { text: msg },
-        );
+        for (const chunk of msgChunks) {
+          await this.runtime.sendMessageToTarget(
+            { source: 'telegram', channelId: String(task.telegram_chat_id) },
+            { text: chunk },
+          );
+        }
 
         // Mark as notified in DB
         await supabase
@@ -169,4 +178,29 @@ export class TaskPollerService extends Service {
       }
     }
   }
+}
+
+/** Truncate a string at the last word boundary before the limit. */
+function truncateAtWord(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const cut = s.lastIndexOf(' ', max);
+  return (cut > max * 0.5 ? s.substring(0, cut) : s.substring(0, max)) + '...';
+}
+
+/** Split a long message into chunks that fit within Telegram's limit. */
+function splitMessage(text: string, maxLen: number = 4000): string[] {
+  if (text.length <= maxLen) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      chunks.push(remaining);
+      break;
+    }
+    let splitAt = remaining.lastIndexOf('\n', maxLen);
+    if (splitAt < maxLen * 0.5) splitAt = maxLen;
+    chunks.push(remaining.substring(0, splitAt));
+    remaining = remaining.substring(splitAt);
+  }
+  return chunks;
 }

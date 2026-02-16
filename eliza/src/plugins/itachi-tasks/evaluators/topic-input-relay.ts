@@ -3,6 +3,7 @@ import { TaskService } from '../services/task-service.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
+import { activeSessions } from '../actions/interactive-session.js';
 
 /**
  * Evaluator that intercepts messages in Telegram forum topics linked to tasks.
@@ -47,6 +48,15 @@ export const topicInputRelayEvaluator: Evaluator = {
     if (text.startsWith('/')) return;
 
     try {
+      // Check if this topic belongs to an active interactive session first
+      const session = activeSessions.get(threadId);
+      if (session) {
+        session.handle.write(text + '\n');
+        (message.content as Record<string, unknown>)._topicRelayQueued = true;
+        runtime.logger.info(`[topic-relay] Piped input to session ${session.sessionId}: "${text.substring(0, 40)}"`);
+        return;
+      }
+
       const taskService = runtime.getService<TaskService>('itachi-tasks');
       if (!taskService) return;
 
