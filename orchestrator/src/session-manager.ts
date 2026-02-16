@@ -12,8 +12,16 @@ const PROMPT_DIR = path.join(os.tmpdir(), 'itachi-prompts');
 fs.mkdirSync(PROMPT_DIR, { recursive: true });
 
 /**
- * Fire-and-forget POST to ElizaOS stream endpoint.
- * Best-effort: logs failures but doesn't disrupt the session.
+ * Track whether a topic has been created for each task.
+ * The first stream event for a task must be awaited to ensure topic creation
+ * before subsequent fire-and-forget events are sent.
+ */
+const topicReady = new Map<string, Promise<void>>();
+
+/**
+ * POST to ElizaOS stream endpoint.
+ * The first call per task is awaited to ensure topic creation.
+ * Subsequent calls are fire-and-forget for performance.
  */
 export function streamToEliza(taskId: string, event: ElizaStreamEvent): void {
     const url = `${config.apiUrl}/api/tasks/${taskId}/stream`;
@@ -25,17 +33,72 @@ export function streamToEliza(taskId: string, event: ElizaStreamEvent): void {
         headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
-    fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(event),
-    }).then((res) => {
+    const doPost = async (): Promise<void> => {
+        // Wait for topic creation from the first stream event before sending more
+        const existing = topicReady.get(taskId);
+        if (existing) {
+            await existing;
+        }
+
+        const res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(event),
+        });
         if (!res.ok) {
             console.error(`[stream] POST ${url} failed: ${res.status} ${res.statusText}`);
         }
-    }).catch((err) => {
-        console.error(`[stream] POST ${url} error: ${err.message}`);
-    });
+    };
+
+    if (!topicReady.has(taskId)) {
+        // First stream event for this task — await it to ensure topic is created
+        const promise = doPost().catch((err) => {
+            console.error(`[stream] POST ${url} error: ${err.message}`);
+        });
+        topicReady.set(taskId, promise);
+    } else {
+        // Subsequent events — fire-and-forget (but still wait for topic creation)
+        doPost().catch((err) => {
+            console.error(`[stream] POST ${url} error: ${err.message}`);
+        });
+    }
+
+    // Clean up tracking on result events (task is done)
+    if (event.type === 'result') {
+        // Delay cleanup slightly so the result POST can complete
+        setTimeout(() => topicReady.delete(taskId), 5000);
+    }
+}
+
+/**
+ * Awaitable version of streamToEliza. Use for the initial stream event
+ * to guarantee the Telegram topic is created before continuing.
+ */
+export async function streamToElizaAsync(taskId: string, event: ElizaStreamEvent): Promise<void> {
+    const url = `${config.apiUrl}/api/tasks/${taskId}/stream`;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+
+    const apiKey = process.env.ITACHI_API_KEY;
+    if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(event),
+        });
+        if (!res.ok) {
+            console.error(`[stream] POST ${url} failed: ${res.status} ${res.statusText}`);
+        }
+        // Mark topic as ready so fire-and-forget calls don't need to wait
+        if (!topicReady.has(taskId)) {
+            topicReady.set(taskId, Promise.resolve());
+        }
+    } catch (err: unknown) {
+        console.error(`[stream] POST ${url} error: ${(err as Error).message}`);
+    }
 }
 
 function loadApiKeys(): Record<string, string> {

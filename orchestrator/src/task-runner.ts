@@ -1,7 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { config } from './config';
 import { claimNextTask, updateTask, recoverStuckTasks } from './supabase-client';
-import { spawnSession, resumeClaudeSession, checkClaudeAuth, checkEngineAuth, streamToEliza } from './session-manager';
+import { spawnSession, resumeClaudeSession, checkClaudeAuth, checkEngineAuth, streamToEliza, streamToElizaAsync } from './session-manager';
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';
@@ -55,6 +55,14 @@ async function runTask(task: Task): Promise<void> {
         status: 'running',
         workspace_path: workspacePath,
         started_at: new Date().toISOString(),
+    });
+
+    // Create Telegram topic proactively when task starts running.
+    // This ensures the topic exists before any output arrives, so the user
+    // can see and interact with the task immediately.
+    await streamToElizaAsync(task.id, {
+        type: 'text',
+        text: `🚀 Task started — setting up workspace and selecting engine...`,
     });
 
     // Try engines in priority order — use first one with valid auth
