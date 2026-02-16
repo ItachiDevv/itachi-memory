@@ -83,11 +83,11 @@ export const reminderCommandsAction: Action = {
       }
 
       if (text.startsWith('/schedule ')) {
-        return await handleSchedule(reminderService, message, text, callback);
+        return await handleSchedule(reminderService, runtime, message, text, callback);
       }
 
       if (text.startsWith('/remind ')) {
-        return await handleCreate(reminderService, message, text, callback);
+        return await handleCreate(reminderService, runtime, message, text, callback);
       }
 
       return { success: false, error: 'Unknown command' };
@@ -105,6 +105,7 @@ export const reminderCommandsAction: Action = {
 
 async function handleCreate(
   service: ReminderService,
+  runtime: IAgentRuntime,
   message: Memory,
   text: string,
   callback?: HandlerCallback
@@ -121,7 +122,7 @@ async function handleCreate(
     return { success: false, error: 'Could not parse time' };
   }
 
-  const { telegramChatId, telegramUserId } = extractTelegramIds(message);
+  const { telegramChatId, telegramUserId } = extractTelegramIds(message, runtime);
   if (!telegramChatId) {
     if (callback) await callback({ text: 'Could not determine chat ID. Are you using this from Telegram?' });
     return { success: false, error: 'No chat ID' };
@@ -148,6 +149,7 @@ async function handleCreate(
 
 async function handleSchedule(
   service: ReminderService,
+  runtime: IAgentRuntime,
   message: Memory,
   text: string,
   callback?: HandlerCallback
@@ -169,7 +171,7 @@ async function handleSchedule(
   // Parse the action from the "message" portion
   const { actionType, actionData, label } = parseActionFromMessage(parsed.message);
 
-  const { telegramChatId, telegramUserId } = extractTelegramIds(message);
+  const { telegramChatId, telegramUserId } = extractTelegramIds(message, runtime);
   if (!telegramChatId) {
     if (callback) await callback({ text: 'Could not determine chat ID.' });
     return { success: false, error: 'No chat ID' };
@@ -285,10 +287,11 @@ async function handleCancel(
 // Helpers
 // ============================================================
 
-function extractTelegramIds(message: Memory): { telegramChatId: number; telegramUserId: number } {
+function extractTelegramIds(message: Memory, runtime?: IAgentRuntime): { telegramChatId: number; telegramUserId: number } {
   const content = message.content as Record<string, unknown>;
   return {
-    telegramChatId: (content.telegram_chat_id as number) || 0,
+    telegramChatId: (content.telegram_chat_id as number)
+      || (runtime ? parseInt(String(runtime.getSetting('TELEGRAM_GROUP_CHAT_ID') || process.env.TELEGRAM_GROUP_CHAT_ID || '0'), 10) : 0),
     telegramUserId: (content.telegram_user_id as number) || 0,
   };
 }
