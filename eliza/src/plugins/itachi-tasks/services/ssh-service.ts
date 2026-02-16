@@ -58,7 +58,9 @@ export class SSHService extends Service {
    * Also loads the special COOLIFY_SSH_* vars for backward compat.
    */
   private loadTargets(): void {
-    const s = (key: string): string => String(this.runtime.getSetting(key) || '');
+    // Use process.env directly — getSetting only checks character secrets
+    // and SSH vars aren't in the character config
+    const s = (key: string): string => process.env[key] || '';
 
     // Load COOLIFY_SSH_* as the "coolify" target
     const coolifyHost = s('COOLIFY_SSH_HOST');
