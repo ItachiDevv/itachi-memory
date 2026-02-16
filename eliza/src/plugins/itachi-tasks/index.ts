@@ -29,6 +29,7 @@ export { MachineRegistryService } from './services/machine-registry.js';
 export { taskDispatcherWorker, registerTaskDispatcherTask } from './workers/task-dispatcher.js';
 export { githubRepoSyncWorker, registerGithubRepoSyncTask } from './workers/github-repo-sync.js';
 export { reminderPollerWorker, registerReminderPollerTask } from './workers/reminder-poller.js';
+export { proactiveMonitorWorker, registerProactiveMonitorTask } from './workers/proactive-monitor.js';
 
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',

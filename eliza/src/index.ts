@@ -1,7 +1,7 @@
 import type { Project, ProjectAgent, IAgentRuntime } from '@elizaos/core';
 import { character } from './character.js';
 import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
-import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask } from './plugins/itachi-tasks/index.js';
+import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask, proactiveMonitorWorker, registerProactiveMonitorTask } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
 import { itachiGeminiPlugin } from './plugins/plugin-gemini/index.js';
@@ -73,6 +73,7 @@ const agent: ProjectAgent = {
       { worker: taskDispatcherWorker, register: registerTaskDispatcherTask, name: 'task-dispatcher' },
       { worker: githubRepoSyncWorker, register: registerGithubRepoSyncTask, name: 'github-repo-sync' },
       { worker: reminderPollerWorker, register: registerReminderPollerTask, name: 'reminder-poller' },
+      { worker: proactiveMonitorWorker, register: registerProactiveMonitorTask, name: 'proactive-monitor' },
     ];
 
     for (const { worker, register, name } of allWorkers) {
