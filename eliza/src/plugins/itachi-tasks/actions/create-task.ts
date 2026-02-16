@@ -131,13 +131,19 @@ export const createTaskAction: Action = {
         const machineRegistry = runtime.getService<MachineRegistryService>('machine-registry');
         const knownMachines = machineRegistry ? (await machineRegistry.getAllMachines()).map(m => m.display_name || m.machine_id) : [];
 
+        // Strategy 0: Try to extract directly from the user's message if it mentions
+        // a known project name. This is the fastest path — no LLM needed.
+        let parsed = extractTaskFromUserMessage(text, repoNames);
+
         // Strategy 1: Try regex extraction from the bot's own previous messages.
         // This handles confirmations like "Yes, please do that" by finding the task
         // details in the bot's earlier offer (e.g. "CREATE_TASK: Project: X, Description: Y").
-        let parsed = extractTaskFromBotMessages(
-          Array.isArray(recentMessages) ? recentMessages : [],
-          repoNames
-        );
+        if (!parsed || parsed.length === 0) {
+          parsed = extractTaskFromBotMessages(
+            Array.isArray(recentMessages) ? recentMessages : [],
+            repoNames
+          );
+        }
 
         // Strategy 2: Fall back to LLM extraction if regex didn't find anything
         if (!parsed || parsed.length === 0) {
@@ -245,6 +251,35 @@ export const createTaskAction: Action = {
 };
 
 /**
+ * Strategy 0: Extract task directly from the user's own message.
+ * If the user mentions a known project name, use the full message as the description.
+ * E.g. "run a code audit on itachi-memory for dead code" → project: itachi-memory
+ */
+function extractTaskFromUserMessage(
+  text: string,
+  knownProjects: string[]
+): Array<{ project: string; description: string }> | null {
+  const lower = text.toLowerCase();
+  // Find the first known project mentioned in the message
+  for (const proj of knownProjects) {
+    const projLower = proj.toLowerCase();
+    // Must appear as a word boundary match (not substring of another word)
+    const pattern = new RegExp(`\\b${projLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (pattern.test(lower)) {
+      // Use the full message as the description, stripping common prefixes
+      let desc = text
+        .replace(/^(?:can you|could you|please|hey|yo|)\s*/i, '')
+        .replace(/\?\s*$/, '')
+        .trim();
+      if (desc.length < 10) continue; // too short to be meaningful
+      console.log(`[create-task] Strategy 0: matched project "${proj}" from user message`);
+      return [{ project: proj, description: desc }];
+    }
+  }
+  return null;
+}
+
+/**
  * Extract task details from the bot's own previous messages using regex.
  * This handles the common case where the LLM already identified the task
  * in its text response (e.g. "CREATE_TASK: Project: X, Description: Y")
@@ -312,6 +347,8 @@ async function parseNaturalLanguageTask(
       ? `\nKnown machines: ${knownMachines.join(', ')}\n- If the user mentions a specific machine (e.g. "on air", "on my mac", "@air"), set "machine" to the matching name\n- If no machine is mentioned, omit the "machine" field`
       : '';
 
+    console.log(`[create-task] LLM parse: text="${text.substring(0, 80)}", projects=${knownProjects.length}, context=${conversationContext.length}chars`);
+
     const result = await runtime.useModel(ModelType.TEXT, {
       prompt: `You are extracting coding task(s) from a conversation to queue them for execution.
 
@@ -349,12 +386,35 @@ Rules:
     });
 
     const raw = typeof result === 'string' ? result : String(result);
-    const parsed = JSON.parse(raw.trim());
-    if (!Array.isArray(parsed)) return null;
-    // Filter out empty entries
-    const valid = parsed.filter((t: { project?: string; description?: string }) => t.project && t.description);
+    console.log(`[create-task] LLM raw response: ${raw.substring(0, 200)}`);
+
+    // Robust JSON extraction: strip markdown fences, find JSON array
+    let jsonStr = raw.trim();
+    // Remove markdown code fences
+    jsonStr = jsonStr.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    // Try to find JSON array in the response
+    const arrayMatch = jsonStr.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+      jsonStr = arrayMatch[0];
+    }
+
+    const parsed = JSON.parse(jsonStr);
+    if (!Array.isArray(parsed)) {
+      console.log(`[create-task] LLM returned non-array: ${typeof parsed}`);
+      return null;
+    }
+    // Filter out empty entries and validate project names
+    const valid = parsed.filter((t: { project?: string; description?: string }) => {
+      if (!t.project || !t.description) return false;
+      // Case-insensitive project match
+      const match = knownProjects.find(p => p.toLowerCase() === t.project!.toLowerCase());
+      if (match) t.project = match; // normalize casing
+      return !!match;
+    });
+    console.log(`[create-task] Parsed ${valid.length} valid task(s) from LLM`);
     return valid.length > 0 ? valid : null;
-  } catch {
+  } catch (err) {
+    console.error(`[create-task] parseNaturalLanguageTask error:`, err);
     return null;
   }
 }
