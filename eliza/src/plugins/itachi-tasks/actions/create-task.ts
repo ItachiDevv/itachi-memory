@@ -52,9 +52,14 @@ export const createTaskAction: Action = {
     const text = stripBotMention(message.content?.text || '');
     // Always valid for explicit /task commands
     if (text.startsWith('/task ')) return true;
-    // For everything else, just check that the task service is available.
-    // The LLM decides whether CREATE_TASK is the right action based on
-    // conversation context — validate() should only check preconditions.
+    // Reject messages that GITHUB_DIRECT or other actions should handle
+    // (questions about PRs, issues, branches, status — not task requests)
+    const lower = text.toLowerCase();
+    const isGHQuery = /\b(pr|pull\s*request|branch|branches|issue|issues|merge|merged|ci|checks?)\b/.test(lower)
+      && /\b(what|show|list|check|any|open|how many|status|closed)\b/.test(lower);
+    if (isGHQuery) return false;
+    // Reject slash commands meant for other actions
+    if (/^\/(session|chat|gh|prs|branches|issues|recall|repos|machines|ssh|exec|deploy|logs|containers)\b/.test(text)) return false;
     const taskService = runtime.getService<TaskService>('itachi-tasks');
     return !!taskService;
   },
@@ -139,6 +144,18 @@ export const createTaskAction: Action = {
         // Strategy 0: Try to extract directly from the user's message if it mentions
         // a known project name. This is the fastest path — no LLM needed.
         let parsed = extractTaskFromUserMessage(text, repoNames);
+
+        // Strategy 0.5: Broad confirmation extraction.
+        // When user says "yes"/"do it"/etc., scan bot's recent messages for ANY
+        // known project mention and extract the task description from context.
+        // This catches natural-language offers the bot makes (not just structured ones).
+        if (!parsed || parsed.length === 0) {
+          parsed = extractTaskFromConfirmation(
+            text,
+            Array.isArray(recentMessages) ? recentMessages : [],
+            repoNames
+          );
+        }
 
         // Strategy 1: Try regex extraction from the bot's own previous messages.
         // This handles confirmations like "Yes, please do that" by finding the task
@@ -268,7 +285,8 @@ export const createTaskAction: Action = {
 
 /**
  * Strategy 0: Extract task directly from the user's own message.
- * If the user mentions a known project name, use the full message as the description.
+ * If the user mentions a known project name AND it looks like a task (not a question),
+ * use the full message as the description.
  * E.g. "run a code audit on itachi-memory for dead code" → project: itachi-memory
  */
 function extractTaskFromUserMessage(
@@ -276,6 +294,19 @@ function extractTaskFromUserMessage(
   knownProjects: string[]
 ): Array<{ project: string; description: string }> | null {
   const lower = text.toLowerCase();
+  const trimmed = text.trim();
+
+  // Skip pure questions — let GITHUB_DIRECT or REPLY handle them
+  // A "pure question" has question syntax but NO action verb
+  const hasQuestionSyntax = trimmed.endsWith('?')
+    || /^(what|who|where|when|why|how|is|are|was|were|does|did|has|have|had|any|show)\b/i.test(trimmed);
+  const hasActionVerb = /\b(fix|create|add|implement|build|refactor|update|remove|delete|optimize|audit|review|scaffold|deploy|migrate|test|write|rewrite|move|rename|clean|configure|set\s*up)\b/i.test(lower);
+
+  if (hasQuestionSyntax && !hasActionVerb) {
+    console.log(`[create-task] Strategy 0: skipping question without action verb`);
+    return null;
+  }
+
   // Find the first known project mentioned in the message
   for (const proj of knownProjects) {
     const projLower = proj.toLowerCase();
@@ -292,6 +323,122 @@ function extractTaskFromUserMessage(
       return [{ project: proj, description: desc }];
     }
   }
+  return null;
+}
+
+/**
+ * Strategy 0.5: Extract task from a confirmation message by broadly scanning
+ * the bot's recent messages for any known project name mention.
+ *
+ * This is the KEY fix for the confirmation flow. When the bot says something like
+ * "I can investigate the auth issue on itachi-memory. Want me to create a task?"
+ * and the user says "yes", this finds "itachi-memory" in the bot's message and
+ * extracts the surrounding context as the task description.
+ *
+ * Unlike Strategy 1 which needs specific regex patterns, this just needs a project name.
+ */
+function extractTaskFromConfirmation(
+  text: string,
+  recentMessages: any[],
+  knownProjects: string[],
+): Array<{ project: string; description: string }> | null {
+  // Only trigger on short confirmations
+  if (text.split(/\s+/).length > 12) return null;
+  const confirmPattern = /^(yes|yeah|yep|yea|sure|ok|okay|do it|go ahead|please|confirm|y|ya|yup|absolutely|definitely|go for it|that would be great|sounds good|let'?s do it|make it happen|approved|do that|create it|queue it)/i;
+  if (!confirmPattern.test(text.trim())) return null;
+
+  console.log(`[create-task] Strategy 0.5: detected confirmation "${text.substring(0, 30)}"`);
+
+  // Scan bot messages (most recent first) for project name mentions
+  for (let i = recentMessages.length - 1; i >= 0; i--) {
+    const m = recentMessages[i];
+    const role = (m.role || m.user || '').toLowerCase();
+    if (role === 'user' || role === 'human') continue;
+
+    const content = typeof m.content === 'string'
+      ? m.content
+      : (m.content?.text || m.text || '');
+    if (!content) continue;
+
+    for (const proj of knownProjects) {
+      const projPattern = new RegExp(`\\b${proj.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (!projPattern.test(content)) continue;
+
+      // Found a project mention in a bot message — extract task description
+      let description = '';
+
+      // Pattern A: "task for/on <project> to <description>"
+      const taskToMatch = content.match(new RegExp(
+        `task\\s+(?:for|on)\\s+${proj.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(?:to|that will|which will|—|:|-)\\s*(.+?)(?:\\.|\\?|!|$)`,
+        'im'
+      ));
+      if (taskToMatch) {
+        description = taskToMatch[1].trim();
+      }
+
+      // Pattern B: "<verb> the/this <thing> on/for/in <project>"
+      if (!description) {
+        const verbMatch = content.match(
+          /(?:investigate|fix|check|debug|look into|audit|review|implement|create|build|refactor|update|add|remove|optimize|scaffold|deploy|clean up|resolve|address)\s+(?:the\s+|this\s+|that\s+)?(.+?)(?:\s+(?:on|for|in)\s+)/im
+        );
+        if (verbMatch) {
+          description = verbMatch[0].replace(/\s+(?:on|for|in)\s+$/i, '').trim();
+        }
+      }
+
+      // Pattern C: "I can/could/will <action> ... <project>"
+      if (!description) {
+        const canMatch = content.match(
+          /I\s+(?:can|could|will|'ll)\s+(.+?)(?:\s+(?:on|for|in)\s+.*?)?(?:\.|Want|Should|Would|Shall|\?|$)/im
+        );
+        if (canMatch) {
+          description = canMatch[1]
+            .replace(new RegExp(`\\s*(?:on|for|in)\\s+${proj.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'), '')
+            .trim();
+        }
+      }
+
+      // Pattern D: Fallback — use the sentence containing the project name,
+      // stripped of conversational fluff
+      if (!description) {
+        const sentences = content.split(/[.!?]+/);
+        const relevantSentence = sentences.find((s: string) => projPattern.test(s));
+        if (relevantSentence) {
+          description = relevantSentence
+            .replace(/^(?:I can|I could|I'll|I will|Want me to|Would you like me to|Should I|Shall I|Let me|How about I)\s*/i, '')
+            .replace(/(?:do you want|want me to|should I|shall I)\s*.*$/i, '')
+            .replace(new RegExp(`\\s*(?:on|for|in)\\s+${proj.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'), '')
+            .trim();
+        }
+      }
+
+      // Pattern E: Last resort — scan for user messages that mention the project
+      // (the user's ORIGINAL question often IS the task description)
+      if (!description || description.length < 5) {
+        for (let j = recentMessages.length - 1; j >= 0; j--) {
+          const um = recentMessages[j];
+          const uRole = (um.role || um.user || '').toLowerCase();
+          if (uRole !== 'user' && uRole !== 'human') continue;
+          const uContent = typeof um.content === 'string' ? um.content : (um.content?.text || um.text || '');
+          if (uContent && projPattern.test(uContent) && uContent.length > 10) {
+            // The user's original message about this project — use it as the description
+            description = uContent
+              .replace(/^(?:can you|could you|please|hey|yo|)\s*/i, '')
+              .replace(/\?\s*$/, '')
+              .trim();
+            break;
+          }
+        }
+      }
+
+      if (description && description.length > 5) {
+        console.log(`[create-task] Strategy 0.5: extracted task for "${proj}": "${description.substring(0, 60)}"`);
+        return [{ project: proj, description }];
+      }
+    }
+  }
+
+  console.log(`[create-task] Strategy 0.5: no project found in bot messages`);
   return null;
 }
 
