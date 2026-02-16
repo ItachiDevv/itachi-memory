@@ -36,7 +36,7 @@ export const lessonExtractor: Evaluator = {
   ],
 
   validate: async (_runtime: IAgentRuntime, message: Memory, state?: State): Promise<boolean> => {
-    const text = message.content?.text?.toLowerCase() || '';
+    const text = String(message.content?.text || '').toLowerCase();
 
     // Run when a task completed/failed (check recent action results)
     const hasTaskResult = Array.isArray(state?.data?.actionResults) &&

@@ -50,6 +50,9 @@ export async function getTopicThreadId(
     if (room.channelId && room.channelId.includes('-')) {
       const lastDash = room.channelId.lastIndexOf('-');
       if (lastDash > 0) {
+        const chatPart = room.channelId.substring(0, lastDash);
+        // Validate prefix is a valid Telegram chat ID (negative for groups, positive for users)
+        if (!/^-?\d+$/.test(chatPart)) return null;
         const threadPart = room.channelId.substring(lastDash + 1);
         const parsed = parseInt(threadPart, 10);
         if (!isNaN(parsed) && parsed > 0) return parsed;

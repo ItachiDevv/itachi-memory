@@ -89,6 +89,10 @@ export const createTaskAction: Action = {
         const matchedRepo = repos.find((r) => r.name.toLowerCase() === project!.toLowerCase());
         if (matchedRepo) {
           project = matchedRepo.name; // Use canonical cased name
+        } else {
+          // Not a known project — treat entire string after /task as description
+          description = text.substring('/task '.length).replace(/^@\S+\s+/, '').trim();
+          project = undefined;
         }
 
         // Resolve machine if @machine was specified

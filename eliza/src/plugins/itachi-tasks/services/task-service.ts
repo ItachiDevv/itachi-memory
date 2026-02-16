@@ -98,7 +98,7 @@ export class TaskService extends Service {
   async createTask(params: CreateTaskParams): Promise<ItachiTask> {
     // Validate budget
     const maxAllowed = 10;
-    if (params.max_budget_usd && params.max_budget_usd > maxAllowed) {
+    if (params.max_budget_usd != null && (params.max_budget_usd > maxAllowed || !isFinite(params.max_budget_usd))) {
       throw new Error(`Budget $${params.max_budget_usd} exceeds max allowed $${maxAllowed}`);
     }
 
@@ -141,7 +141,7 @@ export class TaskService extends Service {
   }
 
   async getTaskByPrefix(prefix: string, userId?: number): Promise<ItachiTask | null> {
-    if (!prefix || prefix.length < 4) return null; // min 4 chars to avoid broad scans
+    if (!prefix || prefix.length < 4 || /[%_]/.test(prefix)) return null; // min 4 chars, reject SQL wildcards
 
     // UUID columns need text cast for prefix matching
     let query = this.supabase
