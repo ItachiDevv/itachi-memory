@@ -5,6 +5,9 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 /** In-memory store for user input waiting to be consumed by orchestrator */
 export const pendingInputs: Map<string, Array<{ text: string; timestamp: number }>> = new Map();
 
+/** Guards against concurrent topic creation for the same task */
+const topicCreationLocks: Map<string, Promise<number | null>> = new Map();
+
 // Clean up stale inputs older than 30 minutes
 setInterval(() => {
   const cutoff = Date.now() - 30 * 60 * 1000;
@@ -85,13 +88,29 @@ export const taskStreamRoutes: Route[] = [
 
         let topicId = task.telegram_topic_id;
         if (!topicId) {
-          // No topic created yet — create one now
-          const topicResult = await topicsService.createTopicForTask(task);
-          if (!topicResult) {
-            res.status(503).json({ error: 'Failed to create topic' });
-            return;
+          // Guard against concurrent topic creation for the same task
+          const existingLock = topicCreationLocks.get(id);
+          if (existingLock) {
+            topicId = await existingLock;
+            if (!topicId) {
+              res.status(503).json({ error: 'Failed to create topic (concurrent)' });
+              return;
+            }
+          } else {
+            // No topic created yet — create one now (with lock)
+            const createPromise = (async (): Promise<number | null> => {
+              const topicResult = await topicsService.createTopicForTask(task);
+              return topicResult?.topicId ?? null;
+            })();
+            topicCreationLocks.set(id, createPromise);
+            topicId = await createPromise;
+            // Clean up lock after a delay (re-fetch from DB on future requests)
+            setTimeout(() => topicCreationLocks.delete(id), 10000);
+            if (!topicId) {
+              res.status(503).json({ error: 'Failed to create topic' });
+              return;
+            }
           }
-          topicId = topicResult.topicId;
         }
 
         // Format chunk text based on event type

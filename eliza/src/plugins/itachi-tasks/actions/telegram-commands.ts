@@ -232,6 +232,8 @@ async function handleCloseTopics(
   let deleted = 0;
   for (const task of withTopics) {
     const topicId = (task as any).telegram_topic_id;
+    // Telegram requires closing a topic before deleting it
+    await topicsService.closeTopic(topicId);
     const ok = await topicsService.deleteTopic(topicId);
     if (ok) {
       deleted++;
