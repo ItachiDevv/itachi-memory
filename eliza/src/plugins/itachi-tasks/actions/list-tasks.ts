@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
+import { stripBotMention } from '../utils/telegram.js';
 
 export const listTasksAction: Action = {
   name: 'LIST_TASKS',
@@ -36,7 +37,7 @@ export const listTasksAction: Action = {
   ],
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text?.toLowerCase() || '';
+    const text = stripBotMention(message.content?.text?.toLowerCase() || '');
     return (
       text.includes('task') ||
       text.includes('queue') ||
@@ -64,7 +65,7 @@ export const listTasksAction: Action = {
         return { success: false, error: 'Task service not available' };
       }
 
-      const text = message.content?.text || '';
+      const text = stripBotMention(message.content?.text || '');
 
       // Check if asking about a specific task
       const statusMatch = text.match(/\/status\s+(\S+)/);

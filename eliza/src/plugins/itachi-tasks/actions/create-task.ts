@@ -2,6 +2,7 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import { TaskService, type CreateTaskParams, generateTaskTitle } from '../services/task-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
+import { stripBotMention } from '../utils/telegram.js';
 
 export const createTaskAction: Action = {
   name: 'CREATE_TASK',
@@ -48,7 +49,7 @@ export const createTaskAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text || '';
+    const text = stripBotMention(message.content?.text || '');
     // Always valid for explicit /task commands
     if (text.startsWith('/task ')) return true;
     // For everything else, just check that the task service is available.
@@ -71,7 +72,7 @@ export const createTaskAction: Action = {
         return { success: false, error: 'Task service not available' };
       }
 
-      const text = message.content?.text || '';
+      const text = stripBotMention(message.content?.text || '');
       let project: string | undefined;
       let description: string | undefined;
       let targetMachine: string | undefined;

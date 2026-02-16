@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
+import { stripBotMention } from '../utils/telegram.js';
 
 export const cancelTaskAction: Action = {
   name: 'CANCEL_TASK',
@@ -25,7 +26,7 @@ export const cancelTaskAction: Action = {
   ],
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text?.toLowerCase() || '';
+    const text = stripBotMention(message.content?.text?.toLowerCase() || '');
     return (
       text.includes('cancel') ||
       text.includes('abort') ||
@@ -52,7 +53,7 @@ export const cancelTaskAction: Action = {
         return { success: false, error: 'Task service not available' };
       }
 
-      const text = message.content?.text || '';
+      const text = stripBotMention(message.content?.text || '');
       const lowerText = text.toLowerCase();
       const telegramUserId = (message.content as Record<string, unknown>).telegram_user_id as number | undefined;
 

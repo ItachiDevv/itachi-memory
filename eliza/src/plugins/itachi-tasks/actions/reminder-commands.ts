@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { ReminderService, type ActionType } from '../services/reminder-service.js';
+import { stripBotMention } from '../utils/telegram.js';
 
 /**
  * Handles reminders and scheduled actions via Telegram.
@@ -52,7 +53,7 @@ export const reminderCommandsAction: Action = {
   ],
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text?.trim() || '';
+    const text = stripBotMention(message.content?.text?.trim() || '');
     return text.startsWith('/remind ') || text === '/reminders' ||
       text.startsWith('/unremind ') || text.startsWith('/schedule ');
   },
@@ -64,7 +65,7 @@ export const reminderCommandsAction: Action = {
     _options?: unknown,
     callback?: HandlerCallback
   ): Promise<ActionResult> => {
-    const text = message.content?.text?.trim() || '';
+    const text = stripBotMention(message.content?.text?.trim() || '');
 
     try {
       const reminderService = runtime.getService<ReminderService>('itachi-reminders');

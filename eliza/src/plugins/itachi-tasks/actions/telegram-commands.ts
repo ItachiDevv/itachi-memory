@@ -4,6 +4,7 @@ import { MachineRegistryService } from '../services/machine-registry.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { syncGitHubRepos } from '../services/github-sync.js';
+import { stripBotMention } from '../utils/telegram.js';
 
 /**
  * Handles /recall, /repos, and /machines Telegram commands.
@@ -45,11 +46,11 @@ export const telegramCommandsAction: Action = {
   ],
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text?.trim() || '';
+    const text = stripBotMention(message.content?.text?.trim() || '');
     return text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text === '/repos' || text === '/machines' ||
       text === '/sync-repos' || text === '/sync_repos' ||
-      text === '/close-done' || text === '/close_done' ||
+      text === '/close-done' || text === '/close_done' || text === '/close_finished' ||
       text === '/close-failed' || text === '/close_failed';
   },
 
@@ -60,7 +61,7 @@ export const telegramCommandsAction: Action = {
     _options?: unknown,
     callback?: HandlerCallback
   ): Promise<ActionResult> => {
-    const text = message.content?.text?.trim() || '';
+    const text = stripBotMention(message.content?.text?.trim() || '');
 
     try {
       // /feedback <taskId> <good|bad> <reason>
@@ -88,8 +89,8 @@ export const telegramCommandsAction: Action = {
         return await handleSyncRepos(runtime, callback);
       }
 
-      // /close-done or /close_done
-      if (text === '/close-done' || text === '/close_done') {
+      // /close-done or /close_done or /close_finished
+      if (text === '/close-done' || text === '/close_done' || text === '/close_finished') {
         return await handleCloseTopics(runtime, 'completed', callback);
       }
 

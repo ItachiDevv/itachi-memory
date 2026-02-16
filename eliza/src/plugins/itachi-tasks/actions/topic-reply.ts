@@ -42,11 +42,7 @@ export const topicReplyAction: Action = {
 
     // Skip messages that are explicit commands handled by other actions
     const text = (content.text as string)?.trim() || '';
-    if (text.startsWith('/task ') || text.startsWith('/cancel ') ||
-        text.startsWith('/status') || text.startsWith('/queue') ||
-        text.startsWith('/recall ') || text === '/repos' ||
-        text.startsWith('/remind') || text.startsWith('/unremind') ||
-        text.startsWith('/schedule') || text.startsWith('/close-')) {
+    if (/^\/[a-z_]/i.test(text)) {
       return false;
     }
 

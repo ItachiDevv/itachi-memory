@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { MachineRegistryService } from '../services/machine-registry.js';
+import { stripBotMention } from '../utils/telegram.js';
 
 export const remoteExecAction: Action = {
   name: 'REMOTE_EXEC',
@@ -27,7 +28,7 @@ export const remoteExecAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text || '';
+    const text = stripBotMention(message.content?.text || '');
     // Explicit slash commands
     if (text.startsWith('/exec ')) return true;
     if (text.startsWith('/pull ')) return true;
@@ -56,7 +57,7 @@ export const remoteExecAction: Action = {
         return { success: false, error: 'Machine registry service not available' };
       }
 
-      const text = message.content?.text || '';
+      const text = stripBotMention(message.content?.text || '');
       const apiKey = runtime.getSetting('ITACHI_API_KEY');
 
       // Parse: /exec @machine command  OR  /pull @machine  OR  /restart @machine

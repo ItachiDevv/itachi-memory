@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { SSHService } from '../services/ssh-service.js';
+import { stripBotMention } from '../utils/telegram.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -131,7 +132,7 @@ export const coolifyControlAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text || '';
+    const text = stripBotMention(message.content?.text || '');
     // Always match explicit slash commands
     if (/^\/(ssh|deploy|update|logs|containers|restart-bot|ssh-targets|ssh-test|ssh_test)\b/.test(text)) return true;
     // Match natural language about machines/servers
@@ -158,7 +159,7 @@ export const coolifyControlAction: Action = {
         return { success: false, error: 'SSH service not available' };
       }
 
-      const text = message.content?.text || '';
+      const text = stripBotMention(message.content?.text || '');
 
       // ── Slash commands (existing behavior) ──────────────────────
       if (text.startsWith('/')) {

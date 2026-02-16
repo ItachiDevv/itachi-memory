@@ -20,6 +20,7 @@ import { reposProvider } from './providers/repos.js';
 import { machineStatusProvider } from './providers/machine-status.js';
 import { topicContextProvider } from './providers/topic-context.js';
 import { sshCapabilitiesProvider } from './providers/ssh-capabilities.js';
+import { commandSuppressorProvider } from './providers/command-suppressor.js';
 import { taskStreamRoutes } from './routes/task-stream.js';
 import { machineRoutes } from './routes/machine-routes.js';
 
@@ -34,7 +35,7 @@ export const itachiTasksPlugin: Plugin = {
   description: 'Task queue management, orchestrator integration, and completion notifications',
   actions: [spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction, reminderCommandsAction, remoteExecAction, coolifyControlAction],
   evaluators: [topicInputRelayEvaluator],
-  providers: [topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
+  providers: [commandSuppressorProvider, topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
   services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService],
   // Routes registered in init() to bypass ElizaOS plugin-name prefix
   init: async (_, runtime) => {
