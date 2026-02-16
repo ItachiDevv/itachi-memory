@@ -347,7 +347,7 @@ export class MemoryService extends Service {
     const merged = {
       ...(existing?.metadata as Record<string, unknown> || {}),
       ...newMetadata,
-      times_reinforced: ((existing?.metadata as Record<string, unknown>)?.times_reinforced as number || 1) + 1,
+      times_reinforced: (Number((existing?.metadata as Record<string, unknown>)?.times_reinforced) || 1) + 1,
       last_reinforced: new Date().toISOString(),
     };
 

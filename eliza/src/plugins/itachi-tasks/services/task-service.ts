@@ -51,7 +51,7 @@ export interface RepoInfo {
 /** Generate a short human-readable title from a task description (e.g. "audit-branches-clean") */
 export function generateTaskTitle(description: string): string {
   const stopWords = new Set(['the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'is', 'it', 'that', 'this', 'with', 'all', 'from', 'by', 'at', 'be', 'as']);
-  const words = description
+  const words = String(description)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, '')
     .split(/\s+/)
@@ -246,7 +246,7 @@ export class TaskService extends Service {
     const { data, error } = await this.supabase.rpc('claim_next_task', rpcParams);
 
     if (error) throw new Error(error.message || JSON.stringify(error));
-    if (!data || data.length === 0) return null;
+    if (!data || !Array.isArray(data) || data.length === 0) return null;
     return data[0] as ItachiTask;
   }
 
