@@ -195,151 +195,72 @@ export function buildPrompt(task: Task, classification?: TaskClassification): st
 }
 
 /**
- * Check if Claude CLI subscription auth is valid.
- * Tries subscription auth first (preferred — uses Max plan, no API billing).
- * Falls back to checking for ANTHROPIC_API_KEY in env or ~/.itachi-api-keys.
- * The itachi wrapper loads keys from the api-keys file, so API key auth works
- * even when subscription auth is broken.
- */
-export function checkClaudeAuth(): { valid: boolean; error?: string } {
-    // 1. Try subscription auth (preferred — no API billing)
-    try {
-        const cleanEnv = { ...process.env };
-        delete cleanEnv.ANTHROPIC_API_KEY;
-        // Unset CLAUDECODE to avoid "nested session" error
-        delete cleanEnv.CLAUDECODE;
-
-        const output = execSync('claude auth status', {
-            encoding: 'utf8',
-            timeout: 10000,
-            env: cleanEnv,
-        }).trim();
-
-        const status = JSON.parse(output);
-
-        if (status.loggedIn) {
-            return { valid: true };
-        }
-    } catch {
-        // Subscription auth failed — fall through to API key check
-    }
-
-    // 2. Fall back to API key (works via itachi wrapper which loads ~/.itachi-api-keys)
-    if (process.env.ANTHROPIC_API_KEY) {
-        console.warn('[auth] Claude subscription auth failed, using ANTHROPIC_API_KEY from env (API billing)');
-        return { valid: true };
-    }
-    const apiKeys = loadApiKeys();
-    if (apiKeys.ANTHROPIC_API_KEY) {
-        console.warn('[auth] Claude subscription auth failed, using ANTHROPIC_API_KEY from api-keys file (API billing)');
-        return { valid: true };
-    }
-
-    // 3. Neither works
-    return {
-        valid: false,
-        error: 'Claude: no subscription auth and no ANTHROPIC_API_KEY. Run: claude auth login (or add ANTHROPIC_API_KEY to ~/.itachi-api-keys)',
-    };
-}
-
-/**
  * Check auth for any engine.
- * - Claude: runs `claude auth status`
- * - Codex: checks CLI binary + OPENAI_API_KEY env/api-keys file
- * - Gemini: checks CLI binary + tries `gemini auth status`, falls back to GEMINI_API_KEY
+ *
+ * Sessions use wrappers: itachi (claude), itachic (codex), itachig (gemini).
+ * The wrappers load API keys from ~/.itachi-api-keys before calling the CLI,
+ * so auth checks verify: (1) the wrapper exists, (2) either subscription auth
+ * works OR the relevant API key is available (env or api-keys file).
  */
 export function checkEngineAuth(engine: string): { valid: boolean; error?: string } {
-    if (engine === 'claude') {
-        return checkClaudeAuth();
-    }
-
-    if (engine === 'codex') {
-        return checkCodexAuth();
-    }
-
-    if (engine === 'gemini') {
-        return checkGeminiAuth();
-    }
-
-    // Unknown engine — just check CLI binary
-    try {
-        execSync(`${engine} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
-        return { valid: true };
-    } catch {
-        return { valid: false, error: `${engine} CLI not found` };
-    }
-}
-
-function checkCodexAuth(): { valid: boolean; error?: string } {
-    // 1. Check CLI binary exists
-    try {
-        execSync('codex --version', { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
-    } catch {
-        return {
-            valid: false,
-            error: 'Codex CLI not found. Install it: npm install -g @openai/codex',
-        };
-    }
-
-    // 2. Check OPENAI_API_KEY — from env, or from api-keys file
-    if (process.env.OPENAI_API_KEY) {
-        return { valid: true };
-    }
-    const apiKeys = loadApiKeys();
-    if (apiKeys.OPENAI_API_KEY) {
-        return { valid: true };
-    }
-
-    return {
-        valid: false,
-        error: 'Codex CLI found but no OPENAI_API_KEY in env or ~/.itachi-api-keys',
+    const wrapperMap: Record<string, { wrapper: string; apiKeyEnv: string; installHint: string }> = {
+        claude: { wrapper: 'itachi', apiKeyEnv: 'ANTHROPIC_API_KEY', installHint: 'claude CLI + itachi wrapper' },
+        codex:  { wrapper: 'itachic', apiKeyEnv: 'OPENAI_API_KEY', installHint: 'codex CLI + itachic wrapper' },
+        gemini: { wrapper: 'itachig', apiKeyEnv: 'GEMINI_API_KEY', installHint: 'gemini CLI + itachig wrapper' },
     };
-}
 
-function checkGeminiAuth(): { valid: boolean; error?: string } {
-    // 1. Check CLI binary exists
-    try {
-        execSync('gemini --version', { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
-    } catch {
-        return {
-            valid: false,
-            error: 'Gemini CLI not found. Install it: npm install -g @google/gemini-cli',
-        };
-    }
-
-    // 2. Try subscription auth first (preferred — Google AI Pro/Ultra, no API billing)
-    try {
-        const cleanEnv = { ...process.env };
-        delete cleanEnv.GEMINI_API_KEY;
-
-        const output = execSync('gemini auth status', {
-            encoding: 'utf8',
-            timeout: 10000,
-            stdio: 'pipe',
-            env: cleanEnv,
-        }).trim();
-        // If it doesn't throw and isn't a "not logged in" response, subscription auth is active
-        if (output && !output.toLowerCase().includes('not logged in') && !output.toLowerCase().includes('not authenticated')) {
+    const info = wrapperMap[engine];
+    if (!info) {
+        // Unknown engine — just check CLI binary
+        try {
+            execSync(`${engine} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
             return { valid: true };
+        } catch {
+            return { valid: false, error: `${engine} CLI not found` };
         }
-    } catch {
-        // Subscription auth failed — fall through to API key check
     }
 
-    // 3. Fall back to GEMINI_API_KEY (works via itachig wrapper which loads ~/.itachi-api-keys)
-    if (process.env.GEMINI_API_KEY) {
-        console.warn('[auth] Gemini subscription auth failed, using GEMINI_API_KEY from env (API billing)');
+    // 1. Check wrapper exists
+    try {
+        execSync(`${info.wrapper} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
+    } catch {
+        // Wrapper not found — try bare CLI as fallback check
+        try {
+            execSync(`${engine} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
+        } catch {
+            return { valid: false, error: `${engine}: neither ${info.wrapper} wrapper nor ${engine} CLI found. Install: ${info.installHint}` };
+        }
+    }
+
+    // 2. Check for subscription auth (Claude-specific — has `claude auth status`)
+    if (engine === 'claude') {
+        try {
+            const cleanEnv = { ...process.env };
+            delete cleanEnv.ANTHROPIC_API_KEY;
+            delete cleanEnv.CLAUDECODE;
+            const output = execSync('claude auth status', {
+                encoding: 'utf8', timeout: 10000, env: cleanEnv,
+            }).trim();
+            const status = JSON.parse(output);
+            if (status.loggedIn) return { valid: true };
+        } catch {
+            // Subscription auth failed — fall through to API key check
+        }
+    }
+
+    // 3. Check API key availability (env or ~/.itachi-api-keys)
+    //    The wrapper loads these at runtime, so if the key exists, auth will work.
+    if (process.env[info.apiKeyEnv]) {
         return { valid: true };
     }
     const apiKeys = loadApiKeys();
-    if (apiKeys.GEMINI_API_KEY) {
-        console.warn('[auth] Gemini subscription auth failed, using GEMINI_API_KEY from api-keys file (API billing)');
+    if (apiKeys[info.apiKeyEnv]) {
         return { valid: true };
     }
 
     return {
         valid: false,
-        error: 'Gemini: no subscription auth and no GEMINI_API_KEY. Run: gemini auth login (or add GEMINI_API_KEY to ~/.itachi-api-keys)',
+        error: `${engine}: no auth available. Need subscription login or ${info.apiKeyEnv} in env/~/.itachi-api-keys`,
     };
 }
 

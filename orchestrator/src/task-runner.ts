@@ -1,7 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { config } from './config';
 import { claimNextTask, updateTask, recoverStuckTasks } from './supabase-client';
-import { spawnSession, resumeClaudeSession, checkClaudeAuth, checkEngineAuth, streamToEliza, streamToElizaAsync } from './session-manager';
+import { spawnSession, resumeClaudeSession, checkEngineAuth, streamToEliza, streamToElizaAsync } from './session-manager';
 import { classifyTask } from './task-classifier';
 import { reportResult } from './result-reporter';
 import { setupWorkspace } from './workspace-manager';

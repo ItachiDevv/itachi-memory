@@ -6,7 +6,7 @@ import { execSync, spawn } from 'child_process';
 import * as os from 'os';
 import { config } from './config';
 import { startRunner, stopRunner, getActiveCount, getActiveTasks } from './task-runner';
-import { checkClaudeAuth, checkEngineAuth } from './session-manager';
+import { checkEngineAuth } from './session-manager';
 import { getSupabase, fetchMachineConfig } from './supabase-client';
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3001', 10);
