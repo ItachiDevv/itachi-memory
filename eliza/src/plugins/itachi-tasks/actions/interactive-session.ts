@@ -26,6 +26,26 @@ const DEFAULT_REPO_BASES: Record<string, string> = {
   coolify: '/tmp/repos',
 };
 
+// ── ANSI / terminal escape sequence stripping ───────────────────────
+/**
+ * Strip ANSI escape codes, cursor control sequences, and other terminal
+ * noise from CLI output so Telegram messages are clean and readable.
+ */
+function stripAnsi(text: string): string {
+  return text
+    // CSI sequences: ESC[ ... (letter) — covers colors, cursor moves, erase, DEC private modes, etc.
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    // OSC sequences: ESC] ... ST (BEL or ESC\)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    // Other ESC sequences (2-char): ESC + single char
+    .replace(/\x1b[^[\]()][^\x1b]?/g, '')
+    // Stray control chars (except newline, tab, carriage return)
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+    // Collapse excessive blank lines
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // ── Active interactive sessions ──────────────────────────────────────
 export interface ActiveSession {
   sessionId: string;
@@ -117,14 +137,17 @@ async function resolveRepoPath(
   const base = DEFAULT_REPO_BASES[target] || '~/repos';
   const candidatePath = `${base}/${matched.name}`;
 
-  // Check if repo exists on target
+  // Check if repo exists on target (case-insensitive directory lookup)
   try {
-    const check = await sshService.exec(target, `test -d ${candidatePath} && echo EXISTS || echo MISSING`, 5_000);
+    // Use find with -maxdepth 1 and -iname for case-insensitive match
+    const findCmd = `found=$(find ${base} -maxdepth 1 -iname '${matched.name.replace(/'/g, "'\\''")}' -type d 2>/dev/null | head -1) && [ -n "$found" ] && echo "$found" || echo MISSING`;
+    const check = await sshService.exec(target, findCmd, 5_000);
     const output = (check.stdout || '').trim();
 
-    if (output === 'EXISTS') {
-      logger.info(`[session] Repo ${matched.name} found at ${candidatePath} on ${target}`);
-      return { repoPath: candidatePath, project: matched.name };
+    if (output !== 'MISSING' && output !== '') {
+      // Use the actual directory name from disk (preserves real casing)
+      logger.info(`[session] Repo ${matched.name} found at ${output} on ${target}`);
+      return { repoPath: output, project: matched.name };
     }
 
     // Repo missing — try to clone if we have a URL
@@ -272,17 +295,21 @@ export const interactiveSessionAction: Action = {
       const handle = sshService.spawnInteractiveSession(
         target,
         sshCommand,
-        // onStdout — stream to topic + accumulate transcript
+        // onStdout — strip terminal noise, stream to topic + accumulate transcript
         (chunk: string) => {
-          sessionTranscript.push({ type: 'text', content: chunk, timestamp: Date.now() });
-          topicsService.receiveChunk(sessionId, topicId, chunk).catch((err) => {
+          const clean = stripAnsi(chunk);
+          if (!clean) return; // skip empty chunks after stripping
+          sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
+          topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
             runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
-        // onStderr — also stream to topic + accumulate transcript
+        // onStderr — strip terminal noise, stream to topic + accumulate transcript
         (chunk: string) => {
-          sessionTranscript.push({ type: 'text', content: `[stderr] ${chunk}`, timestamp: Date.now() });
-          topicsService.receiveChunk(sessionId, topicId, `[stderr] ${chunk}`).catch((err) => {
+          const clean = stripAnsi(chunk);
+          if (!clean) return;
+          sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
+          topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {
             runtime.logger.error(`[session] stderr stream error: ${err instanceof Error ? err.message : String(err)}`);
           });
         },

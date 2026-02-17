@@ -7,6 +7,19 @@ import { config } from './config';
 import type { Task, TaskClassification, ClaudeStreamEvent, CodexStreamEvent, ElizaStreamEvent } from './types';
 import { getBudgetForClassification } from './task-classifier';
 
+/**
+ * Strip ANSI escape codes and terminal control sequences from CLI output.
+ */
+function stripAnsi(text: string): string {
+    return text
+        .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+        .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+        .replace(/\x1b[^[\]()][^\x1b]?/g, '')
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
 /** Directory for temp prompt files (avoids shell quoting issues) */
 const PROMPT_DIR = path.join(os.tmpdir(), 'itachi-prompts');
 fs.mkdirSync(PROMPT_DIR, { recursive: true });
@@ -287,15 +300,14 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
         let resultText = '';
         const startTime = Date.now();
 
-        // Capture plain text stdout — no stream-json parsing needed
+        // Capture plain text stdout — strip ANSI escape codes before streaming
         if (proc.stdout) {
             proc.stdout.on('data', (data) => {
                 const chunk = data.toString();
                 resultText += chunk;
-                // Stream last meaningful chunk to ElizaOS
-                const trimmed = chunk.trim();
-                if (trimmed) {
-                    streamToEliza(task.id, { type: 'text', text: trimmed });
+                const clean = stripAnsi(chunk);
+                if (clean) {
+                    streamToEliza(task.id, { type: 'text', text: clean });
                 }
             });
         }
@@ -404,10 +416,10 @@ export function resumeClaudeSession(
             proc.stdout.on('data', (data) => {
                 const chunk = data.toString();
                 resultText += chunk;
-                // Stream resumed session output back to Telegram
-                const trimmed = chunk.trim();
-                if (trimmed) {
-                    streamToEliza(task.id, { type: 'text', text: trimmed });
+                // Stream resumed session output back to Telegram (strip ANSI)
+                const clean = stripAnsi(chunk);
+                if (clean) {
+                    streamToEliza(task.id, { type: 'text', text: clean });
                 }
             });
         }
@@ -628,14 +640,14 @@ export function spawnGeminiSession(task: Task, workspacePath: string, classifica
         let resultText = '';
         const startTime = Date.now();
 
-        // Gemini CLI outputs plain text (no JSON streaming)
+        // Gemini CLI outputs plain text (no JSON streaming) — strip ANSI
         if (proc.stdout) {
             proc.stdout.on('data', (data) => {
                 const chunk = data.toString();
                 resultText += chunk;
-                const trimmed = chunk.trim();
-                if (trimmed) {
-                    streamToEliza(task.id, { type: 'text', text: trimmed });
+                const clean = stripAnsi(chunk);
+                if (clean) {
+                    streamToEliza(task.id, { type: 'text', text: clean });
                 }
             });
         }
