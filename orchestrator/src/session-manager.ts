@@ -196,10 +196,13 @@ export function buildPrompt(task: Task, classification?: TaskClassification): st
 
 /**
  * Check if Claude CLI subscription auth is valid.
- * Runs `claude auth status` and inspects the result.
- * Returns { valid, error } — if invalid, error describes the issue.
+ * Tries subscription auth first (preferred — uses Max plan, no API billing).
+ * Falls back to checking for ANTHROPIC_API_KEY in env or ~/.itachi-api-keys.
+ * The itachi wrapper loads keys from the api-keys file, so API key auth works
+ * even when subscription auth is broken.
  */
 export function checkClaudeAuth(): { valid: boolean; error?: string } {
+    // 1. Try subscription auth (preferred — no API billing)
     try {
         const cleanEnv = { ...process.env };
         delete cleanEnv.ANTHROPIC_API_KEY;
@@ -214,28 +217,29 @@ export function checkClaudeAuth(): { valid: boolean; error?: string } {
 
         const status = JSON.parse(output);
 
-        if (!status.loggedIn) {
-            return {
-                valid: false,
-                error: 'Claude CLI is not logged in. Run: claude auth login (or claude setup-token for long-lived auth)',
-            };
+        if (status.loggedIn) {
+            return { valid: true };
         }
-
-        return { valid: true };
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // Detect OAuth token expiration from the error output
-        if (msg.includes('OAuth token has expired') || msg.includes('authentication_error')) {
-            return {
-                valid: false,
-                error: 'Claude subscription token expired. Run: claude setup-token (for long-lived auth) or claude auth login (to refresh)',
-            };
-        }
-        return {
-            valid: false,
-            error: `Claude auth check failed: ${msg.substring(0, 200)}`,
-        };
+    } catch {
+        // Subscription auth failed — fall through to API key check
     }
+
+    // 2. Fall back to API key (works via itachi wrapper which loads ~/.itachi-api-keys)
+    if (process.env.ANTHROPIC_API_KEY) {
+        console.warn('[auth] Claude subscription auth failed, using ANTHROPIC_API_KEY from env (API billing)');
+        return { valid: true };
+    }
+    const apiKeys = loadApiKeys();
+    if (apiKeys.ANTHROPIC_API_KEY) {
+        console.warn('[auth] Claude subscription auth failed, using ANTHROPIC_API_KEY from api-keys file (API billing)');
+        return { valid: true };
+    }
+
+    // 3. Neither works
+    return {
+        valid: false,
+        error: 'Claude: no subscription auth and no ANTHROPIC_API_KEY. Run: claude auth login (or add ANTHROPIC_API_KEY to ~/.itachi-api-keys)',
+    };
 }
 
 /**
