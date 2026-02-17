@@ -1,6 +1,49 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
 
+/**
+ * Extract project + description from LLM response text.
+ * Looks for explicit `/session <project> [machine] <description>` commands first,
+ * then falls back to matching any known repo name mentioned in the text.
+ */
+function extractFromLLMResponse(
+  responseText: string,
+  repoNames: string[]
+): { project: string; description: string } | null {
+  // 1. Try explicit /session command: /session <project> [machine] <description>
+  const sessionMatch = responseText.match(
+    /\/session\s+(\S+)\s+(?:\S+-(?:pc|mac|server|vps)\s+)?(.+)/i
+  );
+  if (sessionMatch) {
+    const [, rawProject, desc] = sessionMatch;
+    // Validate project against known repos (case-insensitive)
+    const matched = repoNames.find(
+      (r) => r.toLowerCase() === rawProject.toLowerCase()
+    );
+    if (matched) {
+      return { project: matched, description: desc.trim() };
+    }
+    // Even if project doesn't match a known repo, use it — the user/LLM knows best
+    return { project: rawProject, description: desc.trim() };
+  }
+
+  // 2. Find any known repo name mentioned in the response
+  const lower = responseText.toLowerCase();
+  for (const repo of repoNames) {
+    if (lower.includes(repo.toLowerCase())) {
+      // Use the full response as description (minus the repo name prefix if present)
+      let description = responseText;
+      const idx = lower.indexOf(repo.toLowerCase());
+      if (idx === 0) {
+        description = responseText.substring(repo.length).trim();
+      }
+      return { project: repo, description: description || responseText };
+    }
+  }
+
+  return null;
+}
+
 export const spawnSessionAction: Action = {
   name: 'SPAWN_CLAUDE_SESSION',
   description: 'Create a coding task that will be picked up by the local orchestrator and executed via Claude Code CLI',
@@ -44,15 +87,19 @@ export const spawnSessionAction: Action = {
     message: Memory,
     state?: State,
     _options?: unknown,
-    callback?: HandlerCallback
+    callback?: HandlerCallback,
+    responses?: Memory[]
   ): Promise<ActionResult> => {
     try {
       const taskService = runtime.getService<TaskService>('itachi-tasks');
       if (!taskService) {
+        if (callback) {
+          await callback({ text: 'Task service is not available. Cannot create session.' });
+        }
         return { success: false, error: 'Task service not available' };
       }
 
-      const text = message.content?.text || '';
+      const userText = message.content?.text || '';
 
       // Check allowed users
       const allowedStr = String(runtime.getSetting('ITACHI_ALLOWED_USERS') || '');
@@ -74,20 +121,59 @@ export const spawnSessionAction: Action = {
       }
 
       // Get available repos for project matching
-      const repoNames = await taskService.getMergedRepoNames();
+      let repoNames: string[];
+      try {
+        repoNames = await taskService.getMergedRepoNames();
+      } catch (repoErr) {
+        const repoMsg = repoErr instanceof Error ? repoErr.message : String(repoErr);
+        runtime.logger.error(`[SPAWN_CLAUDE_SESSION] Failed to fetch repo names: ${repoMsg}`);
+        if (callback) {
+          await callback({ text: `Failed to fetch available projects: ${repoMsg}` });
+        }
+        return { success: false, error: `getMergedRepoNames failed: ${repoMsg}` };
+      }
 
-      // Try to extract project from the message
+      // --- Extract project + description ---
+      // Priority 1: Parse from LLM response text (has refined instructions)
       let project: string | null = null;
-      const lowerText = text.toLowerCase();
-      for (const repo of repoNames) {
-        if (lowerText.includes(repo.toLowerCase())) {
-          project = repo;
-          break;
+      let description: string = userText;
+
+      if (responses && responses.length > 0) {
+        // Collect all LLM response text
+        const llmText = responses
+          .map((r) => r.content?.text || '')
+          .filter(Boolean)
+          .join('\n');
+
+        if (llmText) {
+          const extracted = extractFromLLMResponse(llmText, repoNames);
+          if (extracted) {
+            project = extracted.project;
+            description = extracted.description;
+            runtime.logger.info(
+              `[SPAWN_CLAUDE_SESSION] Extracted from LLM response — project: ${project}, description: ${description.substring(0, 80)}`
+            );
+          }
         }
       }
 
+      // Priority 2: Fall back to user message text
       if (!project) {
-        // Ask the LLM to extract the project or ask user
+        const lowerText = userText.toLowerCase();
+        for (const repo of repoNames) {
+          if (lowerText.includes(repo.toLowerCase())) {
+            project = repo;
+            // Clean up description (remove project name from beginning if present)
+            if (lowerText.startsWith(repo.toLowerCase())) {
+              description = userText.substring(repo.length).trim();
+            }
+            break;
+          }
+        }
+      }
+
+      // Priority 3: Ask user if neither works
+      if (!project) {
         if (repoNames.length > 0 && callback) {
           await callback({
             text: `Which project should I use?\n\nAvailable repos: ${repoNames.join(', ')}`,
@@ -100,12 +186,6 @@ export const spawnSessionAction: Action = {
         }
         // Default to first repo or 'default'
         project = repoNames[0] || 'default';
-      }
-
-      // Clean up description (remove project name from beginning if present)
-      let description = text;
-      if (project && lowerText.startsWith(project.toLowerCase())) {
-        description = text.substring(project.length).trim();
       }
 
       const task = await taskService.createTask({
@@ -124,6 +204,10 @@ export const spawnSessionAction: Action = {
         });
       }
 
+      runtime.logger.info(
+        `[SPAWN_CLAUDE_SESSION] Task created: ${shortId} | project=${project} | desc=${description.substring(0, 80)}`
+      );
+
       return {
         success: true,
         data: {
@@ -136,6 +220,10 @@ export const spawnSessionAction: Action = {
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      runtime.logger.error(`[SPAWN_CLAUDE_SESSION] Unhandled error: ${msg}`);
+      if (callback) {
+        await callback({ text: `Failed to create task: ${msg}` });
+      }
       return { success: false, error: msg };
     }
   },
