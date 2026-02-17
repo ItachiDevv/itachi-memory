@@ -162,12 +162,12 @@ export class TaskPollerService extends Service {
           .update({ notified_at: new Date().toISOString() })
           .eq('id', task.id);
 
-        // Close & rename the Telegram topic with descriptive name
+        // Rename the Telegram topic to show status (keep open for follow-up interaction)
         if (task.telegram_topic_id) {
           const topicsService = this.runtime.getService('telegram-topics') as TelegramTopicsService | null;
           if (topicsService) {
             const statusLabel = task.status === 'completed' ? '✅ DONE' : '❌ FAILED';
-            await topicsService.closeTopic(task.telegram_topic_id, `${statusLabel} | ${title} | ${task.project}`);
+            await topicsService.renameTopic(task.telegram_topic_id, `${statusLabel} | ${title} | ${task.project}`);
           }
         }
 

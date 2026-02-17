@@ -98,7 +98,8 @@ export const taskStreamRoutes: Route[] = [
 
         let topicId = task.telegram_topic_id;
         if (!topicId) {
-          // Guard against concurrent topic creation for the same task
+          // Topic should have been created at task creation time.
+          // Fallback: create now if somehow missing (with concurrency guard).
           const existingLock = topicCreationLocks.get(id);
           if (existingLock) {
             topicId = await existingLock;
@@ -107,14 +108,12 @@ export const taskStreamRoutes: Route[] = [
               return;
             }
           } else {
-            // No topic created yet — create one now (with lock)
             const createPromise = (async (): Promise<number | null> => {
               const topicResult = await topicsService.createTopicForTask(task);
               return topicResult?.topicId ?? null;
             })();
             topicCreationLocks.set(id, createPromise);
             topicId = await createPromise;
-            // Clean up lock after a delay (re-fetch from DB on future requests)
             setTimeout(() => topicCreationLocks.delete(id), 10000);
             if (!topicId) {
               res.status(503).json({ error: 'Failed to create topic' });
@@ -169,10 +168,10 @@ export const taskStreamRoutes: Route[] = [
         // Final flush on result events
         if (eventType === 'result') {
           await topicsService.finalFlush(id);
-          // Close the topic
+          // Rename topic to show status but keep it open for follow-up interaction
           const title = generateTaskTitle(task.description);
           const statusLabel = resultData?.is_error ? '❌ FAILED' : '✅ DONE';
-          await topicsService.closeTopic(topicId, `${statusLabel} | ${title} | ${task.project}`);
+          await topicsService.renameTopic(topicId, `${statusLabel} | ${title} | ${task.project}`);
 
           // Analyze transcript (fire-and-forget)
           const transcript = taskTranscripts.get(id);

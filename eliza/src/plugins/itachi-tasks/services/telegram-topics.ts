@@ -215,6 +215,31 @@ export class TelegramTopicsService extends Service {
   }
 
   /**
+   * Rename a topic without closing it. Used to update status label
+   * (e.g. "DONE | title | project") while keeping the topic open for follow-ups.
+   */
+  async renameTopic(topicId: number, newName: string): Promise<boolean> {
+    if (!this.isEnabled() || !topicId) return false;
+
+    try {
+      const result = await this.apiCall('editForumTopic', {
+        chat_id: this.groupChatId,
+        message_thread_id: topicId,
+        name: newName.substring(0, 128),
+      });
+
+      if (!result.ok) {
+        this.runtime.logger.error(`renameTopic failed: ${result.description}`);
+      }
+
+      return result.ok;
+    } catch (error) {
+      this.runtime.logger.error('renameTopic error:', error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
+  /**
    * Delete a topic entirely (removes it from the forum).
    */
   async deleteTopic(topicId: number): Promise<boolean> {

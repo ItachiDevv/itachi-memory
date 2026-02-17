@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService, type CreateTaskParams, generateTaskTitle } from '../services/task-service.js';
+import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { stripBotMention } from '../utils/telegram.js';
@@ -215,6 +216,15 @@ export const createTaskAction: Action = {
               telegram_user_id: telegramUserId,
               assigned_machine: targetMachine,
             });
+
+            // Create Telegram topic immediately
+            const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+            if (topicsService) {
+              topicsService.createTopicForTask(created).catch((err) => {
+                runtime.logger.error(`[create-task] Failed to create topic for ${created.id.substring(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+              });
+            }
+
             results.push({ id: created.id.substring(0, 8), title: generateTaskTitle(task.description), project: task.project, description: task.description });
           }
 
@@ -265,6 +275,14 @@ export const createTaskAction: Action = {
       const shortId = task.id.substring(0, 8);
       const title = generateTaskTitle(description);
       const machineLabel = targetMachine || 'auto-dispatch';
+
+      // Create Telegram topic immediately so user can see updates from the start
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      if (topicsService) {
+        topicsService.createTopicForTask(task).catch((err) => {
+          runtime.logger.error(`[create-task] Failed to create topic for ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
 
       if (callback) {
         await callback({

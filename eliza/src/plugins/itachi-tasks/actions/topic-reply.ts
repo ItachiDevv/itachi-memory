@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService, type ItachiTask, type CreateTaskParams } from '../services/task-service.js';
+import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 
@@ -146,11 +147,20 @@ export const topicReplyAction: Action = {
               telegram_user_id: telegramUserId,
               repo_url: task.repo_url,
               branch: task.branch,
+              assigned_machine: task.assigned_machine,
             };
 
             const newTask = await taskService.createTask(params);
             const newShortId = newTask.id.substring(0, 8);
             const queuedCount = await taskService.getQueuedCount();
+
+            // Create Telegram topic for the follow-up task
+            const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+            if (topicsService) {
+              topicsService.createTopicForTask(newTask).catch((err) => {
+                runtime.logger.error(`[topic-reply] Failed to create topic for follow-up ${newShortId}: ${err instanceof Error ? err.message : String(err)}`);
+              });
+            }
 
             if (callback) {
               await callback({
