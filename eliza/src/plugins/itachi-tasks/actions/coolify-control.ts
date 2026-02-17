@@ -134,7 +134,7 @@ export const coolifyControlAction: Action = {
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text || '');
     // Always match explicit slash commands
-    if (/^\/(ssh|deploy|update|logs|containers|restart-bot|ssh-targets|ssh-test|ssh_test)\b/.test(text)) return true;
+    if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test)\b/.test(text)) return true;
     // Match natural language about machines/servers
     const lower = text.toLowerCase();
     const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias => lower.includes(alias));

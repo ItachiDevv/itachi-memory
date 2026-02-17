@@ -1,6 +1,7 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { SSHService, type InteractiveSession } from '../services/ssh-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
+import { TaskService } from '../services/task-service.js';
 import { stripBotMention } from '../utils/telegram.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 
@@ -16,6 +17,13 @@ const DEFAULT_REPO_PATHS: Record<string, string> = {
   mac: '~/itachi/itachi-memory',
   windows: '~/Documents/Crypto/skills-plugins/itachi-memory',
   coolify: '/app',
+};
+
+// ── Base directories where repos are typically cloned per machine ────
+const DEFAULT_REPO_BASES: Record<string, string> = {
+  mac: '~/itachi',
+  windows: '~/Documents/Crypto/skills-plugins',
+  coolify: '/tmp/repos',
 };
 
 // ── Active interactive sessions ──────────────────────────────────────
@@ -64,6 +72,87 @@ function extractPrompt(text: string, target: string): string {
     .replace(/^(?:work on|fix|implement|build|code|debug)\s*/i, (m) => m) // keep task verbs
     .trim();
   return prompt || 'Start an interactive development session';
+}
+
+/**
+ * Resolve the best repo path on the target machine for the given prompt.
+ * Matches project names from the registry against the prompt text,
+ * checks if the repo exists on the target via SSH, and clones if needed.
+ */
+async function resolveRepoPath(
+  target: string,
+  prompt: string,
+  sshService: SSHService,
+  taskService: TaskService,
+  topicId: number,
+  topicsService: TelegramTopicsService,
+  logger: IAgentRuntime['logger'],
+): Promise<{ repoPath: string; project: string }> {
+  const fallback = DEFAULT_REPO_PATHS[target] || '~';
+  const fallbackProject = fallback.split('/').pop() || 'unknown';
+
+  let repos;
+  try {
+    repos = await taskService.getMergedRepos();
+  } catch (err) {
+    logger.warn(`[session] Failed to fetch repos: ${err instanceof Error ? err.message : String(err)}`);
+    return { repoPath: fallback, project: fallbackProject };
+  }
+
+  if (repos.length === 0) {
+    return { repoPath: fallback, project: fallbackProject };
+  }
+
+  // Match project name in prompt (case-insensitive word boundary)
+  const promptLower = prompt.toLowerCase();
+  const matched = repos.find((r) => {
+    const pattern = new RegExp(`\\b${r.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    return pattern.test(promptLower);
+  });
+
+  if (!matched) {
+    return { repoPath: fallback, project: fallbackProject };
+  }
+
+  const base = DEFAULT_REPO_BASES[target] || '~/repos';
+  const candidatePath = `${base}/${matched.name}`;
+
+  // Check if repo exists on target
+  try {
+    const check = await sshService.exec(target, `test -d ${candidatePath} && echo EXISTS || echo MISSING`, 5_000);
+    const output = (check.stdout || '').trim();
+
+    if (output === 'EXISTS') {
+      logger.info(`[session] Repo ${matched.name} found at ${candidatePath} on ${target}`);
+      return { repoPath: candidatePath, project: matched.name };
+    }
+
+    // Repo missing — try to clone if we have a URL
+    if (matched.repo_url) {
+      await topicsService.sendToTopic(topicId, `Cloning ${matched.name} on ${target}...`);
+      logger.info(`[session] Cloning ${matched.repo_url} → ${candidatePath} on ${target}`);
+
+      const clone = await sshService.exec(
+        target,
+        `git clone ${matched.repo_url} ${candidatePath} 2>&1`,
+        120_000,
+      );
+
+      if (clone.success) {
+        await topicsService.sendToTopic(topicId, `Cloned ${matched.name} successfully.`);
+        return { repoPath: candidatePath, project: matched.name };
+      }
+
+      logger.warn(`[session] Clone failed: ${clone.stderr || clone.stdout}`);
+      await topicsService.sendToTopic(topicId, `Clone failed, falling back to default repo path.`);
+    } else {
+      logger.info(`[session] Repo ${matched.name} not found on ${target} and no clone URL available`);
+    }
+  } catch (err) {
+    logger.warn(`[session] SSH check failed for ${candidatePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return { repoPath: fallback, project: fallbackProject };
 }
 
 /**
@@ -144,13 +233,8 @@ export const interactiveSessionAction: Action = {
 
       const prompt = extractPrompt(text, target);
       const title = sessionTitle(prompt);
-      const repoPath = DEFAULT_REPO_PATHS[target] || '~';
 
-      // Escape single quotes in prompt for shell
-      const escapedPrompt = prompt.replace(/'/g, "'\\''");
-      const sshCommand = `cd ${repoPath} && itachi --ds '${escapedPrompt}'`;
-
-      // Create Telegram topic for this session
+      // Create Telegram topic for this session (before repo resolution so we can send status)
       const topicName = `Session: ${title} | ${target}`;
       // Use the raw API to create topic (not createTopicForTask which requires an ItachiTask)
       const topicResult = await (topicsService as any).apiCall('createForumTopic', {
@@ -165,14 +249,21 @@ export const interactiveSessionAction: Action = {
 
       const topicId = topicResult.result.message_thread_id;
 
+      // Resolve repo path — may SSH to check/clone
+      const taskService = runtime.getService<TaskService>('itachi-tasks') as TaskService | undefined;
+      const { repoPath, project: resolvedProject } = taskService
+        ? await resolveRepoPath(target, prompt, sshService, taskService, topicId, topicsService, runtime.logger)
+        : { repoPath: DEFAULT_REPO_PATHS[target] || '~', project: (DEFAULT_REPO_PATHS[target] || '~').split('/').pop() || 'unknown' };
+
+      // Escape single quotes in prompt for shell
+      const escapedPrompt = prompt.replace(/'/g, "'\\''");
+      const sshCommand = `cd ${repoPath} && itachi --ds '${escapedPrompt}'`;
+
       // Send initial message to topic
-      await topicsService.sendToTopic(topicId, `Interactive session on ${target}\nPrompt: ${prompt}\nCommand: ${sshCommand}\n\nStarting...`);
+      await topicsService.sendToTopic(topicId, `Interactive session on ${target}\nProject: ${resolvedProject}\nPrompt: ${prompt}\nCommand: ${sshCommand}\n\nStarting...`);
 
       // Generate a session ID
       const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-
-      // Infer project name from repo path
-      const inferredProject = repoPath.split('/').pop() || 'unknown';
 
       // Transcript buffer for this session — populated before handle is stored
       const sessionTranscript: TranscriptEntry[] = [];
@@ -237,7 +328,7 @@ export const interactiveSessionAction: Action = {
         handle,
         startedAt: Date.now(),
         transcript: sessionTranscript,
-        project: inferredProject,
+        project: resolvedProject,
       });
 
       if (callback) {

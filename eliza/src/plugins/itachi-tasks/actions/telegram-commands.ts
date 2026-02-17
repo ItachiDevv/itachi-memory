@@ -47,7 +47,7 @@ export const telegramCommandsAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
-    return text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
+    return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text === '/repos' || text === '/machines' ||
       text === '/sync-repos' || text === '/sync_repos' ||
       text === '/close-done' || text === '/close_done' || text === '/close_finished' ||
@@ -64,6 +64,11 @@ export const telegramCommandsAction: Action = {
     const text = stripBotMention(message.content?.text?.trim() || '');
 
     try {
+      // /help
+      if (text === '/help') {
+        return await handleHelp(callback);
+      }
+
       // /feedback <taskId> <good|bad> <reason>
       if (text === '/feedback' || text.startsWith('/feedback ')) {
         return await handleFeedback(runtime, text, callback);
@@ -306,4 +311,54 @@ async function handleFeedback(
 
   if (callback) await callback({ text: `${isGood ? '👍' : '👎'} Feedback recorded for task ${shortId}. This will inform future similar tasks.` });
   return { success: true, data: { taskId: task.id, sentiment, reason } };
+}
+
+async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
+  const help = `**Tasks & Projects**
+  /task [@machine] <project> <description> — Create a coding task
+  /status — Show task queue & recent completions
+  /cancel <id> — Cancel a queued or running task
+  /feedback <id> <good|bad> <reason> — Rate a completed task
+
+**Sessions & SSH**
+  /session <target> <prompt> — Start interactive CLI session (alias: /chat)
+  /ssh <target> <command> — Run a one-off SSH command
+  /exec @machine <command> — Run command on orchestrator machine
+  /pull @machine — Git pull & rebuild on machine
+  /restart @machine — Restart orchestrator on machine
+
+**Server & Deployment**
+  /deploy — Redeploy bot container
+  /update — Pull latest code & rebuild bot
+  /logs [lines] — View container logs
+  /containers — List running containers
+  /restart-bot — Restart bot container
+  /ssh-targets — List available SSH targets
+  /ssh-test — Test SSH connectivity
+
+**GitHub**
+  /gh <repo> — Show repo summary
+  /prs <repo> — List pull requests
+  /issues <repo> — List issues
+  /branches <repo> — List branches
+
+**Memory & Knowledge**
+  /recall [project:]<query> — Search memories & learnings
+  /repos — List registered repositories
+  /machines — Show orchestrator machines
+  /sync-repos — Sync GitHub repos into registry
+
+**Reminders**
+  /remind <time> <message> — Set a reminder
+  /schedule <freq> <time> <action> — Schedule recurring action
+  /reminders — List upcoming reminders
+  /unremind <id> — Cancel a reminder
+
+**Housekeeping**
+  /close-done — Delete completed task topics
+  /close-failed — Delete failed task topics
+  /help — Show this message`;
+
+  if (callback) await callback({ text: help });
+  return { success: true };
 }

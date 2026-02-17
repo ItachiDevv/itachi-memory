@@ -85,6 +85,7 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'ssh_targets', description: 'List SSH targets' },
         { command: 'ssh_test', description: 'Test SSH connectivity to all targets' },
         { command: 'feedback', description: 'Rate a task — /feedback <id> <good|bad> <reason>' },
+        { command: 'help', description: 'Show all available commands' },
       ];
       try {
         await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
