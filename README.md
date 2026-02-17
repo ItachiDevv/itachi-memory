@@ -1,6 +1,6 @@
 # Itachi Memory System
 
-AI-powered project manager with persistent memory, task orchestration, and multi-machine dispatch. Built on ElizaOS with 5 custom plugins, managed via Telegram.
+Self-learning AI project manager with persistent memory, task orchestration, multi-machine dispatch, and a Recursive Learning Model (RLM) that improves decisions over time. Built on ElizaOS with 6 custom plugins, managed via Telegram.
 
 ## Architecture
 
@@ -20,11 +20,12 @@ ElizaOS Agent (Hetzner/Coolify)                     Orchestrator (per-machine)
     +-- itachi-code-intel (repo expertise, sessions)      +-- session-manager (Claude/Codex CLI)
     +-- itachi-tasks      (task queue, dispatch)          +-- result-reporter
     +-- itachi-sync       (cross-machine sync)            +-- workspace-manager
-    +-- itachi-self-improve (lesson extraction)           |
+    +-- itachi-self-improve (RLM, personality, lessons)    |
+    +-- itachi-agents    (subagent orchestration)        |
     |                                                     +-- heartbeat --> /api/machines
     +-- Supabase (pgvector) -- memories, sessions, tasks
     +-- OpenAI API -- text-embedding-3-small (1536 dims)
-    +-- Telegram Bot -- chat, /task, /status, /recall, forum topics
+    +-- Telegram Bot -- 35+ commands, forum topics, live streaming
     +-- MCP Server -- native tool access for Claude Code
 ```
 
@@ -32,13 +33,15 @@ ElizaOS Agent (Hetzner/Coolify)                     Orchestrator (per-machine)
 
 1. **Hooks** capture every file edit, session start/end, and user prompt from Claude Code
 2. **UserPromptSubmit hook** searches semantic memory per-prompt and injects relevant context automatically
-3. **Session-start hook** writes hot files, patterns, and decisions to Claude's auto-memory (`MEMORY.md`)
-4. **Session-end hook** extracts transcript insights via LLM, stores them in both memory systems
-5. **Workers** (background) analyze edits, synthesize sessions, extract repo expertise
-6. **Providers** inject relevant context into every Telegram LLM call
-7. **RLM bridge** promotes high-significance session insights into ElizaOS native memories for the lessons provider
-8. **Orchestrator** spawns Claude/Codex sessions for queued tasks, streams output to Telegram forum topics
-9. **MCP Server** gives Claude Code direct tool access to memories, tasks, and sessions mid-conversation
+3. **Session-start hook** writes hot files, patterns, project rules, and decisions to Claude's auto-memory (`MEMORY.md`)
+4. **Session-end hook** extracts transcript insights via LLM, contributes lessons back to the RLM
+5. **Workers** (background) analyze edits, synthesize sessions, extract repo expertise, decay ineffective lessons
+6. **Providers** inject personality traits, lessons, rules, and project context into every Telegram LLM call
+7. **RLM** stores lessons from tasks, sessions, and user feedback; reinforces/penalizes based on outcomes; shapes future decisions with weighted recommendations
+8. **Personality system** learns communication style from user interactions and adapts bot responses
+9. **Orchestrator** spawns Claude/Codex sessions for queued tasks, streams output to Telegram forum topics
+10. **Subagent system** spawns specialized agents, shares lessons across agents
+11. **MCP Server** gives Claude Code direct tool access to memories, tasks, and sessions mid-conversation
 
 ## Quick Start
 
@@ -110,17 +113,83 @@ curl -fsSL https://raw.githubusercontent.com/ItachiDevv/itachi-memory/master/boo
 
 ## Telegram Commands
 
-| Command | Description |
-|---------|-------------|
-| `/task <description>` | Queue a new coding task |
-| `/status <id>` | Check task status |
-| `/queue` | Show active/queued tasks |
-| `/cancel <id>` | Cancel a task |
-| `/recall <query>` | Semantic search across all memories |
-| `/repos` | List known projects |
-| `/machines` | Show orchestrator machine status |
+All commands are available in any Telegram chat with the bot. Tasks auto-create forum topics in the supergroup with live streaming output.
 
-Tasks create forum topics in the Telegram supergroup with live streaming output from Claude/Codex sessions.
+### Tasks & Projects
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/task` | `/task my-app fix the login validation bug` | Create a coding task. The bot parses the project name and description, classifies difficulty, and queues it for the orchestrator. Optionally target a machine: `/task @windows my-app fix bug`. |
+| `/status` | `/status` | Show the current task queue: running, queued, and recently completed tasks with their IDs, projects, and status. |
+| `/cancel` | `/cancel a1b2c3d4` | Cancel a queued or running task by its short ID (first 8 chars). Running tasks are killed and cleaned up. |
+| `/feedback` | `/feedback a1b2c3d4 good clean PR, well tested` | Rate a completed task as `good` or `bad` with a reason. Good feedback boosts confidence of lessons that were in context; bad feedback reduces it. This directly shapes future task decisions. |
+
+### Interactive Sessions & SSH
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/session` | `/session mac check disk usage` | Start an interactive CLI session on a target machine. The bot spawns a Claude Code session and streams output back. You can reply in the thread to send input. Alias: `/chat`. |
+| `/ssh` | `/ssh hetzner ls -la /data` | Run a one-off SSH command on a target machine and return the output. |
+| `/exec` | `/exec @windows dir C:\projects` | Run a command on an orchestrator machine (uses the orchestrator's shell, not SSH). |
+| `/pull` | `/pull @mac` | Git pull and rebuild on the specified orchestrator machine. |
+| `/restart` | `/restart @mac` | Restart the orchestrator process on the specified machine. |
+
+### Server & Deployment
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/deploy` | `/deploy` or `/deploy hetzner` | Redeploy the bot container via Coolify. Optionally specify a target. |
+| `/update` | `/update` | Pull the latest code from git and rebuild the bot (ElizaOS + orchestrator). |
+| `/logs` | `/logs` or `/logs 50` | View recent container logs. Optionally specify number of lines. |
+| `/containers` | `/containers` or `/containers hetzner` | List running Docker containers on the target. |
+| `/restart-bot` | `/restart-bot` | Restart the bot's Docker container. |
+| `/ssh-targets` | `/ssh-targets` | List all configured SSH targets (coolify, mac, windows, hetzner, etc.). |
+| `/ssh-test` | `/ssh-test` | Test SSH connectivity to all configured targets and report results. |
+
+### GitHub
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/gh` | `/gh itachi-memory` | Show a summary of a GitHub repo (open PRs, issues, recent activity). |
+| `/prs` | `/prs itachi-memory` | List open pull requests for a repo. |
+| `/issues` | `/issues itachi-memory` | List open issues for a repo. |
+| `/branches` | `/branches itachi-memory` | List recent branches for a repo. |
+
+### Subagents
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/spawn` | `/spawn code-reviewer review PR #5 on itachi-memory` | Spawn a specialized subagent with a profile and task description. Available profiles depend on configured agent profiles (e.g., `code-reviewer`, `researcher`, `devops`). |
+| `/agents` | `/agents` | List recent subagent runs with their status, profile, and creation time. |
+| `/msg` | `/msg a1b2c3d4 please also check the tests` | Send a message to a running subagent by its short ID. |
+
+### Memory & Learning
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/recall` | `/recall auth middleware changes` or `/recall my-app:login flow` | Semantic search across all memories. Optionally prefix with `project:` to scope the search. Returns ranked results with similarity scores. |
+| `/learn` | `/learn always run tests before pushing on itachi-memory` | Teach the bot a project rule. Stored as a `project_rule` with high confidence (0.95). Rules are injected into future Claude Code sessions via `MEMORY.md` and into Telegram responses via the lessons provider. Deduplicates automatically (similarity > 0.85 reinforces the existing rule). |
+| `/teach` | `/teach I prefer short, direct responses` | Teach the bot with auto-classification. The bot uses an LLM to classify the instruction as a personality trait, project rule, or workflow preference, then stores it in the appropriate category. More flexible than `/learn`. |
+| `/repos` | `/repos` | List all registered repositories with their URLs and configuration. |
+| `/machines` | `/machines` | Show orchestrator machines: status (online/offline/busy), active tasks, max capacity, registered projects, and platform. |
+| `/sync-repos` | `/sync-repos` | Sync GitHub repositories into the project registry. Fetches repos from GitHub and updates the local registry. |
+
+### Reminders
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/remind` | `/remind 2h check deployment status` | Set a one-time reminder. Supports natural language times: `30m`, `2h`, `tomorrow 9am`, `friday 3pm`. |
+| `/schedule` | `/schedule daily 9am check PR reviews` | Schedule a recurring action. Supports: `daily`, `weekly`, `hourly` with a time. |
+| `/reminders` | `/reminders` | List all upcoming reminders and scheduled actions with their IDs and next trigger times. |
+| `/unremind` | `/unremind abc123` | Cancel a reminder or scheduled action by its ID. |
+
+### Housekeeping
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/close-done` | `/close-done` | Delete all Telegram forum topics for completed tasks. Cleans up the supergroup. |
+| `/close-failed` | `/close-failed` | Delete all Telegram forum topics for failed tasks. |
+| `/help` | `/help` | Show all available commands with descriptions. |
 
 ## MCP Tools
 
@@ -152,7 +221,19 @@ Task queue with multi-machine dispatch. Machine registry with heartbeat monitori
 Cross-machine synchronization. Encrypted push/pull of API keys, settings hooks, and skills. Project-scoped file sync with content hashing and versioning.
 
 ### itachi-self-improve
-Recursive Learning Model (RLM). Lesson extraction evaluator learns from user feedback, task outcomes, and session insights. Reflection worker synthesizes weekly strategy documents. Lessons provider injects past lessons into every Telegram LLM call. Session insights from manual Claude Code sessions are bridged into the RLM when significance >= 0.7 and category is `preference`, `learning`, or `decision`.
+Recursive Learning Model (RLM) with active decision shaping. Components:
+- **Lesson extractor** evaluator learns from user feedback, task outcomes, and session insights
+- **Personality extractor** evaluator analyzes communication style every ~10 messages, stores traits with deduplication
+- **Lessons provider** (position 5) injects weighted lessons + project rules as directives into every LLM call. Ranking: `relevance x confidence x recency_decay x reinforcement_bonus`. Cap: 8 lessons + 3 rules.
+- **Personality provider** (position 3) injects learned personality traits into all responses, shaping tone and communication style
+- **RLM service** provides `getRecommendations()` for task creation (suggested budget, warnings from past failures) and `recordOutcome()` for reinforcement tracking
+- **Reflection worker** synthesizes weekly strategy documents from accumulated lessons
+- **Effectiveness worker** runs weekly to decay low-performing lessons (< 30% success rate) and boost high-performers (> 80%)
+
+Session insights from Claude Code sessions are bridged into the RLM via the `contribute-lessons` endpoint. User-taught rules (`/learn`, `/teach`) are stored with high confidence and take immediate effect.
+
+### itachi-agents
+Subagent orchestration for specialized tasks. Profiles define agent capabilities (code-reviewer, researcher, devops). Subagent lessons are shared back to the main lesson pool for cross-agent learning. Commands: `/spawn`, `/agents`, `/msg`. Auto-delegation suggests matching agent profiles during task creation.
 
 ## Updating
 
@@ -230,7 +311,12 @@ itachi-memory/
 │           ├── itachi-code-intel/  # Code intelligence pipeline
 │           ├── itachi-tasks/       # Task queue + dispatch + Telegram
 │           ├── itachi-sync/        # Cross-machine sync
-│           └── itachi-self-improve/# Lesson extraction
+│           ├── itachi-self-improve/# RLM, personality, lessons
+│           │   ├── evaluators/    #   lesson-extractor, personality-extractor
+│           │   ├── providers/     #   lessons (weighted), personality (dynamic)
+│           │   ├── services/      #   rlm-service (recommendations, reinforcement)
+│           │   └── workers/       #   reflection, effectiveness-decay
+│           └── itachi-agents/     # Subagent orchestration
 ├── orchestrator/               # Task execution engine
 │   └── src/
 │       ├── crypto.ts           # AES-256-GCM decrypt for .env sync

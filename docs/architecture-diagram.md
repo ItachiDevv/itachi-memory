@@ -115,25 +115,41 @@ Task queue, orchestrator interface, Telegram commands, machine dispatch, forum t
 itachi-tasks/
 ├─ actions/
 │  ├─ spawn-session.ts       SPAWN_CLAUDE_SESSION — LLM-routed task creation
-│  ├─ create-task.ts         CREATE_TASK — /task command handler
+│  ├─ create-task.ts         CREATE_TASK — /task command + RLM consultation + auto-delegation
 │  ├─ list-tasks.ts          LIST_TASKS — /queue, /status commands
 │  ├─ cancel-task.ts         CANCEL_TASK — /cancel command
-│  ├─ telegram-commands.ts   TELEGRAM_COMMANDS — /recall, /repos
-│  └─ topic-reply.ts         TOPIC_REPLY — forum topic user input routing
+│  ├─ telegram-commands.ts   TELEGRAM_COMMANDS — /recall, /repos, /learn, /teach, /feedback, /spawn, /agents, /msg + 20 more
+│  ├─ topic-reply.ts         TOPIC_REPLY — forum topic user input routing
+│  ├─ interactive-session.ts INTERACTIVE_SESSION — /session, /chat commands
+│  ├─ github-direct.ts       GITHUB_DIRECT — /gh, /prs, /issues, /branches commands
+│  ├─ remote-exec.ts         REMOTE_EXEC — /exec, /pull, /restart commands
+│  ├─ coolify-control.ts     COOLIFY_CONTROL — /deploy, /logs, /containers, /restart-bot
+│  └─ reminder-commands.ts   REMINDER_COMMANDS — /remind, /schedule, /reminders, /unremind
 ├─ providers/
 │  ├─ active-tasks.ts        Position 15 — queued/claimed/running tasks
-│  └─ repos.ts               Position 20 — available repositories
+│  ├─ repos.ts               Position 20 — available repositories
+│  ├─ machine-status.ts      Machine health and capacity
+│  ├─ topic-context.ts       Forum topic context for replies
+│  ├─ ssh-capabilities.ts    Available SSH targets
+│  └─ command-suppressor.ts  Prevents double-handling of slash commands
 ├─ services/
 │  ├─ task-service.ts        TaskService — CRUD, claim, queue management
-│  ├─ task-poller.ts         TaskPollerService — 10s poll for completion notifications
+│  ├─ task-poller.ts         TaskPollerService — 10s poll + lesson reinforcement on completion
 │  ├─ telegram-topics.ts     TelegramTopicsService — topic CRUD, streaming buffer
-│  └─ machine-registry.ts   MachineRegistryService — register, heartbeat, dispatch
+│  ├─ machine-registry.ts   MachineRegistryService — register, heartbeat, dispatch
+│  ├─ reminder-service.ts   ReminderService — reminder scheduling and execution
+│  └─ ssh-service.ts        SSHService — multi-target SSH connectivity
+├─ evaluators/
+│  └─ topic-input-relay.ts   Routes user replies in forum topics to running tasks
 ├─ routes/
 │  ├─ task-stream.ts         POST/GET /api/tasks/:id/stream, /input, /topic
 │  └─ machine-routes.ts     POST /api/machines/register, /heartbeat; GET /api/machines
 ├─ workers/
-│  └─ task-dispatcher.ts     ITACHI_TASK_DISPATCHER — 10s interval, assigns tasks to machines
-└─ index.ts
+│  ├─ task-dispatcher.ts     ITACHI_TASK_DISPATCHER — 10s interval, assigns tasks to machines
+│  ├─ github-repo-sync.ts   GITHUB_REPO_SYNC — syncs GitHub repos into registry
+│  ├─ reminder-poller.ts    REMINDER_POLLER — checks and fires due reminders
+│  └─ proactive-monitor.ts  PROACTIVE_MONITOR — watches for anomalies
+└─ index.ts                  35 Telegram bot commands registered
 ```
 
 | Component | Details |
@@ -173,24 +189,33 @@ itachi-sync/
 
 ### Plugin: itachi-self-improve
 
-Recursive self-improvement through lesson extraction, synthesis, and strategy formation.
+Recursive self-improvement through lesson extraction, personality learning, RLM-driven recommendations, and strategy formation.
 
 ```
 itachi-self-improve/
 ├─ evaluators/
-│  └─ lesson-extractor.ts    LESSON_EXTRACTOR — extracts lessons from task outcomes + user feedback
+│  ├─ lesson-extractor.ts       LESSON_EXTRACTOR — extracts lessons from task outcomes + user feedback
+│  └─ personality-extractor.ts   PERSONALITY_EXTRACTOR — extracts communication style every ~10 messages
 ├─ providers/
-│  └─ lessons.ts             Position 5 — injects past lessons + strategy docs into LLM context
+│  ├─ lessons.ts                 Position 5 — weighted lessons + project rules as directives
+│  └─ personality.ts             Position 3 — dynamic personality traits injection
+├─ services/
+│  └─ rlm-service.ts            RLMService — reward signals, recommendations, reinforcement
 ├─ workers/
-│  └─ reflection-worker.ts   ITACHI_REFLECTION — weekly synthesis of lessons into strategy docs
+│  ├─ reflection-worker.ts      ITACHI_REFLECTION — weekly synthesis of lessons into strategy docs
+│  └─ effectiveness-worker.ts   ITACHI_EFFECTIVENESS — weekly lesson confidence decay/boost
 └─ index.ts
 ```
 
 | Component | Details |
 |-----------|---------|
 | **Lesson Extractor** | Triggers on task completion, feedback keywords (good/bad/wrong/perfect/etc.), or status notifications. Extracts lessons with categories: task-estimation, project-selection, error-handling, user-preference, tool-selection. Filters confidence < 0.5. |
-| **Lessons Provider** | Position 5 (early). Searches via `runtime.searchMemories()` threshold 0.6. Returns "Past Management Lessons" + "Current Strategy" sections. |
+| **Personality Extractor** | Runs every ~10 user messages. Uses LLM to extract: communication_tone, decision_style, priority_signals, vocabulary_patterns. Stores as `personality_trait` with dedup (similarity > 0.9 → reinforce). |
+| **Lessons Provider** | Position 5 (early). Searches BOTH `task_lesson` AND `project_rule` categories. Ranks by `similarity × confidence × recency_decay × reinforcement_bonus`. Formats as directives: `APPLY:` for lessons, `RULE:` for rules. Caps at 8 lessons + 3 rules. |
+| **Personality Provider** | Position 3 (very early — shapes ALL responses). Loads top 10 traits by `confidence × reinforcement_bonus`. Groups by category. Injects as `## Your Personality (learned from user interactions)` block. |
+| **RLM Service** | `recordOutcome(taskId, outcome, score)` — tracks lesson applications. `reinforceLessonsForTask(taskId)` — adjusts confidence based on success/failure. `getRecommendations(project, description)` — returns suggested budget, warnings from past failures. Consulted before every task creation. |
 | **Reflection Worker** | Weekly. Needs 3+ lessons. Uses TEXT_LARGE to synthesize. Stores as strategy doc. Keeps max 4 (monthly rolling window). |
+| **Effectiveness Worker** | Weekly. Scans all `task_lesson` memories. For lessons with 5+ applications: < 30% success → confidence = 0.1; > 80% success → confidence = 0.95. Stores report as `strategy_document`. |
 
 ### Plugin: itachi-code-intel
 
@@ -274,7 +299,8 @@ itachi-code-intel/
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │ LAYER 3: PROVIDERS (LLM context injection — runs on every ElizaOS response)    │
 │                                                                                │
-│  Position 5:  Management Lessons    (past lessons + current strategy)          │
+│  Position 3:  Personality Traits    (learned communication style + tone)       │
+│  Position 5:  Lessons + Rules       (weighted lessons + project rules)         │
 │  Position 8:  Session Briefing      (recent sessions + hot files)             │
 │  Position 9:  Repo Expertise        (per-project knowledge)                   │
 │  Position 10: Recent Memories       (5 recent + 3 relevant memories)          │
@@ -471,10 +497,14 @@ User (Telegram)                    ElizaOS                          Orchestrator
 │                                  │                                       │
 │  Types:                          │  Categories:                          │
 │  ├─ MESSAGE  (chat history)      │  ├─ code_change  (from hooks)         │
-│  ├─ DOCUMENT (strategy docs)     │  ├─ fact         (explicit stores)    │
+│  ├─ DOCUMENT (strategy docs)     │  ├─ fact / identity (explicit)        │
 │  ├─ CUSTOM   (lessons, style)    │  ├─ conversation (Telegram bridge)    │
-│  ├─ FRAGMENT (knowledge chunks)  │  ├─ decision     (explicit)           │
-│  └─ DESCRIPTION (entity info)    │  ├─ pattern_observation (from worker) │
+│  ├─ FRAGMENT (knowledge chunks)  │  ├─ task_lesson  (RLM lessons)        │
+│  └─ DESCRIPTION (entity info)    │  ├─ project_rule (/learn, insights)   │
+│                                  │  ├─ personality_trait (learned style)  │
+│                                  │  ├─ lesson_application (RLM tracking) │
+│                                  │  ├─ strategy_document (weekly synth)  │
+│                                  │  ├─ pattern_observation (from worker) │
 │                                  │  ├─ repo_expertise (daily worker)     │
 │  Used for:                       │  └─ global_style_profile (weekly)     │
 │  • Chat history persistence      │                                       │
@@ -874,18 +904,19 @@ Credential Loading:
 
 | Category | Count | Items |
 |----------|-------|-------|
-| **Plugins** | 5 | itachi-memory, itachi-tasks, itachi-sync, itachi-self-improve, itachi-code-intel |
-| **Actions** | 7 | STORE_MEMORY, SPAWN_CLAUDE_SESSION, CREATE_TASK, LIST_TASKS, CANCEL_TASK, TELEGRAM_COMMANDS, TOPIC_REPLY |
-| **Evaluators** | 2 | CONVERSATION_MEMORY (scored, alwaysRun), LESSON_EXTRACTOR (feedback-triggered) |
-| **Providers** | 9 | recent-memories(10), memory-stats(80), conversation-context(11), active-tasks(15), repos(20), lessons(5), session-briefing(8), repo-expertise(9), cross-project(12) |
-| **Services** | 8 | MemoryService, TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, SyncService, CodeIntelService, (+ CodeIntelService heap monitor) |
-| **Routes** | 23 | 4 memory, 6 task, 3 repo, 3 sync, 2 bootstrap, 3 code-intel, 4 task-stream, 4 machine |
-| **Workers** | 8 | edit-analyzer(15m), session-synthesizer(5m), repo-expertise(1d), style-extractor(7d), cross-project(7d), cleanup(30d), reflection(7d), task-dispatcher(10s) |
+| **Plugins** | 6 | itachi-memory, itachi-tasks, itachi-sync, itachi-self-improve, itachi-code-intel, itachi-agents |
+| **Actions** | 11+ | STORE_MEMORY, SPAWN_CLAUDE_SESSION, CREATE_TASK, LIST_TASKS, CANCEL_TASK, TELEGRAM_COMMANDS, TOPIC_REPLY, INTERACTIVE_SESSION, GITHUB_DIRECT, REMOTE_EXEC, COOLIFY_CONTROL |
+| **Evaluators** | 3 | CONVERSATION_MEMORY (scored, alwaysRun), LESSON_EXTRACTOR (feedback-triggered), PERSONALITY_EXTRACTOR (every ~10 msgs) |
+| **Providers** | 11 | personality(3), lessons(5), session-briefing(8), repo-expertise(9), recent-memories(10), conversation-context(11), cross-project(12), active-tasks(15), repos(20), machine-status, memory-stats(80) |
+| **Services** | 10 | MemoryService, TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, SyncService, CodeIntelService, RLMService |
+| **Routes** | 23+ | 4 memory, 6 task, 3 repo, 3 sync, 2 bootstrap, 3 code-intel, 4 task-stream, 4 machine |
+| **Workers** | 9 | edit-analyzer(15m), session-synthesizer(5m), repo-expertise(1d), style-extractor(7d), cross-project(7d), cleanup(30d), reflection(7d), effectiveness(7d), task-dispatcher(10s) |
 | **MCP Tools** | 9 | memory_search, memory_recent, memory_store, memory_stats, session_briefing, project_hot_files, task_list, task_create, sync_list |
 | **Hooks** | 4 | session-start, after-edit, session-end, skill-sync (x2 platforms = 8 files) |
 | **DB Tables** | 27 | 8 Itachi custom + 19 ElizaOS core (all RLS enabled) |
 | **DB RPCs** | 5 | match_memories, match_sessions, claim_next_task, upsert_sync_file, cleanup_intelligence_data |
 | **Skills** | 20 | 6 core + 1 elizaos + 2 AI/platform + 1 game + 10 three.js |
+| **Telegram Commands** | 35 | Tasks, sessions, SSH, deployment, GitHub, agents, memory, reminders, housekeeping |
 
 ---
 
@@ -898,7 +929,8 @@ Credential Loading:
 | Memory Plugin | `eliza/src/plugins/itachi-memory/` | MemoryService, STORE_MEMORY, 3 providers, 1 evaluator |
 | Tasks Plugin | `eliza/src/plugins/itachi-tasks/` | TaskService, TelegramTopicsService, MachineRegistryService, 5 actions, 2 providers, task-stream + machine routes, dispatcher worker |
 | Sync Plugin | `eliza/src/plugins/itachi-sync/` | SyncService, 23 REST routes, auth middleware |
-| Self-Improve | `eliza/src/plugins/itachi-self-improve/` | Lesson extractor evaluator, lessons provider, reflection worker |
+| Self-Improve | `eliza/src/plugins/itachi-self-improve/` | Lesson extractor, personality extractor, lessons provider (weighted), personality provider, RLMService, reflection worker, effectiveness worker |
+| Agents | `eliza/src/plugins/itachi-agents/` | SubagentService, agent profiles, cross-agent lesson sharing, spawn/agents/msg commands |
 | Code-Intel | `eliza/src/plugins/itachi-code-intel/` | CodeIntelService, 3 routes, 3 providers, 6 workers |
 | Orchestrator | `orchestrator/src/` | index, config, task-runner, session-manager, task-classifier, result-reporter, workspace-manager, supabase-client |
 | MCP Server | `mcp/index.js` | 9 tools, stdio transport, project auto-detect |

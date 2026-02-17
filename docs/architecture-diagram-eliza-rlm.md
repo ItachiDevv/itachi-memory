@@ -153,14 +153,15 @@
   │  │   User: "Fix login bug in my-app"                         │  │
   │  │                                                           │  │
   │  │   LLM sees:                                               │  │
-  │  │   - Character personality                                 │  │
-  │  │   - Recent memories (code changes)                        │  │
-  │  │   - Active tasks                                          │  │
-  │  │   - Available repos                                       │  │
+  │  │   - Personality: "Direct, casual, technical" (pos 3)      │  │
+  │  │   - APPLY: "Auth tasks in my-app need $8+ budget" (pos 5) │  │
+  │  │   - RULE: "Always run tests before pushing" (pos 5)       │  │
+  │  │   - Recent memories (code changes) (pos 10)               │  │
+  │  │   - Active tasks (pos 15)                                 │  │
+  │  │   - Available repos (pos 20)                              │  │
   │  │   ─────────────────────────────────                       │  │
-  │  │   - Past Lesson: "Auth tasks in my-app need $8+ budget"   │  │
-  │  │   - Past Lesson: "User prefers Sonnet for quick fixes"    │  │
-  │  │   - Strategy: "Always confirm project before queuing"     │  │
+  │  │   + RLM warnings: "Similar task failed 3 days ago"        │  │
+  │  │   + Auto-delegation hint: "code-reviewer matches this"    │  │
   │  │                                                           │  │
   │  │   → Makes BETTER decision based on accumulated lessons    │  │
   │  │                                                           │  │
@@ -243,6 +244,63 @@
   │  │  and also feed into the Lessons Provider ─────────────────┘   │
   │  └──────────────────────────────────────────────────────────┘   │
   │                                                                 │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │       PERSONALITY SYSTEM (Adaptive Communication)        │   │
+  │  │                                                           │   │
+  │  │  Personality Extractor (evaluator, every ~10 messages):   │   │
+  │  │  • Extracts: communication_tone, decision_style,          │   │
+  │  │    priority_signals, vocabulary_patterns                   │   │
+  │  │  • Stores as personality_trait with dedup (>0.9 reinforce)│   │
+  │  │                                                           │   │
+  │  │  Personality Provider (position 3):                        │   │
+  │  │  • Loads top 10 traits by confidence × reinforcement       │   │
+  │  │  • Injects personality directive into ALL LLM responses    │   │
+  │  │                                                           │   │
+  │  │  /teach command: auto-classifies instruction as            │   │
+  │  │  personality_trait, project_rule, or task_lesson            │   │
+  │  └──────────────────────────────────────────────────────────┘   │
+  │                                                                 │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │       RLM SERVICE (Active Decision Shaping)              │   │
+  │  │                                                           │   │
+  │  │  getRecommendations(project, description):                │   │
+  │  │  • Suggested budget from similar task outcomes             │   │
+  │  │  • Warnings from past failures with similar tasks          │   │
+  │  │  • Auto-delegation hints from matching agent profiles      │   │
+  │  │                                                           │   │
+  │  │  recordOutcome(taskId, outcome, score):                    │   │
+  │  │  • Tracks lesson applications for effectiveness metrics    │   │
+  │  │                                                           │   │
+  │  │  reinforceLessonsForTask(taskId):                          │   │
+  │  │  • On success: boost confidence (+0.05, cap 0.99)          │   │
+  │  │  • On failure: reduce confidence (*0.85, floor 0.1)        │   │
+  │  │  • /feedback good/bad: ±0.1 confidence adjustment          │   │
+  │  └──────────────────────────────────────────────────────────┘   │
+  │                                                                 │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │       WEEKLY: Effectiveness Worker                       │   │
+  │  │                                                           │   │
+  │  │  1. Scans all task_lesson memories                         │   │
+  │  │  2. For lessons with 5+ applications:                      │   │
+  │  │     • < 30% success → confidence = 0.1 (deprioritize)     │   │
+  │  │     • > 80% success → confidence = 0.95 (boost)           │   │
+  │  │  3. Stores report as strategy_document                     │   │
+  │  └──────────────────────────────────────────────────────────┘   │
+  │                                                                 │
+  │  ┌──────────────────────────────────────────────────────────┐   │
+  │  │       SUBAGENT SYSTEM (Cross-Agent Learning)             │   │
+  │  │                                                           │   │
+  │  │  /spawn <profile> <task>: create specialized subagent      │   │
+  │  │  /agents: list active runs                                 │   │
+  │  │  /msg <id> <text>: send message to running agent           │   │
+  │  │                                                           │   │
+  │  │  Cross-agent lesson sharing:                               │   │
+  │  │  • Subagent lessons → shared task_lesson pool               │   │
+  │  │  • All agents benefit from shared knowledge                 │   │
+  │  │  • Auto-delegation: matching profiles suggested at task     │   │
+  │  │    creation time                                            │   │
+  │  └──────────────────────────────────────────────────────────┘   │
+  │                                                                 │
   └─────────────────────────────────────────────────────────────────┘
 
   Memory Architecture (Dual System)
@@ -256,11 +314,14 @@
   │                                  │                                  │
   │  Types:                          │  Categories:                     │
   │  ├─ MESSAGE  (chat history)      │  ├─ code_change                  │
-  │  ├─ DOCUMENT (strategy docs)     │  ├─ fact                         │
+  │  ├─ DOCUMENT (strategy docs)     │  ├─ fact / identity              │
   │  ├─ CUSTOM   (lessons)           │  ├─ conversation                 │
-  │  ├─ FRAGMENT (knowledge chunks)  │  ├─ decision                     │
-  │  └─ DESCRIPTION (entity info)    │  ├─ project_rule                 │
-  │                                  │  └─ test                         │
+  │  ├─ FRAGMENT (knowledge chunks)  │  ├─ task_lesson  (RLM lessons)   │
+  │  └─ DESCRIPTION (entity info)    │  ├─ project_rule (/learn)        │
+  │                                  │  ├─ personality_trait             │
+  │                                  │  ├─ lesson_application           │
+  │                                  │  ├─ strategy_document            │
+  │                                  │  └─ pattern_observation          │
   │                                  │                                  │
   │  Used for:                       │  Used for:                       │
   │  • Chat history persistence      │  • Code change tracking          │

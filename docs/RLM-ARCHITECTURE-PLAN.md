@@ -1,5 +1,7 @@
 # Itachi RLM: Self-Learning Agent Architecture
 
+> **Status: IMPLEMENTED** (Feb 2026) — All 4 phases complete. See commit history for implementation details.
+
 ## Context
 
 The bot collects data well (memories, lessons, rules, session insights, facts) but **doesn't USE it**. Lessons are stored but inert. Local Claude Code sessions extract insights but those never reach the Telegram bot. Personality is static (`character.ts` hardcoded adjectives). Subagents exist but are invisible to the user. The vision: a digital CEO-proxy that learns from every interaction — Telegram, local sessions, task outcomes — and applies that knowledge to every future decision.
@@ -295,24 +297,24 @@ Phase 4A (subagent commands) ──→ Phase 4B (auto-delegation)
 
 ## Verification
 
-### Phase 1 Criteria
+### Phase 1 Criteria (IMPLEMENTED)
 - Run a local Claude Code session → end session → check `itachi_memories` for `category: task_lesson` with `source: 'local_session'`
 - Send a Telegram message → check that `lessonsProvider` returns both task_lessons AND project_rules
 - Complete a task → verify lessons in context got `reinforceMemory()` called
 - `/learn always use bun for testing` → verify stored as project_rule → appears in next session's MEMORY.md
 
-### Phase 2 Criteria
+### Phase 2 Criteria (IMPLEMENTED)
 - After 10+ Telegram messages → check `itachi_memories` for `category: personality_trait`
 - Send a message → verify personality provider injects personality directive at position 3
 - `/teach I prefer casual tone` → verify immediate personality trait storage
 - Bot responses start reflecting learned personality within ~20 messages
 
-### Phase 3 Criteria
+### Phase 3 Criteria (IMPLEMENTED)
 - Create task → verify RLM recommendations in callback (budget/warnings)
 - `/feedback <id> good reason` → verify related lessons get confidence bump
 - Weekly: effectiveness worker runs → low-performing lessons deprioritized
 
-### Phase 4 Criteria
+### Phase 4 Criteria (IMPLEMENTED)
 - `/spawn code-reviewer review PR #5` → subagent run created, status shown
 - `/agents` → lists active runs with status
 - Subagent completes → lesson appears in shared `task_lesson` pool
