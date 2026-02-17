@@ -58,8 +58,8 @@ export const createTaskAction: Action = {
     const isGHQuery = /\b(pr|pull\s*request|branch|branches|issue|issues|merge|merged|ci|checks?)\b/.test(lower)
       && /\b(what|show|list|check|any|open|how many|status|closed)\b/.test(lower);
     if (isGHQuery) return false;
-    // Reject slash commands meant for other actions
-    if (/^\/(session|chat|gh|prs|branches|issues|recall|repos|machines|ssh|exec|deploy|logs|containers)\b/.test(text)) return false;
+    // Reject any slash command that isn't /task — they belong to other actions
+    if (/^\/\S/.test(text) && !text.startsWith('/task')) return false;
     const taskService = runtime.getService<TaskService>('itachi-tasks');
     return !!taskService;
   },
