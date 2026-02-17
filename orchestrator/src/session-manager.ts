@@ -303,37 +303,43 @@ function checkGeminiAuth(): { valid: boolean; error?: string } {
     } catch {
         return {
             valid: false,
-            error: 'Gemini CLI not found. Install it: npm install -g @anthropic-ai/gemini-cli',
+            error: 'Gemini CLI not found. Install it: npm install -g @google/gemini-cli',
         };
     }
 
-    // 2. Try `gemini auth status` for subscription auth (Google AI Pro/Ultra)
+    // 2. Try subscription auth first (preferred — Google AI Pro/Ultra, no API billing)
     try {
+        const cleanEnv = { ...process.env };
+        delete cleanEnv.GEMINI_API_KEY;
+
         const output = execSync('gemini auth status', {
             encoding: 'utf8',
             timeout: 10000,
             stdio: 'pipe',
+            env: cleanEnv,
         }).trim();
-        // If it doesn't throw, subscription auth is active
+        // If it doesn't throw and isn't a "not logged in" response, subscription auth is active
         if (output && !output.toLowerCase().includes('not logged in') && !output.toLowerCase().includes('not authenticated')) {
             return { valid: true };
         }
     } catch {
-        // `gemini auth status` failed or not supported — fall through to API key check
+        // Subscription auth failed — fall through to API key check
     }
 
-    // 3. Fall back to GEMINI_API_KEY env var or api-keys file
+    // 3. Fall back to GEMINI_API_KEY (works via itachig wrapper which loads ~/.itachi-api-keys)
     if (process.env.GEMINI_API_KEY) {
+        console.warn('[auth] Gemini subscription auth failed, using GEMINI_API_KEY from env (API billing)');
         return { valid: true };
     }
     const apiKeys = loadApiKeys();
     if (apiKeys.GEMINI_API_KEY) {
+        console.warn('[auth] Gemini subscription auth failed, using GEMINI_API_KEY from api-keys file (API billing)');
         return { valid: true };
     }
 
     return {
         valid: false,
-        error: 'Gemini CLI found but not authenticated. Run: gemini auth login (or set GEMINI_API_KEY)',
+        error: 'Gemini: no subscription auth and no GEMINI_API_KEY. Run: gemini auth login (or add GEMINI_API_KEY to ~/.itachi-api-keys)',
     };
 }
 

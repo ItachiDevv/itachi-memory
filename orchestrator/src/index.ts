@@ -260,20 +260,15 @@ const server = http.createServer(async (req, res) => {
 
     if (url === '/restart' && method === 'POST') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, message: 'Restarting in 2s...' }));
+        res.end(JSON.stringify({ success: true, message: 'Shutting down (restart externally)...' }));
 
-        // Graceful restart: stop everything, then re-exec
+        // Graceful shutdown — external process manager (systemd, pm2, etc.) handles restart.
+        // The old spawn-child approach caused cascading process spawns.
         setTimeout(() => {
             console.log('[control] Restart requested, shutting down...');
             stopHeartbeat();
             stopRunner();
-            // Re-exec the process
-            const child = spawn(process.argv[0], process.argv.slice(1), {
-                cwd: process.cwd(),
-                detached: true,
-                stdio: 'inherit',
-            });
-            child.unref();
+            server.close();
             process.exit(0);
         }, 2000);
         return;
