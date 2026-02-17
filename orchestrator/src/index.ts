@@ -59,18 +59,26 @@ function detectLocalProjects(): string[] {
 async function registerMachine(): Promise<void> {
     try {
         const localProjects = detectLocalProjects();
+
+        // Only send engine_priority if no remote config exists yet (first-ever registration).
+        // This prevents overwriting centrally-managed engine priority on every restart.
+        const remote = await fetchMachineConfig(config.machineId);
+        const body: Record<string, unknown> = {
+            machine_id: config.machineId,
+            display_name: config.machineDisplayName,
+            projects: localProjects,
+            max_concurrent: config.maxConcurrent,
+            os: process.platform,
+            health_url: `http://localhost:${HEALTH_PORT}`,
+        };
+        if (!remote?.engine_priority?.length) {
+            body.engine_priority = config.enginePriority;
+        }
+
         const response = await fetch(`${config.apiUrl}/api/machines/register`, {
             method: 'POST',
             headers: getApiHeaders(),
-            body: JSON.stringify({
-                machine_id: config.machineId,
-                display_name: config.machineDisplayName,
-                projects: localProjects,
-                max_concurrent: config.maxConcurrent,
-                os: process.platform,
-                engine_priority: config.enginePriority,
-                health_url: `http://localhost:${HEALTH_PORT}`,
-            }),
+            body: JSON.stringify(body),
         });
         if (!response.ok) {
             console.warn(`[machine] Registration failed: ${response.status} ${response.statusText}`);
