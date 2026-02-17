@@ -254,6 +254,14 @@ function httpPost(url, body) {
             summary: summary,
             duration_ms: durationMs
         });
+
+        // Also contribute lessons directly to the task_lesson pool
+        try {
+            await httpPost(sessionApi + '/contribute-lessons', {
+                conversation_text: conversationText,
+                project: project,
+            });
+        } catch(e) {}
     } catch(e) {}
 })();
 "@

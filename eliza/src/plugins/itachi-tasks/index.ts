@@ -85,6 +85,11 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'ssh_targets', description: 'List SSH targets' },
         { command: 'ssh_test', description: 'Test SSH connectivity to all targets' },
         { command: 'feedback', description: 'Rate a task — /feedback <id> <good|bad> <reason>' },
+        { command: 'learn', description: 'Teach a rule — /learn <instruction>' },
+        { command: 'teach', description: 'Teach with auto-classify — /teach <instruction>' },
+        { command: 'spawn', description: 'Spawn a subagent — /spawn <profile> <task>' },
+        { command: 'agents', description: 'List recent subagent runs' },
+        { command: 'msg', description: 'Message an agent — /msg <id> <message>' },
         { command: 'help', description: 'Show all available commands' },
       ];
       try {

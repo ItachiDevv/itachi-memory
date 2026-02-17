@@ -33,6 +33,19 @@ const RLM_CATEGORY_MAP: Record<string, string> = {
 };
 const RLM_SIGNIFICANCE_THRESHOLD = 0.7;
 
+/**
+ * Lesson Category Map: Maps session insight categories to task_lesson metadata categories.
+ * These are stored in itachi_memories with category='task_lesson' so the lessonsProvider
+ * can find them via searchMemories. Includes 'pattern' here (unlike RLM_CATEGORY_MAP)
+ * because lessons about tool/pattern usage are actionable for future task planning.
+ */
+const LESSON_CATEGORY_MAP: Record<string, string> = {
+  preference: 'user-preference',
+  learning: 'error-handling',
+  decision: 'project-selection',
+  pattern: 'tool-selection',
+};
+
 export const codeIntelRoutes: Route[] = [
   // Receive per-edit data from after-edit hooks
   {
@@ -387,6 +400,39 @@ Respond ONLY with valid JSON, no markdown fences:
           }
         }
 
+        // Task Lessons: store qualifying insights as task_lesson in itachi_memories
+        // so lessonsProvider can surface them in Telegram conversations via searchMemories.
+        let lessonsStored = 0;
+        if (significance >= RLM_SIGNIFICANCE_THRESHOLD) {
+          for (const insight of parsed.insights.slice(0, 10)) {
+            const lessonCategory = LESSON_CATEGORY_MAP[insight.category];
+            if (!lessonCategory || !insight.summary || insight.summary.length < 10) continue;
+            try {
+              await memoryService.storeMemory({
+                project: truncate(project, MAX_LENGTHS.project),
+                category: 'task_lesson',
+                content: `[Session ${session_id || 'unknown'}] ${insight.summary}`,
+                summary: truncate(insight.summary, MAX_LENGTHS.summary),
+                files: Array.isArray(files_changed) ? files_changed.slice(0, 50) : [],
+                metadata: {
+                  source: 'session-insights',
+                  lesson_category: lessonCategory,
+                  confidence: significance,
+                  outcome: 'success' as const,
+                  session_id,
+                  extracted_at: new Date().toISOString(),
+                },
+              });
+              lessonsStored++;
+            } catch (e) {
+              rt.logger.warn(`[extract-insights] Failed to store lesson: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+          if (lessonsStored > 0) {
+            rt.logger.info(`[extract-insights] Stored ${lessonsStored} session insights as task_lesson`);
+          }
+        }
+
         // Project Rules: extract and store/reinforce project-specific rules
         let rulesStored = 0;
         let rulesReinforced = 0;
@@ -448,10 +494,98 @@ Respond ONLY with valid JSON, no markdown fences:
           }
         }
 
-        rt.logger.info(`[extract-insights] Stored ${stored} insights (significance=${significance.toFixed(2)}, rlm=${rlmPromoted}, rules=${rulesStored}+${rulesReinforced}r) for ${project}`);
-        res.json({ success: true, significance, insights_stored: stored, rlm_promoted: rlmPromoted, rules_stored: rulesStored, rules_reinforced: rulesReinforced });
+        rt.logger.info(`[extract-insights] Stored ${stored} insights (significance=${significance.toFixed(2)}, rlm=${rlmPromoted}, lessons=${lessonsStored}, rules=${rulesStored}+${rulesReinforced}r) for ${project}`);
+        res.json({ success: true, significance, insights_stored: stored, rlm_promoted: rlmPromoted, lessons_stored: lessonsStored, rules_stored: rulesStored, rules_reinforced: rulesReinforced });
       } catch (error) {
         (runtime as IAgentRuntime).logger.error('Extract insights error:', error instanceof Error ? error.message : String(error));
+        res.status(500).json({ error: sanitizeError(error) });
+      }
+    },
+  },
+
+  // Contribute lessons from local Claude Code sessions directly to the task_lesson pool
+  {
+    type: 'POST' as const,
+    path: '/api/session/contribute-lessons',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const { conversation_text, project, task_id } = req.body as Record<string, any>;
+        if (!conversation_text || !project) {
+          res.status(400).json({ error: 'conversation_text and project required' });
+          return;
+        }
+
+        const memoryService = rt.getService<MemoryService>('itachi-memory');
+        if (!memoryService) {
+          res.status(503).json({ error: 'Memory service not available' });
+          return;
+        }
+
+        // Use LLM to extract lessons from conversation
+        const result = await rt.useModel(ModelType.TEXT_SMALL, {
+          prompt: `Extract actionable lessons from this local Claude Code session. Focus on:
+- What worked well or failed
+- User preferences discovered
+- Error patterns and solutions
+- Tool/approach selections that succeeded
+
+Conversation:
+${truncate(conversation_text, 3000)}
+
+Return a JSON array of lessons: [{"text": "...", "category": "error-handling|user-preference|tool-selection|project-selection", "confidence": 0.0-1.0}]
+If no meaningful lessons, return []. Respond ONLY with JSON, no markdown fences.`,
+          temperature: 0.2,
+        });
+
+        const raw = typeof result === 'string' ? result : String(result);
+        let lessons: Array<{ text: string; category: string; confidence: number }>;
+        try {
+          const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+          lessons = JSON.parse(cleaned);
+        } catch {
+          res.json({ success: true, lessons_stored: 0 });
+          return;
+        }
+
+        if (!Array.isArray(lessons)) {
+          res.json({ success: true, lessons_stored: 0 });
+          return;
+        }
+
+        let stored = 0;
+        for (const lesson of lessons.slice(0, 8)) {
+          if (!lesson.text || lesson.text.length < 10 || !lesson.category) continue;
+          if (typeof lesson.confidence !== 'number' || lesson.confidence < 0.4) continue;
+          try {
+            await memoryService.storeMemory({
+              project: truncate(project, MAX_LENGTHS.project),
+              category: 'task_lesson',
+              content: `[Local session] ${lesson.text}`,
+              summary: truncate(lesson.text, MAX_LENGTHS.summary),
+              files: [],
+              task_id: task_id || undefined,
+              metadata: {
+                source: 'local_session',
+                lesson_category: lesson.category,
+                confidence: lesson.confidence,
+                outcome: 'success' as const,
+                extracted_at: new Date().toISOString(),
+              },
+            });
+            stored++;
+          } catch (e) {
+            rt.logger.warn(`[contribute-lessons] Failed to store: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
+        rt.logger.info(`[contribute-lessons] Stored ${stored} lessons from local session for ${project}`);
+        res.json({ success: true, lessons_stored: stored });
+      } catch (error) {
+        (runtime as IAgentRuntime).logger.error('Contribute lessons error:', error instanceof Error ? error.message : String(error));
         res.status(500).json({ error: sanitizeError(error) });
       }
     },

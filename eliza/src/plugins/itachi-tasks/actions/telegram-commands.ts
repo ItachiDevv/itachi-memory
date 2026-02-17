@@ -13,8 +13,8 @@ import { stripBotMention } from '../utils/telegram.js';
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /recall, /repos, /machines, /sync_repos, /close_done, /close_failed, and /feedback Telegram commands',
-  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics', 'task feedback', 'rate task'],
+  description: 'Handle /recall, /repos, /machines, /sync_repos, /close_done, /close_failed, /feedback, /learn, /teach, /spawn, /agents, /msg Telegram commands',
+  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'spawn agent', 'list agents', 'message agent'],
   examples: [
     [
       { name: 'user', content: { text: '/recall auth middleware changes' } },
@@ -48,6 +48,9 @@ export const telegramCommandsAction: Action = {
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
     return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
+      text.startsWith('/learn ') || text.startsWith('/teach ') ||
+      text.startsWith('/spawn ') || text === '/agents' ||
+      text.startsWith('/msg ') ||
       text === '/repos' || text === '/machines' ||
       text === '/sync-repos' || text === '/sync_repos' ||
       text === '/close-done' || text === '/close_done' || text === '/close_finished' ||
@@ -72,6 +75,31 @@ export const telegramCommandsAction: Action = {
       // /feedback <taskId> <good|bad> <reason>
       if (text === '/feedback' || text.startsWith('/feedback ')) {
         return await handleFeedback(runtime, text, callback);
+      }
+
+      // /learn <instruction>
+      if (text.startsWith('/learn ')) {
+        return await handleLearn(runtime, text, callback);
+      }
+
+      // /teach <instruction>
+      if (text.startsWith('/teach ')) {
+        return await handleTeach(runtime, text, callback);
+      }
+
+      // /spawn <profile> <task>
+      if (text.startsWith('/spawn ')) {
+        return await handleSpawn(runtime, text, callback);
+      }
+
+      // /agents
+      if (text === '/agents') {
+        return await handleAgents(runtime, callback);
+      }
+
+      // /msg <agent-id> <message>
+      if (text.startsWith('/msg ')) {
+        return await handleMsg(runtime, text, callback);
       }
 
       // /recall <query> [project]
@@ -316,8 +344,320 @@ async function handleFeedback(
     },
   });
 
+  // Reinforce/penalize lessons related to this task
+  try {
+    const taskLessons = await memoryService.searchMemories(
+      task.description.substring(0, 200),
+      task.project,
+      5,
+      undefined,
+      'task_lesson',
+    );
+    for (const tl of taskLessons) {
+      const currentConf = (tl.metadata as Record<string, unknown>)?.confidence;
+      const confNum = typeof currentConf === 'number' ? currentConf : 0.5;
+      if (isGood) {
+        await memoryService.reinforceMemory(tl.id, {
+          confidence: Math.min(confNum + 0.1, 0.99),
+          last_feedback: 'positive',
+        });
+      } else {
+        await memoryService.reinforceMemory(tl.id, {
+          confidence: Math.max(confNum * 0.8, 0.1),
+          last_feedback: 'negative',
+        });
+      }
+    }
+  } catch (err) {
+    runtime.logger.warn(`[feedback] Failed to reinforce lessons: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   if (callback) await callback({ text: `${isGood ? '👍' : '👎'} Feedback recorded for task ${shortId}. This will inform future similar tasks.` });
   return { success: true, data: { taskId: task.id, sentiment, reason } };
+}
+
+async function handleLearn(
+  runtime: IAgentRuntime,
+  text: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const instruction = text.substring('/learn '.length).trim();
+  if (!instruction || instruction.length < 5) {
+    if (callback) await callback({ text: 'Usage: /learn <instruction>\nExample: /learn always run build before pushing' });
+    return { success: false, error: 'No instruction provided' };
+  }
+
+  const memoryService = runtime.getService<MemoryService>('itachi-memory');
+  if (!memoryService) {
+    if (callback) await callback({ text: 'Memory service not available.' });
+    return { success: false, error: 'Memory service not available' };
+  }
+
+  // Dedup: check for similar existing rule
+  const existing = await memoryService.searchMemories(instruction, undefined, 1, undefined, 'project_rule');
+  if (existing.length > 0 && (existing[0].similarity ?? 0) > 0.85) {
+    await memoryService.reinforceMemory(existing[0].id, { confidence: 0.95 });
+    if (callback) await callback({ text: `Reinforced existing rule: "${existing[0].summary.substring(0, 80)}"\nThis rule has been strengthened.` });
+    return { success: true, data: { reinforced: existing[0].id } };
+  }
+
+  await memoryService.storeMemory({
+    project: 'general',
+    category: 'project_rule',
+    content: instruction,
+    summary: instruction,
+    files: [],
+    metadata: {
+      confidence: 0.95,
+      times_reinforced: 1,
+      source: 'user_learn_command',
+      first_seen: new Date().toISOString(),
+      last_reinforced: new Date().toISOString(),
+    },
+  });
+
+  if (callback) await callback({ text: `Learned: "${instruction}"\nThis will be applied to future sessions and tasks.` });
+  return { success: true, data: { instruction } };
+}
+
+async function handleTeach(
+  runtime: IAgentRuntime,
+  text: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const instruction = text.substring('/teach '.length).trim();
+  if (!instruction || instruction.length < 5) {
+    if (callback) await callback({ text: 'Usage: /teach <instruction>\nExamples:\n  /teach I prefer casual tone\n  /teach always create PRs for itachi-memory\n  /teach my priority is shipping fast' });
+    return { success: false, error: 'No instruction provided' };
+  }
+
+  const memoryService = runtime.getService<MemoryService>('itachi-memory');
+  if (!memoryService) {
+    if (callback) await callback({ text: 'Memory service not available.' });
+    return { success: false, error: 'Memory service not available' };
+  }
+
+  // Use LLM to classify the instruction
+  const { ModelType: MT } = await import('@elizaos/core');
+  const classifyResult = await runtime.useModel(MT.TEXT_SMALL, {
+    prompt: `Classify this user instruction into one category:
+- "personality_trait" — about communication style, tone, personality (e.g. "I prefer casual tone")
+- "project_rule" — about project workflow, process, constraints (e.g. "always create PRs for X")
+- "user_preference" — about general workflow preferences (e.g. "my priority is shipping fast")
+
+Instruction: "${instruction}"
+
+Respond with ONLY the category name, nothing else.`,
+    temperature: 0.1,
+  });
+
+  const categoryRaw = (typeof classifyResult === 'string' ? classifyResult : '').trim().toLowerCase();
+  let category: string;
+  let lessonCategory: string | undefined;
+
+  if (categoryRaw.includes('personality')) {
+    category = 'personality_trait';
+  } else if (categoryRaw.includes('project')) {
+    category = 'project_rule';
+  } else {
+    category = 'task_lesson';
+    lessonCategory = 'user-preference';
+  }
+
+  // Dedup check
+  const existing = await memoryService.searchMemories(instruction, undefined, 1, undefined, category);
+  if (existing.length > 0 && (existing[0].similarity ?? 0) > 0.85) {
+    await memoryService.reinforceMemory(existing[0].id, { confidence: 0.95 });
+    if (callback) await callback({ text: `Reinforced existing ${category}: "${existing[0].summary.substring(0, 80)}..."` });
+    return { success: true, data: { reinforced: existing[0].id, category } };
+  }
+
+  const metadata: Record<string, unknown> = {
+    confidence: 0.95,
+    times_reinforced: 1,
+    source: 'user_teach_command',
+    first_seen: new Date().toISOString(),
+    last_reinforced: new Date().toISOString(),
+  };
+  if (lessonCategory) metadata.lesson_category = lessonCategory;
+  if (category === 'personality_trait') metadata.trait_category = 'user_defined';
+
+  await memoryService.storeMemory({
+    project: 'general',
+    category,
+    content: instruction,
+    summary: instruction,
+    files: [],
+    metadata,
+  });
+
+  const typeLabel = category === 'personality_trait' ? 'personality trait'
+    : category === 'project_rule' ? 'project rule'
+    : 'preference';
+  if (callback) await callback({ text: `Learned as ${typeLabel}: "${instruction}"\nThis will shape future behavior.` });
+  return { success: true, data: { instruction, category } };
+}
+
+async function handleSpawn(
+  runtime: IAgentRuntime,
+  text: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  // Parse: /spawn <profile> <task description>
+  const match = text.match(/^\/spawn\s+(\S+)\s+(.+)/s);
+  if (!match) {
+    if (callback) await callback({ text: 'Usage: /spawn <profile> <task description>\nExample: /spawn code-reviewer Review the auth module for security issues' });
+    return { success: false, error: 'Invalid format' };
+  }
+
+  const [, profileId, task] = match;
+
+  const subagentService = runtime.getService('itachi-subagents') as any;
+  if (!subagentService) {
+    if (callback) await callback({ text: 'Subagent service not available. The itachi-agents plugin may not be loaded.' });
+    return { success: false, error: 'SubagentService not available' };
+  }
+
+  try {
+    const run = await subagentService.spawn({
+      profileId,
+      task: task.trim(),
+      executionMode: 'local',
+    });
+
+    if (!run) {
+      if (callback) await callback({ text: `Failed to spawn "${profileId}". Check if the profile exists and isn't at max concurrency.` });
+      return { success: false, error: 'Spawn returned null' };
+    }
+
+    if (callback) await callback({
+      text: `Agent spawned.\n\nRun ID: ${run.id.substring(0, 8)}\nProfile: ${profileId}\nTask: ${task.trim().substring(0, 100)}\nMode: ${run.execution_mode}\n\nThe agent is processing. Use /agents to check status.`,
+    });
+
+    // Execute local runs immediately (fire-and-forget)
+    if (run.execution_mode === 'local') {
+      subagentService.executeLocal(run).catch((err: Error) => {
+        runtime.logger.error(`[spawn] executeLocal error: ${err.message}`);
+      });
+    }
+
+    return { success: true, data: { runId: run.id, profileId } };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (callback) await callback({ text: `Spawn error: ${msg}` });
+    return { success: false, error: msg };
+  }
+}
+
+async function handleAgents(
+  runtime: IAgentRuntime,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const subagentService = runtime.getService('itachi-subagents') as any;
+  if (!subagentService) {
+    if (callback) await callback({ text: 'Subagent service not available. The itachi-agents plugin may not be loaded.' });
+    return { success: false, error: 'SubagentService not available' };
+  }
+
+  try {
+    const runs = await subagentService.getRecentRuns(15);
+    if (!runs || runs.length === 0) {
+      if (callback) await callback({ text: 'No subagent runs found.' });
+      return { success: true, data: { runs: [] } };
+    }
+
+    const lines = runs.map((r: any, i: number) => {
+      const shortId = r.id.substring(0, 8);
+      const status = r.status || 'unknown';
+      const profile = r.agent_profile_id || 'unknown';
+      const taskPreview = (r.task || '').substring(0, 60);
+      const age = r.created_at ? timeSince(r.created_at) : '';
+      return `${i + 1}. [${shortId}] ${profile} — ${status} ${age}\n   ${taskPreview}`;
+    });
+
+    if (callback) await callback({
+      text: `Recent agent runs (${runs.length}):\n\n${lines.join('\n\n')}`,
+    });
+
+    return { success: true, data: { runs } };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (callback) await callback({ text: `Error listing agents: ${msg}` });
+    return { success: false, error: msg };
+  }
+}
+
+async function handleMsg(
+  runtime: IAgentRuntime,
+  text: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  // Parse: /msg <agent-id-or-profile> <message>
+  const match = text.match(/^\/msg\s+(\S+)\s+(.+)/s);
+  if (!match) {
+    if (callback) await callback({ text: 'Usage: /msg <agent-id> <message>\nExample: /msg a1b2c3d4 What did you find?' });
+    return { success: false, error: 'Invalid format' };
+  }
+
+  const [, targetId, content] = match;
+
+  const msgService = runtime.getService('itachi-agent-messages') as any;
+  if (!msgService) {
+    if (callback) await callback({ text: 'Agent messaging service not available. The itachi-agents plugin may not be loaded.' });
+    return { success: false, error: 'AgentMessageService not available' };
+  }
+
+  try {
+    // Try to resolve the target: could be a run ID prefix or profile ID
+    const subagentService = runtime.getService('itachi-subagents') as any;
+    let toRunId: string | undefined;
+    let toProfileId: string | undefined;
+
+    if (subagentService) {
+      const runs = await subagentService.getRecentRuns(20);
+      const matchingRun = (runs || []).find((r: any) =>
+        r.id.startsWith(targetId) || r.agent_profile_id === targetId
+      );
+      if (matchingRun) {
+        toRunId = matchingRun.id;
+        toProfileId = matchingRun.agent_profile_id;
+      }
+    }
+
+    if (!toRunId && !toProfileId) {
+      // Treat as profile ID directly
+      toProfileId = targetId;
+    }
+
+    const message = await msgService.sendMessage({
+      toRunId,
+      toProfileId,
+      content: content.trim(),
+    });
+
+    if (!message) {
+      if (callback) await callback({ text: `Failed to send message to "${targetId}".` });
+      return { success: false, error: 'sendMessage returned null' };
+    }
+
+    if (callback) await callback({ text: `Message sent to ${toProfileId || toRunId?.substring(0, 8) || targetId}.` });
+    return { success: true, data: { messageId: message.id, target: targetId } };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (callback) await callback({ text: `Message error: ${msg}` });
+    return { success: false, error: msg };
+  }
+}
+
+function timeSince(dateStr: string): string {
+  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
@@ -349,8 +689,15 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /issues <repo> — List issues
   /branches <repo> — List branches
 
+**Agents**
+  /spawn <profile> <task> — Spawn a subagent to handle a task
+  /agents — List recent subagent runs
+  /msg <agent-id> <message> — Send a message to a subagent
+
 **Memory & Knowledge**
   /recall [project:]<query> — Search memories & learnings
+  /learn <instruction> — Teach a rule or preference
+  /teach <instruction> — Teach with auto-classification (personality/rule/preference)
   /repos — List registered repositories
   /machines — Show orchestrator machines
   /sync-repos — Sync GitHub repos into registry

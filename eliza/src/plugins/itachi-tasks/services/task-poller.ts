@@ -63,8 +63,9 @@ export class TaskPollerService extends Service {
       ? `Task failed on project "${task.project}": ${task.description.substring(0, 100)}. Error: ${task.error_message?.substring(0, 200) || 'unknown'}. Consider: what prerequisites or validations could prevent this failure?`
       : `Task succeeded on project "${task.project}": ${task.description.substring(0, 100)}. ${task.result_summary?.substring(0, 200) || ''}`;
 
+    let newLesson: any = null;
     try {
-      await memoryService.storeMemory({
+      newLesson = await memoryService.storeMemory({
         project: task.project,
         category: 'task_lesson',
         content: `Task: ${task.description}\nOutcome: ${outcome}\nFiles: ${(task.files_changed || []).join(', ') || 'none'}`,
@@ -80,6 +81,39 @@ export class TaskPollerService extends Service {
       this.runtime.logger.info(`[poller] Stored ${isFailure ? 'failure' : 'success'} lesson for task ${task.id.substring(0, 8)}`);
     } catch (err: unknown) {
       this.runtime.logger.error(`[poller] Failed to store lesson:`, err instanceof Error ? err.message : String(err));
+    }
+
+    // Reinforce lessons that were in context for this task
+    try {
+      const contextLessons = await memoryService.searchMemories(
+        task.description.substring(0, 200),
+        task.project,
+        5,
+        undefined,
+        'task_lesson',
+      );
+      for (const cl of contextLessons) {
+        if (cl.id === newLesson?.id) continue; // skip the one we just stored
+        try {
+          const currentConf = (cl.metadata as Record<string, unknown>)?.confidence;
+          const confNum = typeof currentConf === 'number' ? currentConf : 0.5;
+          if (isFailure) {
+            // Reduce confidence for lessons that were in context during a failure
+            await memoryService.reinforceMemory(cl.id, {
+              confidence: Math.max(confNum * 0.85, 0.1),
+              last_outcome: 'failure',
+            });
+          } else {
+            // Boost confidence for lessons in context during success
+            await memoryService.reinforceMemory(cl.id, {
+              confidence: Math.min(confNum + 0.05, 0.99),
+              last_outcome: 'success',
+            });
+          }
+        } catch {}
+      }
+    } catch (err) {
+      this.runtime.logger.warn(`[poller] Failed to reinforce context lessons: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

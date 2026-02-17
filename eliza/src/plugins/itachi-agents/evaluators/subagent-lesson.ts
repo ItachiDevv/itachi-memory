@@ -52,6 +52,27 @@ export const subagentLessonEvaluator: Evaluator = {
           const lesson = await extractLesson(runtime, run.task, run.result);
           if (lesson) {
             await profileService.storeLessonViaMemoryService(runtime, run.agent_profile_id, lesson);
+
+            // Cross-agent sharing: store in shared task_lesson pool
+            try {
+              const memoryService = runtime.getService('itachi-memory') as any;
+              if (memoryService?.storeMemory) {
+                await memoryService.storeMemory({
+                  project: 'general',
+                  category: 'task_lesson',
+                  content: `[Subagent: ${run.agent_profile_id}] ${lesson}`,
+                  summary: lesson,
+                  files: [],
+                  metadata: {
+                    source: 'subagent',
+                    source_agent: run.agent_profile_id,
+                    confidence: 0.7,
+                    outcome: 'success',
+                  },
+                });
+              }
+            } catch {}
+
             extractedCount++;
           }
 

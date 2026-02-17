@@ -221,6 +221,7 @@ export const createTaskAction: Action = {
         // Handle multiple tasks (e.g. "create tasks for lotitachi and elizapets")
         if (parsed.length > 1) {
           const results = [];
+          let rlmWarnings: string[] = [];
           for (const task of parsed) {
             const telegramUserId = (message.content as Record<string, unknown>).telegram_user_id as number || 0;
             const telegramChatId = (message.content as Record<string, unknown>).telegram_chat_id as number
@@ -228,6 +229,33 @@ export const createTaskAction: Action = {
 
             // Enrich each task with relevant lessons from previous tasks
             const enrichedDesc = await enrichWithLessons(runtime, task.project, task.description);
+
+            // Consult RLM for recommendations
+            try {
+              const rlm = runtime.getService('rlm') as any;
+              if (rlm?.getRecommendations) {
+                const recs = await rlm.getRecommendations(task.project, task.description);
+                if (recs.warnings?.length > 0) rlmWarnings.push(...recs.warnings);
+              }
+            } catch {}
+
+            // Check for auto-delegation opportunity
+            try {
+              const profileService = runtime.getService('itachi-agent-profiles') as any;
+              if (profileService) {
+                const profiles = await profileService.listProfiles?.();
+                if (Array.isArray(profiles)) {
+                  const descLower = task.description.toLowerCase();
+                  const match = profiles.find((p: any) => {
+                    const keywords = (p.delegation_keywords || []) as string[];
+                    return keywords.some((k: string) => descLower.includes(k));
+                  });
+                  if (match) {
+                    rlmWarnings.push(`Tip: "${match.name}" agent may be suited for "${task.project}". Use /spawn ${match.id} to delegate.`);
+                  }
+                }
+              }
+            } catch {}
 
             const created = await taskService.createTask({
               description: enrichedDesc,
@@ -248,12 +276,16 @@ export const createTaskAction: Action = {
             results.push({ id: created.id.substring(0, 8), title: generateTaskTitle(task.description), project: task.project, description: task.description });
           }
 
+          // Deduplicate RLM warnings
+          rlmWarnings = [...new Set(rlmWarnings)];
+          const warningText = rlmWarnings.length > 0 ? `\n\nHeads up:\n${rlmWarnings.map(w => `• ${w}`).join('\n')}` : '';
+
           const queuedCount = await taskService.getQueuedCount();
           const machineLabel = targetMachine || 'auto-dispatch';
           if (callback) {
             const lines = results.map((r, i) => `${i + 1}. [${r.id}] ${r.title} — ${r.project}: ${r.description}`);
             await callback({
-              text: `${results.length} tasks QUEUED (not started yet).\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nThese tasks are waiting in the queue. I'll notify you as they actually complete.`,
+              text: `${results.length} tasks QUEUED (not started yet).\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nThese tasks are waiting in the queue. I'll notify you as they actually complete.${warningText}`,
             });
           }
 
@@ -282,6 +314,36 @@ export const createTaskAction: Action = {
       // Inject relevant lessons from previous tasks into the description
       const enrichedDescription = await enrichWithLessons(runtime, project, description);
 
+      // Consult RLM for recommendations
+      let rlmWarnings: string[] = [];
+      try {
+        const rlm = runtime.getService('rlm') as any;
+        if (rlm?.getRecommendations) {
+          const recs = await rlm.getRecommendations(project, description);
+          rlmWarnings = recs.warnings || [];
+        }
+      } catch {}
+
+      // Check for auto-delegation opportunity
+      try {
+        const profileService = runtime.getService('itachi-agent-profiles') as any;
+        if (profileService) {
+          const profiles = await profileService.listProfiles?.();
+          if (Array.isArray(profiles)) {
+            const descLower = description.toLowerCase();
+            const match = profiles.find((p: any) => {
+              const keywords = (p.delegation_keywords || []) as string[];
+              return keywords.some((k: string) => descLower.includes(k));
+            });
+            if (match) {
+              rlmWarnings.push(`Tip: "${match.name}" agent may be suited for this. Use /spawn ${match.id} to delegate.`);
+            }
+          }
+        }
+      } catch {}
+
+      const warningText = rlmWarnings.length > 0 ? `\n\nHeads up:\n${rlmWarnings.map((w: string) => `• ${w}`).join('\n')}` : '';
+
       const params: CreateTaskParams = {
         description: enrichedDescription,
         project,
@@ -306,7 +368,7 @@ export const createTaskAction: Action = {
 
       if (callback) {
         await callback({
-          text: `Task QUEUED (not started yet).\n\nID: ${shortId} (${title})\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.`,
+          text: `Task QUEUED (not started yet).\n\nID: ${shortId} (${title})\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.${warningText}`,
         });
       }
 

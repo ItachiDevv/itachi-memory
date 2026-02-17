@@ -247,6 +247,14 @@ function httpPost(url, body) {
             summary: summary,
             duration_ms: durationMs
         });
+
+        // Also contribute lessons directly to the task_lesson pool
+        try {
+            await httpPost(sessionApi + '/contribute-lessons', {
+                conversation_text: conversationText,
+                project: project,
+            });
+        } catch(e) {}
     } catch(e) {}
 })();
 " "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" 2>/dev/null &
