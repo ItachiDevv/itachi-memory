@@ -225,11 +225,22 @@ export function checkEngineAuth(engine: string): { valid: boolean; error?: strin
         }
     }
 
-    // 1. Check wrapper exists (sessions spawn wrapper, not bare CLI)
-    try {
-        execSync(`${wrapper} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
-    } catch {
-        return { valid: false, error: `${engine}: wrapper "${wrapper}" not found in PATH` };
+    // 1. Check wrapper exists — look in ~/.claude/ (where wrappers live) and PATH
+    const homeDir = os.homedir();
+    const claudeDir = path.join(homeDir, '.claude');
+    const wrapperPaths = [
+        path.join(claudeDir, wrapper),                          // ~/.claude/itachig (unix)
+        path.join(claudeDir, `${wrapper}.cmd`),                 // ~/.claude/itachig.cmd (windows)
+        path.join(claudeDir, `${wrapper}.ps1`),                 // ~/.claude/itachig.ps1 (windows)
+    ];
+    const wrapperExists = wrapperPaths.some(p => fs.existsSync(p));
+    if (!wrapperExists) {
+        // Also try PATH as fallback
+        try {
+            execSync(`${wrapper} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
+        } catch {
+            return { valid: false, error: `${engine}: wrapper "${wrapper}" not found in ~/.claude/ or PATH` };
+        }
     }
 
     // 2. Engine-specific auth checks
@@ -263,7 +274,6 @@ export function checkEngineAuth(engine: string): { valid: boolean; error?: strin
         // We can't easily test subscription auth non-interactively (gemini auth status
         // can fail headlessly even when subscription is valid), so check that EITHER
         // OAuth creds exist OR GEMINI_API_KEY is available as fallback.
-        const homeDir = os.homedir();
         const oauthCreds = path.join(homeDir, '.gemini', 'oauth_creds.json');
         if (fs.existsSync(oauthCreds)) {
             return { valid: true };
