@@ -7,7 +7,7 @@ import * as os from 'os';
 import { config } from './config';
 import { startRunner, stopRunner, getActiveCount, getActiveTasks } from './task-runner';
 import { checkClaudeAuth, checkEngineAuth } from './session-manager';
-import { getSupabase } from './supabase-client';
+import { getSupabase, fetchMachineConfig } from './supabase-client';
 
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3001', 10);
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -119,9 +119,26 @@ async function triggerRepoSync(): Promise<void> {
     }
 }
 
+async function syncRemoteEngineConfig(): Promise<void> {
+    try {
+        const remote = await fetchMachineConfig(config.machineId);
+        if (remote?.engine_priority?.length) {
+            const current = config.enginePriority.join(',');
+            const next = remote.engine_priority.join(',');
+            if (current !== next) {
+                console.log(`[config] Engine priority updated: ${current} → ${next}`);
+                (config as any).enginePriority = remote.engine_priority;
+            }
+        }
+    } catch {
+        // Best-effort, non-blocking — don't log noise on every heartbeat
+    }
+}
+
 function startHeartbeat(): void {
     heartbeatTimer = setInterval(() => {
         sendHeartbeat().catch(() => {});
+        syncRemoteEngineConfig().catch(() => {});
         triggerRepoSync().catch(() => {});
     }, HEARTBEAT_INTERVAL_MS);
 }

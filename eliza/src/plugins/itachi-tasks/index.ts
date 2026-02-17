@@ -66,6 +66,7 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'recall', description: 'Search memories — /recall <query>' },
         { command: 'repos', description: 'List registered repositories' },
         { command: 'machines', description: 'Show orchestrator machines' },
+        { command: 'engines', description: 'View/update engine priorities — /engines [machine] [engines]' },
         { command: 'sync_repos', description: 'Sync GitHub repos into registry' },
         { command: 'close_done', description: 'Delete all completed task topics' },
         { command: 'close_failed', description: 'Delete all failed task topics' },

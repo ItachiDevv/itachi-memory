@@ -13,8 +13,8 @@ import { stripBotMention } from '../utils/telegram.js';
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /recall, /repos, /machines, /sync_repos, /close_done, /close_failed, /feedback, /learn, /teach, /spawn, /agents, /msg Telegram commands',
-  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'spawn agent', 'list agents', 'message agent'],
+  description: 'Handle /recall, /repos, /machines, /engines, /sync_repos, /close_done, /close_failed, /feedback, /learn, /teach, /spawn, /agents, /msg Telegram commands',
+  similes: ['recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'spawn agent', 'list agents', 'message agent', 'engine priority', 'show engines', 'set engines'],
   examples: [
     [
       { name: 'user', content: { text: '/recall auth middleware changes' } },
@@ -52,6 +52,7 @@ export const telegramCommandsAction: Action = {
       text.startsWith('/spawn ') || text === '/agents' ||
       text.startsWith('/msg ') ||
       text === '/repos' || text === '/machines' ||
+      text === '/engines' || text.startsWith('/engines ') ||
       text === '/sync-repos' || text === '/sync_repos' ||
       text === '/close-done' || text === '/close_done' || text === '/close_finished' ||
       text === '/close-failed' || text === '/close_failed';
@@ -115,6 +116,11 @@ export const telegramCommandsAction: Action = {
       // /machines
       if (text === '/machines') {
         return await handleMachines(runtime, callback);
+      }
+
+      // /engines [machine] [engine1,engine2,...]
+      if (text === '/engines' || text.startsWith('/engines ')) {
+        return await handleEngines(runtime, text, callback);
       }
 
       // /sync-repos or /sync_repos
@@ -215,6 +221,69 @@ async function handleMachines(
   }
   const machines = await registry.getAllMachines();
   return { success: true, data: { machines } };
+}
+
+async function handleEngines(
+  runtime: IAgentRuntime,
+  text: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const registry = runtime.getService<MachineRegistryService>('machine-registry');
+  if (!registry) {
+    if (callback) await callback({ text: 'Machine registry service not available.' });
+    return { success: false, error: 'Machine registry service not available' };
+  }
+
+  const args = text.substring('/engines'.length).trim();
+
+  // No args: list all machines with their engine priorities
+  if (!args) {
+    const machines = await registry.getAllMachines();
+    if (machines.length === 0) {
+      if (callback) await callback({ text: 'No machines registered.' });
+      return { success: true, data: { machines: [] } };
+    }
+
+    const lines = machines.map((m, i) => {
+      const name = m.display_name || m.machine_id;
+      const engines = (m.engine_priority || []).join(' → ') || '(none)';
+      const status = m.status || 'unknown';
+      return `${i + 1}. ${name} (${m.machine_id}) — ${status}\n   Engines: ${engines}`;
+    });
+
+    if (callback) await callback({ text: `Machine engine priorities:\n\n${lines.join('\n\n')}` });
+    return { success: true, data: { machines } };
+  }
+
+  // With args: /engines <machine> <engine1,engine2,...>
+  const match = args.match(/^(\S+)\s+(\S+)$/);
+  if (!match) {
+    if (callback) await callback({
+      text: 'Usage:\n  /engines — list all machines with engine priorities\n  /engines <machine> <engine1,engine2> — update engine priority\n\nExample: /engines itachi-m1 gemini,claude',
+    });
+    return { success: false, error: 'Invalid format' };
+  }
+
+  const [, machineInput, engineStr] = match;
+  const { machine } = await registry.resolveMachine(machineInput);
+  if (!machine) {
+    if (callback) await callback({ text: `Machine "${machineInput}" not found.` });
+    return { success: false, error: 'Machine not found' };
+  }
+
+  const validEngines = ['claude', 'codex', 'gemini'];
+  const engines = engineStr.split(',').map(e => e.trim().toLowerCase()).filter(e => validEngines.includes(e));
+  if (engines.length === 0) {
+    if (callback) await callback({ text: `No valid engines in "${engineStr}". Valid: claude, codex, gemini` });
+    return { success: false, error: 'No valid engines' };
+  }
+
+  const updated = await registry.updateEnginePriority(machine.machine_id, engines);
+  const name = updated.display_name || updated.machine_id;
+  if (callback) await callback({
+    text: `Updated ${name} engine priority: ${engines.join(' → ')}\n\nThe orchestrator will pick this up within 30s.`,
+  });
+  return { success: true, data: { machine_id: machine.machine_id, engine_priority: engines } };
 }
 
 async function handleSyncRepos(
@@ -700,6 +769,7 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /teach <instruction> — Teach with auto-classification (personality/rule/preference)
   /repos — List registered repositories
   /machines — Show orchestrator machines
+  /engines [machine] [engines] — View/update engine priorities
   /sync-repos — Sync GitHub repos into registry
 
 **Reminders**

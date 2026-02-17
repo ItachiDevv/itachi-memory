@@ -67,10 +67,13 @@ async function runTask(task: Task): Promise<void> {
 
     // Try engines in priority order — use first one with valid auth
     let selectedEngine: string | null = null;
-    for (const engine of config.enginePriority) {
+    let engineIdx = 0;
+    for (let i = 0; i < config.enginePriority.length; i++) {
+        const engine = config.enginePriority[i];
         const auth = checkEngineAuth(engine);
         if (auth.valid) {
             selectedEngine = engine;
+            engineIdx = i;
             break;
         }
         console.log(`[runner] Engine "${engine}" auth failed: ${auth.error} — trying next`);
@@ -84,47 +87,75 @@ async function runTask(task: Task): Promise<void> {
         console.log(`[runner] Fell back to engine "${selectedEngine}" for task ${shortId}`);
     }
 
-    // Spawn session with selected engine — temporarily override config.defaultEngine
-    // so spawnSession routes to the correct engine
-    const origEngine = config.defaultEngine;
-    (config as any).defaultEngine = selectedEngine;
-    const { process: proc, result: resultPromise } = spawnSession(task, workspacePath, classification);
-    (config as any).defaultEngine = origEngine;
+    // Engine retry loop — if the session fails with a retriable error (auth/rate-limit),
+    // try the next engine in priority order before marking the task as failed.
+    let result: Awaited<ReturnType<typeof spawnSession>['result']>;
 
-    // Set up timeout
-    const timeoutHandle = setTimeout(() => {
-        console.log(`[runner] Task ${shortId} timed out, killing process`);
-        proc.kill('SIGTERM');
+    while (true) {
+        // Spawn session with selected engine — temporarily override config.defaultEngine
+        const origEngine = config.defaultEngine;
+        (config as any).defaultEngine = selectedEngine;
+        const { process: proc, result: resultPromise } = spawnSession(task, workspacePath, classification);
+        (config as any).defaultEngine = origEngine;
 
-        // Give it 5s to die gracefully, then force kill
-        setTimeout(() => {
-            if (!proc.killed) {
-                proc.kill('SIGKILL');
-            }
-        }, 5000);
+        // Set up timeout
+        const timeoutHandle = setTimeout(() => {
+            console.log(`[runner] Task ${shortId} timed out, killing process`);
+            proc.kill('SIGTERM');
 
-        updateTask(task.id, {
-            status: 'timeout',
-            error_message: `Task exceeded timeout of ${config.taskTimeoutMs / 1000}s`,
-            completed_at: new Date().toISOString(),
+            setTimeout(() => {
+                if (!proc.killed) {
+                    proc.kill('SIGKILL');
+                }
+            }, 5000);
+
+            updateTask(task.id, {
+                status: 'timeout',
+                error_message: `Task exceeded timeout of ${config.taskTimeoutMs / 1000}s`,
+                completed_at: new Date().toISOString(),
+            });
+        }, config.taskTimeoutMs);
+
+        // Track active session
+        activeSessions.set(task.id, {
+            task,
+            workspacePath,
+            startedAt: new Date(),
+            timeoutHandle,
+            classification,
+            process: proc,
         });
-    }, config.taskTimeoutMs);
 
-    // Track active session
-    activeSessions.set(task.id, {
-        task,
-        workspacePath,
-        startedAt: new Date(),
-        timeoutHandle,
-        classification,
-        process: proc,
-    });
+        // Wait for completion
+        result = await resultPromise;
+        clearTimeout(timeoutHandle);
 
-    // Wait for completion
-    let result = await resultPromise;
+        // Check if we should retry with the next engine
+        if (result.retriable) {
+            // Find next engine in priority list
+            let nextEngine: string | null = null;
+            for (let i = engineIdx + 1; i < config.enginePriority.length; i++) {
+                const auth = checkEngineAuth(config.enginePriority[i]);
+                if (auth.valid) {
+                    nextEngine = config.enginePriority[i];
+                    engineIdx = i;
+                    break;
+                }
+            }
 
-    // Cleanup timeout (may be re-set if we resume)
-    clearTimeout(timeoutHandle);
+            if (nextEngine) {
+                console.log(`[runner] Engine "${selectedEngine}" failed with retriable error for task ${shortId}, falling back to "${nextEngine}"`);
+                streamToEliza(task.id, {
+                    type: 'text',
+                    text: `Engine "${selectedEngine}" failed (${result.resultText.substring(0, 100)}). Retrying with "${nextEngine}"...`,
+                });
+                selectedEngine = nextEngine;
+                continue; // Retry with next engine
+            }
+        }
+
+        break; // Success or non-retriable error — stop retrying
+    }
 
     // --- Unlimited conversation loop ---
     // Detect if the session needs user input and loop until it completes naturally

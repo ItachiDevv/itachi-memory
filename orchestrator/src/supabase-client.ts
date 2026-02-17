@@ -69,6 +69,18 @@ export async function recoverStuckTasks(): Promise<number> {
     return data.length;
 }
 
+export async function fetchMachineConfig(machineId: string): Promise<{ engine_priority?: string[] } | null> {
+    const sb = getSupabase();
+    const { data, error } = await sb
+        .from('machine_registry')
+        .select('engine_priority')
+        .eq('machine_id', machineId)
+        .single();
+
+    if (error || !data) return null;
+    return data as { engine_priority?: string[] };
+}
+
 export async function notifyTaskCompletion(taskId: string): Promise<void> {
     try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };

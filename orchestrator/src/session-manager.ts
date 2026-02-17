@@ -143,6 +143,33 @@ export interface SessionResult {
     durationMs: number;
     isError: boolean;
     exitCode: number;
+    /** True if the error was auth/rate-limit related and the task should retry with next engine */
+    retriable: boolean;
+}
+
+/**
+ * Detect if an error is retriable (auth expired, rate limit, billing).
+ * Used by task-runner to decide whether to fall back to the next engine.
+ */
+export function isRetriableError(resultText: string, stderrText: string, exitCode: number): boolean {
+    if (exitCode === 0) return false;
+    const combined = `${resultText}\n${stderrText}`.toLowerCase();
+    const patterns = [
+        'oauth token has expired',
+        'authentication_error',
+        'rate_limit',
+        'rate limit',
+        'too many requests',
+        'overloaded',
+        '429',
+        'billing',
+        'insufficient_quota',
+        'quota exceeded',
+        'api key',
+        'invalid api key',
+        'unauthorized',
+    ];
+    return patterns.some(p => combined.includes(p));
 }
 
 export function buildPrompt(task: Task, classification?: TaskClassification): string {
@@ -212,24 +239,98 @@ export function checkClaudeAuth(): { valid: boolean; error?: string } {
 }
 
 /**
- * Check auth for any engine. Only Claude has a dedicated auth check;
- * codex/gemini are assumed valid if the CLI binary exists.
+ * Check auth for any engine.
+ * - Claude: runs `claude auth status`
+ * - Codex: checks CLI binary + OPENAI_API_KEY env/api-keys file
+ * - Gemini: checks CLI binary + tries `gemini auth status`, falls back to GEMINI_API_KEY
  */
 export function checkEngineAuth(engine: string): { valid: boolean; error?: string } {
     if (engine === 'claude') {
         return checkClaudeAuth();
     }
-    // For codex/gemini, just check the CLI binary is available
-    const cli = engine === 'codex' ? 'codex' : engine === 'gemini' ? 'gemini' : engine;
+
+    if (engine === 'codex') {
+        return checkCodexAuth();
+    }
+
+    if (engine === 'gemini') {
+        return checkGeminiAuth();
+    }
+
+    // Unknown engine — just check CLI binary
     try {
-        execSync(`${cli} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
+        execSync(`${engine} --version`, { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
         return { valid: true };
+    } catch {
+        return { valid: false, error: `${engine} CLI not found` };
+    }
+}
+
+function checkCodexAuth(): { valid: boolean; error?: string } {
+    // 1. Check CLI binary exists
+    try {
+        execSync('codex --version', { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
     } catch {
         return {
             valid: false,
-            error: `${cli} CLI not found. Install it: npm install -g ${cli === 'codex' ? '@openai/codex' : cli === 'gemini' ? '@anthropic-ai/gemini-cli' : cli}`,
+            error: 'Codex CLI not found. Install it: npm install -g @openai/codex',
         };
     }
+
+    // 2. Check OPENAI_API_KEY — from env, or from api-keys file
+    if (process.env.OPENAI_API_KEY) {
+        return { valid: true };
+    }
+    const apiKeys = loadApiKeys();
+    if (apiKeys.OPENAI_API_KEY) {
+        return { valid: true };
+    }
+
+    return {
+        valid: false,
+        error: 'Codex CLI found but no OPENAI_API_KEY in env or ~/.itachi-api-keys',
+    };
+}
+
+function checkGeminiAuth(): { valid: boolean; error?: string } {
+    // 1. Check CLI binary exists
+    try {
+        execSync('gemini --version', { encoding: 'utf8', timeout: 10000, stdio: 'pipe' });
+    } catch {
+        return {
+            valid: false,
+            error: 'Gemini CLI not found. Install it: npm install -g @anthropic-ai/gemini-cli',
+        };
+    }
+
+    // 2. Try `gemini auth status` for subscription auth (Google AI Pro/Ultra)
+    try {
+        const output = execSync('gemini auth status', {
+            encoding: 'utf8',
+            timeout: 10000,
+            stdio: 'pipe',
+        }).trim();
+        // If it doesn't throw, subscription auth is active
+        if (output && !output.toLowerCase().includes('not logged in') && !output.toLowerCase().includes('not authenticated')) {
+            return { valid: true };
+        }
+    } catch {
+        // `gemini auth status` failed or not supported — fall through to API key check
+    }
+
+    // 3. Fall back to GEMINI_API_KEY env var or api-keys file
+    if (process.env.GEMINI_API_KEY) {
+        return { valid: true };
+    }
+    const apiKeys = loadApiKeys();
+    if (apiKeys.GEMINI_API_KEY) {
+        return { valid: true };
+    }
+
+    return {
+        valid: false,
+        error: 'Gemini CLI found but not authenticated. Run: gemini auth login (or set GEMINI_API_KEY)',
+    };
 }
 
 /**
@@ -338,12 +439,14 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
                     durationMs,
                     isError: true,
                     exitCode,
+                    retriable: true,
                 });
                 return;
             }
 
             // Keep full text — no truncation, let downstream decide how to display
             const trimmedResult = resultText.trim();
+            const retriable = exitCode !== 0 && isRetriableError(trimmedResult, stderrBuf, exitCode);
 
             resolve({
                 sessionId: null,
@@ -352,6 +455,7 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
                 durationMs,
                 isError: exitCode !== 0,
                 exitCode,
+                retriable,
             });
         });
 
@@ -364,6 +468,7 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
                 durationMs: 0,
                 isError: true,
                 exitCode: 1,
+                retriable: false,
             });
         });
     });
@@ -442,12 +547,13 @@ export function resumeClaudeSession(
                 costUsd: 0, durationMs,
                 isError: exitCode !== 0,
                 exitCode,
+                retriable: false, // Resumes don't retry with different engines
             });
         });
 
         proc.on('error', (err) => {
             console.error(`[session] Resume spawn error for task ${shortId}:`, err.message);
-            resolve({ sessionId: null, resultText: `Spawn error: ${err.message}`, costUsd: 0, durationMs: 0, isError: true, exitCode: 1 });
+            resolve({ sessionId: null, resultText: `Spawn error: ${err.message}`, costUsd: 0, durationMs: 0, isError: true, exitCode: 1, retriable: false });
         });
     });
 
@@ -561,10 +667,14 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
             });
         }
 
+        let codexStderrBuf = '';
         if (proc.stderr) {
             proc.stderr.on('data', (data) => {
                 const msg = data.toString().trim();
-                if (msg) console.error(`[session:${task.id.substring(0, 8)}:codex] stderr: ${msg}`);
+                if (msg) {
+                    codexStderrBuf += msg + '\n';
+                    console.error(`[session:${task.id.substring(0, 8)}:codex] stderr: ${msg}`);
+                }
             });
         }
 
@@ -575,13 +685,17 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
             const costUsd = (totalInputTokens * 2.5 / 1_000_000) + (totalOutputTokens * 10 / 1_000_000);
             console.log(`[session] Codex exited with code ${exitCode} for task ${task.id.substring(0, 8)} (${totalInputTokens + totalOutputTokens} tokens, ~$${costUsd.toFixed(2)})`);
 
+            const hasError = isError || exitCode !== 0;
+            const retriable = hasError && isRetriableError(resultText, codexStderrBuf, exitCode);
+
             resolve({
                 sessionId: threadId,
                 resultText: resultText || '(no output)',
                 costUsd,
                 durationMs,
-                isError: isError || exitCode !== 0,
+                isError: hasError,
                 exitCode,
+                retriable,
             });
         });
 
@@ -594,6 +708,7 @@ export function spawnCodexSession(task: Task, workspacePath: string, classificat
                 durationMs: 0,
                 isError: true,
                 exitCode: 1,
+                retriable: false,
             });
         });
     });
@@ -669,6 +784,7 @@ export function spawnGeminiSession(task: Task, workspacePath: string, classifica
             console.log(`[session] Gemini exited with code ${exitCode} for task ${shortId} (${Math.round(durationMs / 1000)}s)`);
 
             const trimmedResult = resultText.trim();
+            const retriable = exitCode !== 0 && isRetriableError(trimmedResult, stderrBuf, exitCode);
 
             resolve({
                 sessionId: null,
@@ -677,6 +793,7 @@ export function spawnGeminiSession(task: Task, workspacePath: string, classifica
                 durationMs,
                 isError: exitCode !== 0,
                 exitCode,
+                retriable,
             });
         });
 
@@ -689,6 +806,7 @@ export function spawnGeminiSession(task: Task, workspacePath: string, classifica
                 durationMs: 0,
                 isError: true,
                 exitCode: 1,
+                retriable: false,
             });
         });
     });
