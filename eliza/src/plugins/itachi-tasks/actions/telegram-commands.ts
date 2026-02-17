@@ -237,19 +237,26 @@ async function handleCloseTopics(
   let deleted = 0;
   for (const task of withTopics) {
     const topicId = (task as any).telegram_topic_id;
-    // Telegram requires closing a topic before deleting it
-    await topicsService.closeTopic(topicId);
-    await new Promise(r => setTimeout(r, 500)); // Let Telegram propagate
-    let ok = false;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      ok = await topicsService.deleteTopic(topicId);
-      if (ok) break;
-      await new Promise(r => setTimeout(r, attempt * 1000));
-    }
-    if (ok) {
-      deleted++;
-      // Clear topic_id from task so it doesn't show up again
-      await taskService.updateTask(task.id, { telegram_topic_id: null } as any);
+    try {
+      // Reopen first (topics may have been renamed/closed, need open state for deletion)
+      await topicsService.reopenTopic(topicId);
+      await new Promise(r => setTimeout(r, 300));
+      // Close the topic (required before deletion)
+      await topicsService.closeTopic(topicId);
+      await new Promise(r => setTimeout(r, 1000)); // Let Telegram propagate
+      let ok = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        ok = await topicsService.deleteTopic(topicId);
+        if (ok) break;
+        await new Promise(r => setTimeout(r, attempt * 1500));
+      }
+      if (ok) {
+        deleted++;
+        // Clear topic_id from task so it doesn't show up again
+        await taskService.updateTask(task.id, { telegram_topic_id: null } as any);
+      }
+    } catch (err) {
+      runtime.logger.error(`[close-topics] Error deleting topic ${topicId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

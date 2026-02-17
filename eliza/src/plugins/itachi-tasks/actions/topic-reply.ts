@@ -130,51 +130,58 @@ export const topicReplyAction: Action = {
         return { success: true, data: { taskId: task.id, action: 'queued_input_pending' } };
       }
 
-      // Completed/failed/cancelled tasks: offer follow-up
+      // Completed/failed/cancelled tasks: auto-create follow-up from substantive messages
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
-        // Check if the user is requesting a follow-up explicitly
+        let followUpDesc: string | null = null;
         const lowerText = text.toLowerCase();
+
+        // Strip explicit prefix if present
         if (lowerText.startsWith('follow up:') || lowerText.startsWith('followup:') || lowerText.startsWith('follow-up:')) {
-          const followUpDesc = text.substring(text.indexOf(':') + 1).trim();
-          if (followUpDesc) {
-            const telegramUserId = (content.telegram_user_id as number) || task.telegram_user_id;
-            const telegramChatId = (content.telegram_chat_id as number) || task.telegram_chat_id;
-
-            const params: CreateTaskParams = {
-              description: followUpDesc,
-              project: task.project,
-              telegram_chat_id: telegramChatId,
-              telegram_user_id: telegramUserId,
-              repo_url: task.repo_url,
-              branch: task.branch,
-              assigned_machine: task.assigned_machine,
-            };
-
-            const newTask = await taskService.createTask(params);
-            const newShortId = newTask.id.substring(0, 8);
-            const queuedCount = await taskService.getQueuedCount();
-
-            // Create Telegram topic for the follow-up task
-            const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
-            if (topicsService) {
-              topicsService.createTopicForTask(newTask).catch((err) => {
-                runtime.logger.error(`[topic-reply] Failed to create topic for follow-up ${newShortId}: ${err instanceof Error ? err.message : String(err)}`);
-              });
-            }
-
-            if (callback) {
-              await callback({
-                text: `Follow-up task created!\n\nID: ${newShortId}\nProject: ${task.project}\nDescription: ${followUpDesc}\nQueue position: ${queuedCount}`,
-              });
-            }
-            return { success: true, data: { taskId: newTask.id, action: 'follow_up_created' } };
-          }
+          followUpDesc = text.substring(text.indexOf(':') + 1).trim();
+        } else if (text.split(/\s+/).length >= 3) {
+          // Substantive message (3+ words) → use as follow-up description
+          followUpDesc = text;
         }
 
+        if (followUpDesc) {
+          const telegramUserId = (content.telegram_user_id as number) || task.telegram_user_id;
+          const telegramChatId = (content.telegram_chat_id as number) || task.telegram_chat_id;
+
+          const params: CreateTaskParams = {
+            description: followUpDesc,
+            project: task.project,
+            telegram_chat_id: telegramChatId,
+            telegram_user_id: telegramUserId,
+            repo_url: task.repo_url,
+            branch: task.branch,
+            assigned_machine: task.assigned_machine,
+          };
+
+          const newTask = await taskService.createTask(params);
+          const newShortId = newTask.id.substring(0, 8);
+          const queuedCount = await taskService.getQueuedCount();
+
+          // Create Telegram topic for the follow-up task
+          const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+          if (topicsService) {
+            topicsService.createTopicForTask(newTask).catch((err) => {
+              runtime.logger.error(`[topic-reply] Failed to create topic for follow-up ${newShortId}: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+
+          if (callback) {
+            await callback({
+              text: `Follow-up task created!\n\nID: ${newShortId}\nProject: ${task.project}\nDescription: ${followUpDesc}\nQueue position: ${queuedCount}`,
+            });
+          }
+          return { success: true, data: { taskId: newTask.id, action: 'follow_up_created' } };
+        }
+
+        // Short/ambiguous message (1-2 words like "ok", "thanks") — ask for detail
         const statusLabel = task.status === 'completed' ? 'completed' : task.status;
         if (callback) {
           await callback({
-            text: `Task ${shortId} has already ${statusLabel}. To create a follow-up, reply with:\nfollow up: <description of what you need>`,
+            text: `Task ${shortId} has already ${statusLabel}. What would you like to do next? Describe the follow-up.`,
           });
         }
         return { success: true, data: { taskId: task.id, action: 'offered_follow_up' } };

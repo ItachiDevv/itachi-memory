@@ -240,6 +240,29 @@ export class TelegramTopicsService extends Service {
   }
 
   /**
+   * Reopen a closed topic. Needed before deleting topics that were renamed but closed.
+   */
+  async reopenTopic(topicId: number): Promise<boolean> {
+    if (!this.isEnabled() || !topicId) return false;
+
+    try {
+      const result = await this.apiCall('reopenForumTopic', {
+        chat_id: this.groupChatId,
+        message_thread_id: topicId,
+      });
+
+      if (!result.ok) {
+        this.runtime.logger.error(`reopenTopic ${topicId} failed: ${result.description || 'unknown'}`);
+      }
+
+      return result.ok;
+    } catch (error) {
+      this.runtime.logger.error('reopenTopic error:', error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
+  /**
    * Delete a topic entirely (removes it from the forum).
    */
   async deleteTopic(topicId: number): Promise<boolean> {

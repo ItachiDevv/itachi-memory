@@ -3,7 +3,7 @@ import { TaskService, type CreateTaskParams, generateTaskTitle } from '../servic
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { stripBotMention } from '../utils/telegram.js';
+import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 
 export const createTaskAction: Action = {
   name: 'CREATE_TASK',
@@ -61,6 +61,26 @@ export const createTaskAction: Action = {
     if (isGHQuery) return false;
     // Reject any slash command that isn't /task — they belong to other actions
     if (/^\/\S/.test(text) && !text.startsWith('/task')) return false;
+
+    // If message is in a Telegram topic linked to a task, defer to topic-reply
+    if (message.content?.source === 'telegram') {
+      try {
+        const threadId = await getTopicThreadId(runtime, message);
+        if (threadId) {
+          const taskService = runtime.getService<TaskService>('itachi-tasks');
+          if (taskService) {
+            const activeTasks = await taskService.getActiveTasks();
+            const recentTasks = await taskService.listTasks({ limit: 50 });
+            if ([...activeTasks, ...recentTasks].some(t => t.telegram_topic_id === threadId)) {
+              return false; // topic-reply handles task topic messages
+            }
+          }
+        }
+      } catch {
+        // Non-critical — fall through to normal validation
+      }
+    }
+
     const taskService = runtime.getService<TaskService>('itachi-tasks');
     return !!taskService;
   },

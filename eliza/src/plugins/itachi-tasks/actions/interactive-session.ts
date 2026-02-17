@@ -8,6 +8,7 @@ import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transc
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
   mac: 'mac', macbook: 'mac', apple: 'mac',
+  'windows-pc': 'windows', 'windows pc': 'windows',
   windows: 'windows', pc: 'windows', win: 'windows', desktop: 'windows',
   hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify',
 };
@@ -62,16 +63,19 @@ export const activeSessions = new Map<number, ActiveSession>();
 
 /**
  * Extract target machine name from text using aliases and SSH service targets.
+ * Returns the resolved target name and the matched alias text for clean stripping.
  */
-function extractTarget(text: string, sshService: SSHService): string | null {
+function extractTarget(text: string, sshService: SSHService): { target: string; matchedAlias: string } | null {
   const lower = text.toLowerCase();
-  for (const [alias, target] of Object.entries(MACHINE_ALIASES)) {
+  // Sort aliases longest-first so "windows-pc" matches before "windows"
+  const sorted = Object.entries(MACHINE_ALIASES).sort((a, b) => b[0].length - a[0].length);
+  for (const [alias, target] of sorted) {
     if (lower.includes(alias) && sshService.getTarget(target)) {
-      return target;
+      return { target, matchedAlias: alias };
     }
   }
   for (const name of sshService.getTargets().keys()) {
-    if (lower.includes(name)) return name;
+    if (lower.includes(name)) return { target: name, matchedAlias: name };
   }
   return null;
 }
@@ -79,12 +83,14 @@ function extractTarget(text: string, sshService: SSHService): string | null {
 /**
  * Extract the prompt/description from the message after stripping target and command prefix.
  */
-function extractPrompt(text: string, target: string): string {
+function extractPrompt(text: string, matchedAlias: string): string {
   // Strip /session or /chat prefix
   let prompt = text.replace(/^\/(session|chat)\s*/i, '').trim();
-  // Strip target name
-  const targetPattern = new RegExp(`\\b${target}\\b`, 'i');
-  prompt = prompt.replace(targetPattern, '').trim();
+  // Strip the full matched alias (e.g. "windows-pc", not just "windows")
+  const aliasPattern = new RegExp(matchedAlias.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+  prompt = prompt.replace(aliasPattern, '').trim();
+  // Strip leading hyphens/whitespace left over from alias removal
+  prompt = prompt.replace(/^[-\s]+/, '').trim();
   // Strip common NL prefixes
   prompt = prompt
     .replace(/^(?:on|to|and|then)\s+/i, '')
@@ -244,9 +250,9 @@ export const interactiveSessionAction: Action = {
       }
 
       const text = stripBotMention(message.content?.text || '');
-      const target = extractTarget(text, sshService);
+      const extracted = extractTarget(text, sshService);
 
-      if (!target) {
+      if (!extracted) {
         const available = [...sshService.getTargets().keys()].join(', ');
         if (callback) await callback({
           text: `Which machine? Available: ${available}\n\nUsage: /session <target> <prompt>`,
@@ -254,7 +260,8 @@ export const interactiveSessionAction: Action = {
         return { success: false, error: 'No target identified' };
       }
 
-      const prompt = extractPrompt(text, target);
+      const { target, matchedAlias } = extracted;
+      const prompt = extractPrompt(text, matchedAlias);
       const title = sessionTitle(prompt);
 
       // Create Telegram topic for this session (before repo resolution so we can send status)
