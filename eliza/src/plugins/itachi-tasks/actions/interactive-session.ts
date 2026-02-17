@@ -2,6 +2,7 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import { SSHService, type InteractiveSession } from '../services/ssh-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { stripBotMention } from '../utils/telegram.js';
+import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -24,6 +25,8 @@ export interface ActiveSession {
   target: string;
   handle: InteractiveSession;
   startedAt: number;
+  transcript: TranscriptEntry[];
+  project: string;
 }
 
 /** Global map of active sessions, keyed by topicId for fast lookup from evaluator */
@@ -168,27 +171,52 @@ export const interactiveSessionAction: Action = {
       // Generate a session ID
       const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
+      // Infer project name from repo path
+      const inferredProject = repoPath.split('/').pop() || 'unknown';
+
+      // Transcript buffer for this session — populated before handle is stored
+      const sessionTranscript: TranscriptEntry[] = [];
+
       // Spawn the interactive SSH session
       const handle = sshService.spawnInteractiveSession(
         target,
         sshCommand,
-        // onStdout — stream to topic
+        // onStdout — stream to topic + accumulate transcript
         (chunk: string) => {
+          sessionTranscript.push({ type: 'text', content: chunk, timestamp: Date.now() });
           topicsService.receiveChunk(sessionId, topicId, chunk).catch((err) => {
             runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
-        // onStderr — also stream to topic
+        // onStderr — also stream to topic + accumulate transcript
         (chunk: string) => {
+          sessionTranscript.push({ type: 'text', content: `[stderr] ${chunk}`, timestamp: Date.now() });
           topicsService.receiveChunk(sessionId, topicId, `[stderr] ${chunk}`).catch((err) => {
             runtime.logger.error(`[session] stderr stream error: ${err instanceof Error ? err.message : String(err)}`);
           });
         },
-        // onExit — notify in topic + clean up
+        // onExit — notify in topic + analyze transcript + clean up
         (code: number) => {
           topicsService.finalFlush(sessionId).then(() => {
             topicsService.sendToTopic(topicId, `\n--- Session ended (exit code: ${code}) ---`);
           }).catch(() => {});
+
+          // Analyze session transcript (fire-and-forget)
+          const session = activeSessions.get(topicId);
+          if (session && session.transcript.length > 0) {
+            analyzeAndStoreTranscript(runtime, session.transcript, {
+              source: 'session',
+              project: session.project,
+              sessionId: session.sessionId,
+              target: session.target,
+              description: prompt,
+              outcome: code === 0 ? 'completed' : `exited with code ${code}`,
+              durationMs: Date.now() - session.startedAt,
+            }).catch(err => {
+              runtime.logger.error(`[session] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+
           activeSessions.delete(topicId);
           runtime.logger.info(`[session] ${sessionId} exited with code ${code}`);
         },
@@ -208,6 +236,8 @@ export const interactiveSessionAction: Action = {
         target,
         handle,
         startedAt: Date.now(),
+        transcript: sessionTranscript,
+        project: inferredProject,
       });
 
       if (callback) {

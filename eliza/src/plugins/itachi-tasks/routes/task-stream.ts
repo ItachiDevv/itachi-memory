@@ -1,14 +1,18 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { TaskService, generateTaskTitle } from '../services/task-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
+import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 
 /** In-memory store for user input waiting to be consumed by orchestrator */
 export const pendingInputs: Map<string, Array<{ text: string; timestamp: number }>> = new Map();
 
+/** In-memory transcript buffer per task — accumulates all stream events for post-completion analysis */
+export const taskTranscripts = new Map<string, TranscriptEntry[]>();
+
 /** Guards against concurrent topic creation for the same task */
 const topicCreationLocks: Map<string, Promise<number | null>> = new Map();
 
-// Clean up stale inputs older than 30 minutes
+// Clean up stale inputs and transcripts older than 30 minutes
 setInterval(() => {
   const cutoff = Date.now() - 30 * 60 * 1000;
   for (const [taskId, inputs] of pendingInputs) {
@@ -17,6 +21,12 @@ setInterval(() => {
       pendingInputs.delete(taskId);
     } else {
       pendingInputs.set(taskId, filtered);
+    }
+  }
+  for (const [taskId, entries] of taskTranscripts) {
+    const lastEntry = entries[entries.length - 1];
+    if (!lastEntry || lastEntry.timestamp < cutoff) {
+      taskTranscripts.delete(taskId);
     }
   }
 }, 60_000);
@@ -113,6 +123,30 @@ export const taskStreamRoutes: Route[] = [
           }
         }
 
+        // Accumulate transcript entry
+        if (!taskTranscripts.has(id)) {
+          taskTranscripts.set(id, []);
+        }
+        const transcriptBuf = taskTranscripts.get(id)!;
+        const now = Date.now();
+
+        if (eventType === 'text' && text) {
+          transcriptBuf.push({ type: 'text', content: text, timestamp: now });
+        } else if (eventType === 'tool_use' && tool_use) {
+          transcriptBuf.push({
+            type: 'tool_use',
+            content: tool_use.name,
+            timestamp: now,
+            metadata: { input: tool_use.input },
+          });
+        } else if (eventType === 'result' && resultData) {
+          transcriptBuf.push({
+            type: 'result',
+            content: resultData.summary || (resultData.is_error ? 'failed' : 'completed'),
+            timestamp: now,
+          });
+        }
+
         // Format chunk text based on event type
         let chunk: string | null = null;
         if (eventType === 'text' && text) {
@@ -139,6 +173,21 @@ export const taskStreamRoutes: Route[] = [
           const title = generateTaskTitle(task.description);
           const statusLabel = resultData?.is_error ? '❌ FAILED' : '✅ DONE';
           await topicsService.closeTopic(topicId, `${statusLabel} | ${title} | ${task.project}`);
+
+          // Analyze transcript (fire-and-forget)
+          const transcript = taskTranscripts.get(id);
+          if (transcript && transcript.length > 0) {
+            analyzeAndStoreTranscript(rt, transcript, {
+              source: 'task',
+              project: task.project,
+              taskId: id,
+              description: task.description,
+              outcome: resultData?.is_error ? 'failed' : 'completed',
+            }).catch(err => {
+              rt.logger.error(`[task-stream] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+          taskTranscripts.delete(id);
         }
 
         res.json({ success: true, topicId });
@@ -175,7 +224,15 @@ export const taskStreamRoutes: Route[] = [
         if (!pendingInputs.has(id)) {
           pendingInputs.set(id, []);
         }
-        pendingInputs.get(id)!.push({ text: text.trim(), timestamp: Date.now() });
+        const trimmed = text.trim();
+        const ts = Date.now();
+        pendingInputs.get(id)!.push({ text: trimmed, timestamp: ts });
+
+        // Also record in transcript buffer
+        if (!taskTranscripts.has(id)) {
+          taskTranscripts.set(id, []);
+        }
+        taskTranscripts.get(id)!.push({ type: 'user_input', content: trimmed, timestamp: ts });
 
         res.json({ success: true, queued: pendingInputs.get(id)!.length });
       } catch (error) {

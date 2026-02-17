@@ -52,6 +52,8 @@ export const topicInputRelayEvaluator: Evaluator = {
       const session = activeSessions.get(threadId);
       if (session) {
         session.handle.write(text + '\n');
+        // Also record in transcript for post-session analysis
+        session.transcript.push({ type: 'user_input', content: text, timestamp: Date.now() });
         (message.content as Record<string, unknown>)._topicRelayQueued = true;
         runtime.logger.info(`[topic-relay] Piped input to session ${session.sessionId}: "${text.substring(0, 40)}"`);
         return;

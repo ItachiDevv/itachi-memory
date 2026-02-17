@@ -2,6 +2,7 @@ import { Service, type IAgentRuntime } from '@elizaos/core';
 import { TaskService, generateTaskTitle } from './task-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
+import { taskTranscripts } from '../routes/task-stream.js';
 
 /**
  * Polls for completed/failed tasks and sends Telegram notifications.
@@ -44,8 +45,12 @@ export class TaskPollerService extends Service {
 
   /**
    * Extract a management lesson from a completed/failed task and store it.
+   * Skipped if transcript-based analysis already handled it (tasks that streamed through our API).
    */
   private async extractLessonFromCompletion(task: any): Promise<void> {
+    // Skip if transcript-based analysis already happened (or will happen)
+    if (taskTranscripts.has(task.id)) return;
+
     const memoryService = this.runtime.getService('itachi-memory') as MemoryService | null;
     if (!memoryService) return;
 
