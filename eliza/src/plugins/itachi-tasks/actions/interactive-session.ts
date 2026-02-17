@@ -2,8 +2,14 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import { SSHService, type InteractiveSession } from '../services/ssh-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { TaskService } from '../services/task-service.js';
+import { MachineRegistryService } from '../services/machine-registry.js';
 import { stripBotMention } from '../utils/telegram.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
+import {
+  browsingSessionMap,
+  listRemoteDirectory,
+  formatDirectoryListing,
+} from '../utils/directory-browser.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -45,6 +51,25 @@ function stripAnsi(text: string): string {
     // Collapse excessive blank lines
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+// ── Engine wrapper resolution ────────────────────────────────────────
+const ENGINE_WRAPPERS: Record<string, string> = {
+  claude: 'itachi',
+  codex: 'itachic',
+  gemini: 'itachig',
+};
+
+async function resolveEngineCommand(target: string, runtime: IAgentRuntime): Promise<string> {
+  try {
+    const registry = runtime.getService<MachineRegistryService>('machine-registry');
+    if (!registry) return 'itachi';
+    const { machine } = await registry.resolveMachine(target);
+    if (!machine?.engine_priority?.length) return 'itachi';
+    return ENGINE_WRAPPERS[machine.engine_priority[0]] || 'itachi';
+  } catch {
+    return 'itachi';
+  }
 }
 
 // ── Active interactive sessions ──────────────────────────────────────
@@ -113,7 +138,7 @@ async function resolveRepoPath(
   topicId: number,
   topicsService: TelegramTopicsService,
   logger: IAgentRuntime['logger'],
-): Promise<{ repoPath: string; project: string }> {
+): Promise<{ repoPath: string; project: string; fallbackUsed: boolean }> {
   const fallback = DEFAULT_REPO_PATHS[target] || '~';
   const fallbackProject = fallback.split('/').pop() || 'unknown';
 
@@ -122,11 +147,11 @@ async function resolveRepoPath(
     repos = await taskService.getMergedRepos();
   } catch (err) {
     logger.warn(`[session] Failed to fetch repos: ${err instanceof Error ? err.message : String(err)}`);
-    return { repoPath: fallback, project: fallbackProject };
+    return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
   }
 
   if (repos.length === 0) {
-    return { repoPath: fallback, project: fallbackProject };
+    return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
   }
 
   // Match project name in prompt (case-insensitive word boundary)
@@ -137,7 +162,7 @@ async function resolveRepoPath(
   });
 
   if (!matched) {
-    return { repoPath: fallback, project: fallbackProject };
+    return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
   }
 
   const base = DEFAULT_REPO_BASES[target] || '~/repos';
@@ -153,7 +178,7 @@ async function resolveRepoPath(
     if (output !== 'MISSING' && output !== '') {
       // Use the actual directory name from disk (preserves real casing)
       logger.info(`[session] Repo ${matched.name} found at ${output} on ${target}`);
-      return { repoPath: output, project: matched.name };
+      return { repoPath: output, project: matched.name, fallbackUsed: false };
     }
 
     // Repo missing — try to clone if we have a URL
@@ -169,7 +194,7 @@ async function resolveRepoPath(
 
       if (clone.success) {
         await topicsService.sendToTopic(topicId, `Cloned ${matched.name} successfully.`);
-        return { repoPath: candidatePath, project: matched.name };
+        return { repoPath: candidatePath, project: matched.name, fallbackUsed: false };
       }
 
       logger.warn(`[session] Clone failed: ${clone.stderr || clone.stdout}`);
@@ -181,7 +206,7 @@ async function resolveRepoPath(
     logger.warn(`[session] SSH check failed for ${candidatePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  return { repoPath: fallback, project: fallbackProject };
+  return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
 }
 
 /**
@@ -190,6 +215,95 @@ async function resolveRepoPath(
 function sessionTitle(prompt: string, maxLen: number = 40): string {
   const words = prompt.split(/\s+/).slice(0, 6).join(' ');
   return words.length > maxLen ? words.substring(0, maxLen - 3) + '...' : words;
+}
+
+/**
+ * Spawn a CLI session in an existing Telegram topic.
+ * Returns the sessionId on success, or null on failure.
+ */
+export async function spawnSessionInTopic(
+  runtime: IAgentRuntime,
+  sshService: SSHService,
+  topicsService: TelegramTopicsService,
+  target: string,
+  repoPath: string,
+  prompt: string,
+  engineCommand: string,
+  topicId: number,
+  project?: string,
+): Promise<string | null> {
+  const escapedPrompt = prompt.replace(/'/g, "'\\''");
+  const sshCommand = `cd ${repoPath} && ${engineCommand} --ds '${escapedPrompt}'`;
+
+  await topicsService.sendToTopic(
+    topicId,
+    `Interactive session on ${target}\nProject: ${project || 'unknown'}\nPrompt: ${prompt}\nCommand: ${sshCommand}\n\nStarting...`,
+  );
+
+  const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const sessionTranscript: TranscriptEntry[] = [];
+
+  const handle = sshService.spawnInteractiveSession(
+    target,
+    sshCommand,
+    (chunk: string) => {
+      const clean = stripAnsi(chunk);
+      if (!clean) return;
+      sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
+      topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
+        runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    },
+    (chunk: string) => {
+      const clean = stripAnsi(chunk);
+      if (!clean) return;
+      sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
+      topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {
+        runtime.logger.error(`[session] stderr stream error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    },
+    (code: number) => {
+      topicsService.finalFlush(sessionId).then(() => {
+        topicsService.sendToTopic(topicId, `\n--- Session ended (exit code: ${code}) ---`);
+      }).catch(() => {});
+
+      const session = activeSessions.get(topicId);
+      if (session && session.transcript.length > 0) {
+        analyzeAndStoreTranscript(runtime, session.transcript, {
+          source: 'session',
+          project: session.project,
+          sessionId: session.sessionId,
+          target: session.target,
+          description: prompt,
+          outcome: code === 0 ? 'completed' : `exited with code ${code}`,
+          durationMs: Date.now() - session.startedAt,
+        }).catch(err => {
+          runtime.logger.error(`[session] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+
+      activeSessions.delete(topicId);
+      runtime.logger.info(`[session] ${sessionId} exited with code ${code}`);
+    },
+    600_000,
+  );
+
+  if (!handle) {
+    await topicsService.sendToTopic(topicId, 'Failed to start SSH session. Check SSH target configuration.');
+    return null;
+  }
+
+  activeSessions.set(topicId, {
+    sessionId,
+    topicId,
+    target,
+    handle,
+    startedAt: Date.now(),
+    transcript: sessionTranscript,
+    project: project || 'unknown',
+  });
+
+  return sessionId;
 }
 
 export const interactiveSessionAction: Action = {
@@ -281,89 +395,46 @@ export const interactiveSessionAction: Action = {
 
       // Resolve repo path — may SSH to check/clone
       const taskService = runtime.getService<TaskService>('itachi-tasks') as TaskService | undefined;
-      const { repoPath, project: resolvedProject } = taskService
+      const resolved = taskService
         ? await resolveRepoPath(target, prompt, sshService, taskService, topicId, topicsService, runtime.logger)
-        : { repoPath: DEFAULT_REPO_PATHS[target] || '~', project: (DEFAULT_REPO_PATHS[target] || '~').split('/').pop() || 'unknown' };
+        : { repoPath: DEFAULT_REPO_PATHS[target] || '~', project: (DEFAULT_REPO_PATHS[target] || '~').split('/').pop() || 'unknown', fallbackUsed: true };
 
-      // Escape single quotes in prompt for shell
-      const escapedPrompt = prompt.replace(/'/g, "'\\''");
-      const sshCommand = `cd ${repoPath} && itachi --ds '${escapedPrompt}'`;
+      const engineCmd = await resolveEngineCommand(target, runtime);
 
-      // Send initial message to topic
-      await topicsService.sendToTopic(topicId, `Interactive session on ${target}\nProject: ${resolvedProject}\nPrompt: ${prompt}\nCommand: ${sshCommand}\n\nStarting...`);
+      if (resolved.fallbackUsed) {
+        // Enter directory browsing mode — let user pick the right folder
+        const startPath = DEFAULT_REPO_BASES[target] || '~';
+        const { dirs } = await listRemoteDirectory(sshService, target, startPath);
+        const listing = formatDirectoryListing(startPath, dirs, target);
+        await topicsService.sendToTopic(topicId, listing);
 
-      // Generate a session ID
-      const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        browsingSessionMap.set(topicId, {
+          topicId,
+          target,
+          currentPath: startPath,
+          prompt,
+          engineCommand: engineCmd,
+          createdAt: Date.now(),
+          history: [startPath],
+          lastDirListing: dirs,
+        });
 
-      // Transcript buffer for this session — populated before handle is stored
-      const sessionTranscript: TranscriptEntry[] = [];
+        if (callback) await callback({
+          text: `Repo not found on ${target}. Browse directories in the topic to pick a folder.`,
+        });
+        return { success: true, data: { topicId, target, mode: 'browsing' } };
+      }
 
-      // Spawn the interactive SSH session
-      const handle = sshService.spawnInteractiveSession(
-        target,
-        sshCommand,
-        // onStdout — strip terminal noise, stream to topic + accumulate transcript
-        (chunk: string) => {
-          const clean = stripAnsi(chunk);
-          if (!clean) return; // skip empty chunks after stripping
-          sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
-          topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
-            runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
-          });
-        },
-        // onStderr — strip terminal noise, stream to topic + accumulate transcript
-        (chunk: string) => {
-          const clean = stripAnsi(chunk);
-          if (!clean) return;
-          sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
-          topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {
-            runtime.logger.error(`[session] stderr stream error: ${err instanceof Error ? err.message : String(err)}`);
-          });
-        },
-        // onExit — notify in topic + analyze transcript + clean up
-        (code: number) => {
-          topicsService.finalFlush(sessionId).then(() => {
-            topicsService.sendToTopic(topicId, `\n--- Session ended (exit code: ${code}) ---`);
-          }).catch(() => {});
-
-          // Analyze session transcript (fire-and-forget)
-          const session = activeSessions.get(topicId);
-          if (session && session.transcript.length > 0) {
-            analyzeAndStoreTranscript(runtime, session.transcript, {
-              source: 'session',
-              project: session.project,
-              sessionId: session.sessionId,
-              target: session.target,
-              description: prompt,
-              outcome: code === 0 ? 'completed' : `exited with code ${code}`,
-              durationMs: Date.now() - session.startedAt,
-            }).catch(err => {
-              runtime.logger.error(`[session] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
-            });
-          }
-
-          activeSessions.delete(topicId);
-          runtime.logger.info(`[session] ${sessionId} exited with code ${code}`);
-        },
-        600_000, // 10 min timeout
+      // Normal path — spawn immediately
+      const spawned = await spawnSessionInTopic(
+        runtime, sshService, topicsService, target,
+        resolved.repoPath, prompt, engineCmd, topicId, resolved.project,
       );
 
-      if (!handle) {
-        await topicsService.sendToTopic(topicId, 'Failed to start SSH session. Check SSH target configuration.');
+      if (!spawned) {
         if (callback) await callback({ text: `Failed to spawn SSH session on ${target}. Target may be misconfigured.` });
         return { success: false, error: 'Failed to spawn SSH session' };
       }
-
-      // Store in active sessions map (keyed by topicId for evaluator lookup)
-      activeSessions.set(topicId, {
-        sessionId,
-        topicId,
-        target,
-        handle,
-        startedAt: Date.now(),
-        transcript: sessionTranscript,
-        project: resolvedProject,
-      });
 
       if (callback) {
         await callback({
@@ -373,7 +444,7 @@ export const interactiveSessionAction: Action = {
 
       return {
         success: true,
-        data: { sessionId, topicId, target, prompt },
+        data: { sessionId: spawned, topicId, target, prompt },
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

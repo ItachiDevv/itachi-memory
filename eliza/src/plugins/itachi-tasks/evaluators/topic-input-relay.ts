@@ -1,9 +1,19 @@
 import type { Evaluator, IAgentRuntime, Memory } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
+import { SSHService } from '../services/ssh-service.js';
+import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { activeSessions } from '../actions/interactive-session.js';
+import { activeSessions, spawnSessionInTopic } from '../actions/interactive-session.js';
+import {
+  browsingSessionMap,
+  listRemoteDirectory,
+  formatDirectoryListing,
+  parseBrowsingInput,
+  cleanupStaleBrowsingSessions,
+  type BrowsingSession,
+} from '../utils/directory-browser.js';
 
 /**
  * Evaluator that intercepts messages in Telegram forum topics linked to tasks.
@@ -46,6 +56,21 @@ export const topicInputRelayEvaluator: Evaluator = {
 
     // Skip explicit commands
     if (text.startsWith('/')) return;
+
+    // Cleanup stale browsing sessions (cheap check)
+    cleanupStaleBrowsingSessions();
+
+    // Check for directory browsing session BEFORE active session check
+    const browsing = browsingSessionMap.get(threadId);
+    if (browsing) {
+      try {
+        await handleBrowsingInput(runtime, browsing, text, threadId);
+        (message.content as Record<string, unknown>)._topicRelayQueued = true;
+      } catch (err) {
+        runtime.logger.error(`[topic-relay] Browsing error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
 
     try {
       // Check if this topic belongs to an active interactive session first
@@ -127,4 +152,48 @@ async function extractCorrectionLesson(
     },
   });
   runtime.logger.info(`[topic-relay] Stored correction lesson for task ${shortId}`);
+}
+
+/**
+ * Handle user input in a directory browsing session.
+ * Parses the input, navigates directories, or starts the CLI session.
+ */
+async function handleBrowsingInput(
+  runtime: IAgentRuntime,
+  session: BrowsingSession,
+  text: string,
+  threadId: number,
+): Promise<void> {
+  const sshService = runtime.getService<SSHService>('ssh');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!sshService || !topicsService) return;
+
+  const parsed = parseBrowsingInput(text, session);
+
+  if (parsed.action === 'error') {
+    await topicsService.sendToTopic(threadId, parsed.message);
+    return;
+  }
+
+  if (parsed.action === 'navigate') {
+    const { dirs, error } = await listRemoteDirectory(sshService, session.target, parsed.path);
+    if (error) {
+      await topicsService.sendToTopic(threadId, `Error: ${error}\nStill at: ${session.currentPath}`);
+      return;
+    }
+    session.currentPath = parsed.path;
+    session.history.push(parsed.path);
+    session.lastDirListing = dirs;
+    await topicsService.sendToTopic(threadId, formatDirectoryListing(parsed.path, dirs, session.target));
+    return;
+  }
+
+  if (parsed.action === 'start') {
+    browsingSessionMap.delete(threadId);
+    await spawnSessionInTopic(
+      runtime, sshService, topicsService,
+      session.target, session.currentPath,
+      session.prompt, session.engineCommand, threadId,
+    );
+  }
 }
