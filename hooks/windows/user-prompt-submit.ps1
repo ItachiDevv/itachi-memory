@@ -60,7 +60,7 @@ try {
     # Skip trivial/short prompts
     if ($prompt.Length -lt 30) { exit 0 }
 
-    # Query memory search API (5s timeout)
+    # Query memory search API (5s timeout) — project-scoped
     $encodedQuery = [System.Uri]::EscapeDataString($prompt.Substring(0, [Math]::Min($prompt.Length, 500)))
     $encodedProject = [System.Uri]::EscapeDataString($project)
     $searchUrl = "$MEMORY_API/search?query=$encodedQuery&project=$encodedProject&limit=3"
@@ -70,12 +70,40 @@ try {
         -Headers $authHeaders `
         -TimeoutSec 5
 
+    # Query global memory search (cross-project operational knowledge)
+    $globalResults = @()
+    try {
+        $globalSearchUrl = "$MEMORY_API/search?query=$encodedQuery&project=_global&limit=2"
+        $globalResponse = Invoke-RestMethod -Uri $globalSearchUrl `
+            -Method Get `
+            -Headers $authHeaders `
+            -TimeoutSec 3
+        if ($globalResponse.results -and $globalResponse.results.Count -gt 0) {
+            $globalResults = $globalResponse.results
+        }
+    } catch {}
+
+    $allResults = @()
     if ($response.results -and $response.results.Count -gt 0) {
+        $allResults += $response.results
+    }
+    $allResults += $globalResults
+
+    # Cap at 5 total results
+    if ($allResults.Count -gt 5) {
+        $allResults = $allResults[0..4]
+    }
+
+    if ($allResults.Count -gt 0) {
         $contextLines = @("=== Itachi Memory Context ===")
-        foreach ($mem in $response.results) {
+        $projectResultCount = if ($response.results) { $response.results.Count } else { 0 }
+        $idx = 0
+        foreach ($mem in $allResults) {
             $files = if ($mem.files -and $mem.files.Count -gt 0) { " (" + ($mem.files -join ", ") + ")" } else { "" }
             $cat = if ($mem.category) { "[$($mem.category)] " } else { "" }
-            $contextLines += "$cat$($mem.summary)$files"
+            $prefix = if ($idx -ge $projectResultCount) { "[GLOBAL] " } else { "" }
+            $contextLines += "$prefix$cat$($mem.summary)$files"
+            $idx++
         }
         $contextLines += "=== End Memory Context ==="
 

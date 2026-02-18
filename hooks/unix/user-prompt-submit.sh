@@ -44,30 +44,41 @@ fi
 ENCODED_QUERY=$(node -e "console.log(encodeURIComponent(process.argv[1].substring(0,500)))" "$PROMPT" 2>/dev/null)
 ENCODED_PROJECT=$(node -e "console.log(encodeURIComponent(process.argv[1]))" "$PROJECT_NAME" 2>/dev/null)
 
-# Query memory search API (5s timeout)
+# Query memory search API (5s timeout) — project-scoped
 SEARCH_RESULT=$(curl -s -k -H "$AUTH_HEADER" \
     "${MEMORY_API}/search?query=${ENCODED_QUERY}&project=${ENCODED_PROJECT}&limit=3" \
     --max-time 5 2>/dev/null)
 
-[ -z "$SEARCH_RESULT" ] && exit 0
+# Query global memory search (cross-project operational knowledge, 3s timeout)
+GLOBAL_SEARCH_RESULT=$(curl -s -k -H "$AUTH_HEADER" \
+    "${MEMORY_API}/search?query=${ENCODED_QUERY}&project=_global&limit=2" \
+    --max-time 3 2>/dev/null)
 
-# Format results as additionalContext JSON
+# Format and merge results as additionalContext JSON
 OUTPUT=$(node -e "
 try {
-    const d = JSON.parse(process.argv[1]);
-    if (!d.results || d.results.length === 0) process.exit(0);
+    const projectData = process.argv[1] ? JSON.parse(process.argv[1]) : {};
+    const globalData = process.argv[2] ? JSON.parse(process.argv[2]) : {};
+
+    const projectResults = (projectData.results || []);
+    const globalResults = (globalData.results || []);
+    const allResults = [...projectResults, ...globalResults].slice(0, 5);
+
+    if (allResults.length === 0) process.exit(0);
 
     const lines = ['=== Itachi Memory Context ==='];
-    for (const mem of d.results) {
+    for (let i = 0; i < allResults.length; i++) {
+        const mem = allResults[i];
         const files = (mem.files && mem.files.length > 0) ? ' (' + mem.files.join(', ') + ')' : '';
         const cat = mem.category ? '[' + mem.category + '] ' : '';
-        lines.push(cat + mem.summary + files);
+        const prefix = i >= projectResults.length ? '[GLOBAL] ' : '';
+        lines.push(prefix + cat + mem.summary + files);
     }
     lines.push('=== End Memory Context ===');
 
     console.log(JSON.stringify({ additionalContext: lines.join('\n') }));
 } catch(e) {}
-" "$SEARCH_RESULT" 2>/dev/null)
+" "$SEARCH_RESULT" "$GLOBAL_SEARCH_RESULT" 2>/dev/null)
 
 if [ -n "$OUTPUT" ]; then
     echo "$OUTPUT"

@@ -1,6 +1,7 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService, type ItachiTask, type CreateTaskParams } from '../services/task-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
+import { TaskExecutorService } from '../services/task-executor-service.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 
@@ -130,8 +131,23 @@ export const topicReplyAction: Action = {
         return { success: true, data: { taskId: task.id, action: 'queued_input_pending' } };
       }
 
-      // Completed/failed/cancelled tasks: auto-create follow-up from substantive messages
+      // Completed/failed/cancelled tasks: try resume via executor, or create follow-up
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+        // If the task has a workspace (was run by executor), try to resume the session
+        const executor = runtime.getService<TaskExecutorService>('task-executor');
+        if (executor && task.workspace_path && task.assigned_machine && text.split(/\s+/).length >= 3) {
+          const resumed = await executor.resumeSession(task, text);
+          if (resumed) {
+            if (callback) {
+              await callback({
+                text: `Resuming session for task ${shortId}...\nYour input has been sent. Watch this topic for output.`,
+              });
+            }
+            return { success: true, data: { taskId: task.id, action: 'resumed_session' } };
+          }
+        }
+
+        // Fall back to creating follow-up task
         let followUpDesc: string | null = null;
         const lowerText = text.toLowerCase();
 

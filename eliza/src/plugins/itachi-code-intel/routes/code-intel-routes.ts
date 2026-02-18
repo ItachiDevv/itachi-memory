@@ -302,7 +302,7 @@ Duration: ${durationMin}min
 Files changed: ${filesStr}
 Session summary: ${summary ? truncate(summary, MAX_LENGTHS.summary) : 'none'}
 
-Conversation:
+Conversation (contains both [USER] and [ASSISTANT] messages):
 ${safeText}
 
 Score significance 0.0-1.0:
@@ -311,12 +311,22 @@ Score significance 0.0-1.0:
 0.6-0.8: Technical decisions, architectural choices, important patterns
 0.9-1.0: Critical decisions, project pivots, major refactors
 
+FRUSTRATION DETECTION: Look for signs of user frustration — repeated corrections, user saying "no", "wrong", "I already told you", "stop", insults, or the assistant going in circles. If frustration is detected, set significance >= 0.8 and extract a rule capturing what went wrong.
+
 Extract key insights as categorized items. Valid categories: decision, pattern, bugfix, architecture, preference, learning.
 
-Also extract project-specific rules — prescriptive learnings that should inform all future work on this project. These are things like conventions, gotchas, tool preferences, testing requirements, or dependency constraints. Rules should be short, actionable statements. Only include rules if there's clear evidence in the conversation.
+Also extract rules — prescriptive learnings that should inform future work. Rules MUST use this format:
+"WHEN <situation>, DO <correct action>, AVOID <common mistake>"
+Example: "WHEN GITHUB_TOKEN fails, DO check ~/.itachi-api-keys first and ask user for new PAT, AVOID deleting tokens or extracting from gh keyring"
+
+Each rule must have a "scope" field:
+- "global": Operational knowledge useful across ALL projects (SSH, tokens, auth, tooling, git, environment setup, CLI usage)
+- "project": Project-specific conventions (naming, testing, dependencies, architecture patterns)
+
+Only include rules if there's clear evidence in the conversation. Be specific and actionable — no vague platitudes.
 
 Respond ONLY with valid JSON, no markdown fences:
-{"significance": 0.7, "insights": [{"category": "decision", "summary": "..."}], "rules": [{"rule": "Always use yarn, not npm", "confidence": 0.8}]}`;
+{"significance": 0.7, "insights": [{"category": "decision", "summary": "..."}], "rules": [{"rule": "WHEN ..., DO ..., AVOID ...", "confidence": 0.8, "scope": "project"}]}`;
 
         const result = await rt.useModel(ModelType.TEXT_SMALL, {
           prompt,
@@ -327,7 +337,7 @@ Respond ONLY with valid JSON, no markdown fences:
         let parsed: {
           significance: number;
           insights: Array<{ category: string; summary: string }>;
-          rules?: Array<{ rule: string; confidence: number }>;
+          rules?: Array<{ rule: string; confidence: number; scope?: string }>;
         };
         try {
           parsed = JSON.parse(raw.trim());
@@ -443,11 +453,12 @@ Respond ONLY with valid JSON, no markdown fences:
             const ruleConfidence = typeof ruleEntry.confidence === 'number'
               ? Math.max(0, Math.min(1, ruleEntry.confidence))
               : 0.6;
+            const ruleProject = ruleEntry.scope === 'global' ? '_global' : projKey;
 
             try {
-              // Search for existing similar rules in this project
+              // Search for existing similar rules in the target project scope
               const existing = await memoryService.searchMemories(
-                ruleEntry.rule, projKey, 3, undefined, 'project_rule'
+                ruleEntry.rule, ruleProject, 3, undefined, 'project_rule'
               );
 
               const bestMatch = existing.length > 0 ? existing[0] : null;
@@ -467,9 +478,9 @@ Respond ONLY with valid JSON, no markdown fences:
                 }
                 rulesReinforced++;
               } else {
-                // Store as new project rule
+                // Store as new rule (project-scoped or global)
                 await memoryService.storeMemory({
-                  project: projKey,
+                  project: ruleProject,
                   category: 'project_rule',
                   content: ruleEntry.rule,
                   summary: ruleEntry.rule,
@@ -478,6 +489,7 @@ Respond ONLY with valid JSON, no markdown fences:
                     confidence: ruleConfidence,
                     times_reinforced: 1,
                     source: 'session',
+                    scope: ruleEntry.scope || 'project',
                     first_seen: new Date().toISOString(),
                     last_reinforced: new Date().toISOString(),
                     session_id,
@@ -536,13 +548,17 @@ Respond ONLY with valid JSON, no markdown fences:
 Conversation:
 ${truncate(conversation_text, 3000)}
 
-Return a JSON array of lessons: [{"text": "...", "category": "error-handling|user-preference|tool-selection|project-selection", "confidence": 0.0-1.0}]
+Each lesson must have a "scope" field:
+- "global": Operational knowledge useful across ALL projects (SSH, tokens, auth, tooling, git, environment setup)
+- "project": Project-specific conventions (naming, testing, dependencies, architecture)
+
+Return a JSON array of lessons: [{"text": "...", "category": "error-handling|user-preference|tool-selection|project-selection", "confidence": 0.0-1.0, "scope": "project"}]
 If no meaningful lessons, return []. Respond ONLY with JSON, no markdown fences.`,
           temperature: 0.2,
         });
 
         const raw = typeof result === 'string' ? result : String(result);
-        let lessons: Array<{ text: string; category: string; confidence: number }>;
+        let lessons: Array<{ text: string; category: string; confidence: number; scope?: string }>;
         try {
           const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
           lessons = JSON.parse(cleaned);
@@ -560,9 +576,10 @@ If no meaningful lessons, return []. Respond ONLY with JSON, no markdown fences.
         for (const lesson of lessons.slice(0, 8)) {
           if (!lesson.text || lesson.text.length < 10 || !lesson.category) continue;
           if (typeof lesson.confidence !== 'number' || lesson.confidence < 0.4) continue;
+          const lessonProject = lesson.scope === 'global' ? '_global' : truncate(project, MAX_LENGTHS.project);
           try {
             await memoryService.storeMemory({
-              project: truncate(project, MAX_LENGTHS.project),
+              project: lessonProject,
               category: 'task_lesson',
               content: `[Local session] ${lesson.text}`,
               summary: truncate(lesson.text, MAX_LENGTHS.summary),
@@ -572,6 +589,7 @@ If no meaningful lessons, return []. Respond ONLY with JSON, no markdown fences.
                 source: 'local_session',
                 lesson_category: lesson.category,
                 confidence: lesson.confidence,
+                scope: lesson.scope || 'project',
                 outcome: 'success' as const,
                 extracted_at: new Date().toISOString(),
               },

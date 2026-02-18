@@ -10,6 +10,8 @@ import {
   listRemoteDirectory,
   formatDirectoryListing,
 } from '../utils/directory-browser.js';
+import { activeSessions, type ActiveSession } from '../shared/active-sessions.js';
+import { DEFAULT_REPO_PATHS, DEFAULT_REPO_BASES, resolveRepoPath } from '../shared/repo-utils.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -17,20 +19,6 @@ const MACHINE_ALIASES: Record<string, string> = {
   'windows-pc': 'windows', 'windows pc': 'windows',
   windows: 'windows', pc: 'windows', win: 'windows', desktop: 'windows',
   hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify',
-};
-
-// ── Default repo paths per target ────────────────────────────────────
-const DEFAULT_REPO_PATHS: Record<string, string> = {
-  mac: '~/itachi/itachi-memory',
-  windows: '~/Documents/Crypto/skills-plugins/itachi-memory',
-  coolify: '/app',
-};
-
-// ── Base directories where repos are typically cloned per machine ────
-const DEFAULT_REPO_BASES: Record<string, string> = {
-  mac: '~/itachi',
-  windows: '~/Documents/Crypto/skills-plugins',
-  coolify: '/tmp/repos',
 };
 
 // ── ANSI / terminal escape sequence stripping ───────────────────────
@@ -72,19 +60,8 @@ async function resolveEngineCommand(target: string, runtime: IAgentRuntime): Pro
   }
 }
 
-// ── Active interactive sessions ──────────────────────────────────────
-export interface ActiveSession {
-  sessionId: string;
-  topicId: number;
-  target: string;
-  handle: InteractiveSession;
-  startedAt: number;
-  transcript: TranscriptEntry[];
-  project: string;
-}
-
-/** Global map of active sessions, keyed by topicId for fast lookup from evaluator */
-export const activeSessions = new Map<number, ActiveSession>();
+// Re-export shared types and map for backward compatibility
+export { activeSessions, type ActiveSession } from '../shared/active-sessions.js';
 
 /**
  * Extract target machine name from text using aliases and SSH service targets.
@@ -125,89 +102,7 @@ function extractPrompt(text: string, matchedAlias: string): string {
   return prompt || 'Start an interactive development session';
 }
 
-/**
- * Resolve the best repo path on the target machine for the given prompt.
- * Matches project names from the registry against the prompt text,
- * checks if the repo exists on the target via SSH, and clones if needed.
- */
-async function resolveRepoPath(
-  target: string,
-  prompt: string,
-  sshService: SSHService,
-  taskService: TaskService,
-  topicId: number,
-  topicsService: TelegramTopicsService,
-  logger: IAgentRuntime['logger'],
-): Promise<{ repoPath: string; project: string; fallbackUsed: boolean }> {
-  const fallback = DEFAULT_REPO_PATHS[target] || '~';
-  const fallbackProject = fallback.split('/').pop() || 'unknown';
-
-  let repos;
-  try {
-    repos = await taskService.getMergedRepos();
-  } catch (err) {
-    logger.warn(`[session] Failed to fetch repos: ${err instanceof Error ? err.message : String(err)}`);
-    return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
-  }
-
-  if (repos.length === 0) {
-    return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
-  }
-
-  // Match project name in prompt (case-insensitive word boundary)
-  const promptLower = prompt.toLowerCase();
-  const matched = repos.find((r) => {
-    const pattern = new RegExp(`\\b${r.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-    return pattern.test(promptLower);
-  });
-
-  if (!matched) {
-    return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
-  }
-
-  const base = DEFAULT_REPO_BASES[target] || '~/repos';
-  const candidatePath = `${base}/${matched.name}`;
-
-  // Check if repo exists on target (case-insensitive directory lookup)
-  try {
-    // Use find with -maxdepth 1 and -iname for case-insensitive match
-    const findCmd = `found=$(find ${base} -maxdepth 1 -iname '${matched.name.replace(/'/g, "'\\''")}' -type d 2>/dev/null | head -1) && [ -n "$found" ] && echo "$found" || echo MISSING`;
-    const check = await sshService.exec(target, findCmd, 5_000);
-    const output = (check.stdout || '').trim();
-
-    if (output !== 'MISSING' && output !== '') {
-      // Use the actual directory name from disk (preserves real casing)
-      logger.info(`[session] Repo ${matched.name} found at ${output} on ${target}`);
-      return { repoPath: output, project: matched.name, fallbackUsed: false };
-    }
-
-    // Repo missing — try to clone if we have a URL
-    if (matched.repo_url) {
-      await topicsService.sendToTopic(topicId, `Cloning ${matched.name} on ${target}...`);
-      logger.info(`[session] Cloning ${matched.repo_url} → ${candidatePath} on ${target}`);
-
-      const clone = await sshService.exec(
-        target,
-        `git clone ${matched.repo_url} ${candidatePath} 2>&1`,
-        120_000,
-      );
-
-      if (clone.success) {
-        await topicsService.sendToTopic(topicId, `Cloned ${matched.name} successfully.`);
-        return { repoPath: candidatePath, project: matched.name, fallbackUsed: false };
-      }
-
-      logger.warn(`[session] Clone failed: ${clone.stderr || clone.stdout}`);
-      await topicsService.sendToTopic(topicId, `Clone failed, falling back to default repo path.`);
-    } else {
-      logger.info(`[session] Repo ${matched.name} not found on ${target} and no clone URL available`);
-    }
-  } catch (err) {
-    logger.warn(`[session] SSH check failed for ${candidatePath}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
-}
+// resolveRepoPath is now imported from shared/repo-utils.ts
 
 /**
  * Generate a short title for the session topic from the prompt.

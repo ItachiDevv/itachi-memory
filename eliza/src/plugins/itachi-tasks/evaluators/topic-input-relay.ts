@@ -5,7 +5,8 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { activeSessions, spawnSessionInTopic } from '../actions/interactive-session.js';
+import { activeSessions } from '../shared/active-sessions.js';
+import { spawnSessionInTopic } from '../actions/interactive-session.js';
 import {
   browsingSessionMap,
   listRemoteDirectory,

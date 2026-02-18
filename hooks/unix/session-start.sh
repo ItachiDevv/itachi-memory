@@ -495,8 +495,11 @@ fi
 # ============ Fetch Project Learnings (Rules) ============
 LEARNINGS=$(curl -s -k -H "$AUTH_HEADER" "${BASE_API}/api/project/learnings?project=${PROJECT_NAME}&limit=15" --max-time 10 2>/dev/null)
 
+# ============ Fetch Global Learnings (Cross-Project Rules) ============
+GLOBAL_LEARNINGS=$(curl -s -k -H "$AUTH_HEADER" "${BASE_API}/api/project/learnings?project=_global&limit=10" --max-time 10 2>/dev/null)
+
 # ============ Write Briefing to Auto-Memory MEMORY.md ============
-if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ]; then
+if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ] || [ -n "$GLOBAL_LEARNINGS" ]; then
     node -e "
 const fs = require('fs');
 const path = require('path');
@@ -505,6 +508,7 @@ const os = require('os');
 const cwd = process.argv[1];
 const briefingJson = process.argv[2];
 const learningsJson = process.argv[3];
+const globalLearningsJson = process.argv[4];
 
 function encodeCwd(p) {
     return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+\$/g, '');
@@ -518,9 +522,11 @@ try {
     const briefing = briefingJson ? JSON.parse(briefingJson) : null;
     let learnings = null;
     try { learnings = learningsJson ? JSON.parse(learningsJson) : null; } catch {}
+    let globalLearnings = null;
+    try { globalLearnings = globalLearningsJson ? JSON.parse(globalLearningsJson) : null; } catch {}
 
     // Exit early if nothing to write
-    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0)) return;
+    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0) && (!globalLearnings || !globalLearnings.rules || globalLearnings.rules.length === 0)) return;
 
     const lines = [];
     lines.push('## Itachi Session Context');
@@ -601,9 +607,23 @@ try {
         existing = upsertSection(existing, '## Project Rules', ruleLines.join('\n'));
     }
 
+    // Build and write Global Operational Rules section
+    if (globalLearnings && globalLearnings.rules && globalLearnings.rules.length > 0) {
+        const globalLines = [];
+        globalLines.push('## Global Operational Rules');
+        globalLines.push('<!-- auto-updated by itachi session-start hook -->');
+        globalLines.push('');
+        for (const r of globalLearnings.rules.slice(0, 10)) {
+            const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
+            globalLines.push('- ' + r.rule + reinforced);
+        }
+        globalLines.push('');
+        existing = upsertSection(existing, '## Global Operational Rules', globalLines.join('\n'));
+    }
+
     fs.writeFileSync(memoryFile, existing);
 } catch(e) {}
-" "$PWD" "$BRIEFING" "$LEARNINGS" 2>/dev/null
+" "$PWD" "$BRIEFING" "$LEARNINGS" "$GLOBAL_LEARNINGS" 2>/dev/null
 fi
 
 exit 0

@@ -219,7 +219,7 @@ function httpPost(url, body) {
 
         const content = fs.readFileSync(transcriptPath, 'utf8');
         const lines = content.split('\n').filter(Boolean);
-        const assistantTexts = [];
+        const conversationParts = [];
 
         for (const line of lines) {
             try {
@@ -229,15 +229,23 @@ function httpPost(url, body) {
                         ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
                         : (typeof entry.message.content === 'string' ? entry.message.content : '');
                     if (textParts.length > 50) {
-                        assistantTexts.push(textParts);
+                        conversationParts.push('[ASSISTANT] ' + textParts);
+                    }
+                } else if (entry.type === 'human' && entry.message && entry.message.content) {
+                    const textParts = Array.isArray(entry.message.content)
+                        ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                        : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                    if (textParts.length > 10) {
+                        conversationParts.push('[USER] ' + textParts);
                     }
                 }
             } catch {}
         }
 
-        if (assistantTexts.length === 0) return;
+        if (conversationParts.length === 0) return;
 
-        const conversationText = assistantTexts.join('\n---\n').substring(0, 4000);
+        // Concatenate and truncate to 6000 chars (increased to capture user+assistant)
+        const conversationText = conversationParts.join('\n---\n').substring(0, 6000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,

@@ -539,6 +539,18 @@ function decrypt(encB64, saltB64, passphrase) {
         }
     } catch {}
 
+    # ============ Fetch Global Learnings (Cross-Project Rules) ============
+    $globalLearningsJson = $null
+    try {
+        $globalLearningsResponse = Invoke-RestMethod -Uri "$BASE_API/api/project/learnings?project=_global&limit=10" `
+            -Method Get `
+            -Headers $authHeaders `
+            -TimeoutSec 10
+        if ($globalLearningsResponse -and $globalLearningsResponse.rules -and $globalLearningsResponse.rules.Count -gt 0) {
+            $globalLearningsJson = ($globalLearningsResponse | ConvertTo-Json -Compress -Depth 5)
+        }
+    } catch {}
+
     # ============ Write Briefing to Auto-Memory MEMORY.md ============
     try {
         $cwd = (Get-Location).Path
@@ -550,6 +562,7 @@ const os = require('os');
 const cwd = process.argv[1];
 const briefingJson = process.argv[2];
 const learningsJson = process.argv[3];
+const globalLearningsJson = process.argv[4];
 
 // Encode cwd for Claude's project directory structure
 // Replace :\ or :/ with --, replace remaining \ and / with --, strip leading/trailing --
@@ -565,9 +578,11 @@ try {
     const briefing = briefingJson ? JSON.parse(briefingJson) : null;
     let learnings = null;
     try { learnings = learningsJson ? JSON.parse(learningsJson) : null; } catch {}
+    let globalLearnings = null;
+    try { globalLearnings = globalLearningsJson ? JSON.parse(globalLearningsJson) : null; } catch {}
 
     // Exit early if nothing to write
-    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0)) return;
+    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0) && (!globalLearnings || !globalLearnings.rules || globalLearnings.rules.length === 0)) return;
 
     // Build the Itachi Session Context section
     const lines = [];
@@ -650,6 +665,20 @@ try {
         existing = upsertSection(existing, '## Project Rules', ruleLines.join('\n'));
     }
 
+    // Build and write Global Operational Rules section
+    if (globalLearnings && globalLearnings.rules && globalLearnings.rules.length > 0) {
+        const globalLines = [];
+        globalLines.push('## Global Operational Rules');
+        globalLines.push('<!-- auto-updated by itachi session-start hook -->');
+        globalLines.push('');
+        for (const r of globalLearnings.rules.slice(0, 10)) {
+            const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
+            globalLines.push('- ' + r.rule + reinforced);
+        }
+        globalLines.push('');
+        existing = upsertSection(existing, '## Global Operational Rules', globalLines.join('\n'));
+    }
+
     fs.writeFileSync(memoryFile, existing);
 } catch(e) {}
 "@
@@ -658,8 +687,9 @@ try {
             $briefingJsonArg = ($briefingResponse | ConvertTo-Json -Compress -Depth 5)
         }
         $learningsJsonArg = if ($learningsJson) { $learningsJson } else { "" }
-        if ($briefingJsonArg -or $learningsJsonArg) {
-            node -e $memoryMdScript $cwd $briefingJsonArg $learningsJsonArg 2>$null
+        $globalLearningsJsonArg = if ($globalLearningsJson) { $globalLearningsJson } else { "" }
+        if ($briefingJsonArg -or $learningsJsonArg -or $globalLearningsJsonArg) {
+            node -e $memoryMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg 2>$null
         }
     } catch {}
 }

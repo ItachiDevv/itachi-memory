@@ -5,6 +5,7 @@ import { TelegramTopicsService } from './services/telegram-topics.js';
 import { MachineRegistryService } from './services/machine-registry.js';
 import { ReminderService } from './services/reminder-service.js';
 import { SSHService } from './services/ssh-service.js';
+import { TaskExecutorService } from './services/task-executor-service.js';
 import { spawnSessionAction } from './actions/spawn-session.js';
 import { createTaskAction } from './actions/create-task.js';
 import { listTasksAction } from './actions/list-tasks.js';
@@ -28,6 +29,8 @@ import { machineRoutes } from './routes/machine-routes.js';
 
 export { TelegramTopicsService } from './services/telegram-topics.js';
 export { MachineRegistryService } from './services/machine-registry.js';
+export { TaskExecutorService } from './services/task-executor-service.js';
+export { activeSessions, type ActiveSession } from './shared/active-sessions.js';
 export { taskDispatcherWorker, registerTaskDispatcherTask } from './workers/task-dispatcher.js';
 export { githubRepoSyncWorker, registerGithubRepoSyncTask } from './workers/github-repo-sync.js';
 export { reminderPollerWorker, registerReminderPollerTask } from './workers/reminder-poller.js';
@@ -39,7 +42,7 @@ export const itachiTasksPlugin: Plugin = {
   actions: [interactiveSessionAction, githubDirectAction, spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction, reminderCommandsAction, remoteExecAction, coolifyControlAction],
   evaluators: [topicInputRelayEvaluator],
   providers: [commandSuppressorProvider, topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
-  services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService],
+  services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService],
   // Routes registered in init() to bypass ElizaOS plugin-name prefix
   init: async (_, runtime) => {
     for (const route of taskStreamRoutes) {

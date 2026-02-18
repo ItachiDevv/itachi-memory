@@ -1,6 +1,7 @@
 import { type TaskWorker, type IAgentRuntime } from '@elizaos/core';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { TaskService } from '../services/task-service.js';
+import { TaskExecutorService } from '../services/task-executor-service.js';
 
 /**
  * Task dispatcher: runs every 10 seconds.
@@ -50,11 +51,23 @@ export const taskDispatcherWorker: TaskWorker = {
         return; // Nothing to dispatch
       }
 
-      // 3. Assign each task to the best available machine
+      // 3. Get executor-managed machines (these are handled directly, skip them)
+      let executorMachines: string[] = [];
+      const executor = runtime.getService<TaskExecutorService>('task-executor');
+      if (executor) {
+        executorMachines = executor.getManagedMachines();
+      }
+
+      // 4. Assign each task to the best available machine
       for (const task of unassignedTasks) {
         const machine = await registry.getMachineForProject(task.project);
         if (!machine) {
           // No machine available; task stays unassigned for next cycle
+          continue;
+        }
+
+        // Skip machines managed by the executor — it claims tasks directly
+        if (executorMachines.includes(machine.machine_id)) {
           continue;
         }
 
