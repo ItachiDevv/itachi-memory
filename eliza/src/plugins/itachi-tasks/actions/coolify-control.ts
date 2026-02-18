@@ -133,8 +133,8 @@ export const coolifyControlAction: Action = {
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text || '');
-    // Always match explicit slash commands
-    if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test)\b/.test(text)) return true;
+    // Always match explicit slash commands (including /ops and /exec aliases)
+    if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test|ops|exec)\b/.test(text)) return true;
     // Match natural language about machines/servers
     const lower = text.toLowerCase();
     const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias => lower.includes(alias));
@@ -244,6 +244,33 @@ async function handleSlashCommand(
   runtime: IAgentRuntime,
   callback?: HandlerCallback,
 ): Promise<ActionResult> {
+  // /ops <subcommand> — umbrella for server operations
+  // Maps: /ops deploy → /deploy, /ops logs → /logs, /ops update → /update, etc.
+  if (text.startsWith('/ops')) {
+    const sub = text.substring('/ops'.length).trim();
+    if (!sub) {
+      if (callback) await callback({
+        text: 'Usage: /ops <command>\n- `/ops deploy [target]` — redeploy bot\n- `/ops update` — pull latest code & rebuild\n- `/ops logs [lines]` — view container logs\n- `/ops containers [target]` — list containers\n- `/ops restart [target]` — restart bot container',
+      });
+      return { success: true };
+    }
+    // Re-route as the original slash command
+    const rewritten = `/${sub}`;
+    return await handleSlashCommand(rewritten, sshService, runtime, callback);
+  }
+
+  // /exec @target <cmd> — alias for /ssh <target> <cmd>
+  if (text.startsWith('/exec')) {
+    const execArgs = text.substring('/exec'.length).trim();
+    const execMatch = execArgs.match(/^@?(\S+)\s+(.+)/s);
+    if (!execMatch) {
+      if (callback) await callback({ text: 'Usage: /exec @<target> <command>\nThis is an alias for /ssh <target> <command>' });
+      return { success: false, error: 'Invalid exec format' };
+    }
+    const rewritten = `/ssh ${execMatch[1]} ${execMatch[2]}`;
+    return await handleSlashCommand(rewritten, sshService, runtime, callback);
+  }
+
   // /ssh-test — test connectivity to all SSH targets
   if (text.startsWith('/ssh-test') || text.startsWith('/ssh_test')) {
     const targets = sshService.getTargets();
@@ -283,6 +310,16 @@ async function handleSlashCommand(
   // /update
   if (text.startsWith('/update')) {
     return await handleSelfUpdate(runtime, sshService, callback);
+  }
+
+  // /ssh targets — alias for /ssh-targets
+  if (/^\/ssh\s+targets?\s*$/i.test(text)) {
+    return await handleSlashCommand('/ssh-targets', sshService, runtime, callback);
+  }
+
+  // /ssh test — alias for /ssh-test
+  if (/^\/ssh\s+test\s*$/i.test(text)) {
+    return await handleSlashCommand('/ssh-test', sshService, runtime, callback);
   }
 
   // /ssh <target> <command>
@@ -367,7 +404,7 @@ async function handleSlashCommand(
   // Fallback help
   if (callback) {
     await callback({
-      text: 'Available commands:\n- `/ssh <target> <command>` — run command\n- `/deploy` — redeploy bot\n- `/update` — pull latest code & rebuild\n- `/logs [lines]` — view logs\n- `/containers` — list containers\n- `/restart-bot` — restart bot\n- `/ssh-targets` — list targets\n- `/ssh-test` — test connectivity to all targets\n\nOr just say things naturally: "check the mac", "why is the server failing"',
+      text: 'Available commands:\n- `/ssh <target> <command>` — run command\n- `/ssh targets` — list SSH targets\n- `/ssh test` — test connectivity\n- `/ops deploy` — redeploy bot\n- `/ops update` — pull latest code & rebuild\n- `/ops logs [lines]` — view logs\n- `/ops containers` — list containers\n- `/ops restart` — restart bot\n\nOr just say things naturally: "check the mac", "why is the server failing"',
     });
   }
   return { success: true };

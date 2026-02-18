@@ -49,13 +49,14 @@ export const telegramCommandsAction: Action = {
     const text = stripBotMention(message.content?.text?.trim() || '');
     return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text.startsWith('/learn ') || text.startsWith('/teach ') ||
-      text.startsWith('/spawn ') || text === '/agents' ||
+      text.startsWith('/spawn ') || text === '/agents' || text.startsWith('/agents ') ||
       text.startsWith('/msg ') ||
-      text === '/repos' || text === '/machines' ||
+      text === '/repos' || text === '/machines' || text.startsWith('/machines ') ||
       text === '/engines' || text.startsWith('/engines ') ||
       text === '/sync-repos' || text === '/sync_repos' ||
       text === '/close-done' || text === '/close_done' || text === '/close_finished' ||
-      text === '/close-failed' || text === '/close_failed';
+      text === '/close-failed' || text === '/close_failed' ||
+      text === '/close' || text.startsWith('/close ');
   },
 
   handler: async (
@@ -78,7 +79,7 @@ export const telegramCommandsAction: Action = {
         return await handleFeedback(runtime, text, callback);
       }
 
-      // /learn <instruction>
+      // /learn <instruction> — hidden alias for /teach (always project_rule)
       if (text.startsWith('/learn ')) {
         return await handleLearn(runtime, text, callback);
       }
@@ -93,12 +94,16 @@ export const telegramCommandsAction: Action = {
         return await handleSpawn(runtime, text, callback);
       }
 
-      // /agents
-      if (text === '/agents') {
+      // /agents [msg <id> <message>] — consolidated from /agents + /msg
+      if (text === '/agents' || text.startsWith('/agents ')) {
+        const sub = text.substring('/agents'.length).trim();
+        if (sub.startsWith('msg ')) {
+          return await handleMsg(runtime, '/msg ' + sub.substring('msg '.length), callback);
+        }
         return await handleAgents(runtime, callback);
       }
 
-      // /msg <agent-id> <message>
+      // /msg <agent-id> <message> — hidden alias (still works)
       if (text.startsWith('/msg ')) {
         return await handleMsg(runtime, text, callback);
       }
@@ -108,32 +113,67 @@ export const telegramCommandsAction: Action = {
         return await handleRecall(runtime, text, callback);
       }
 
-      // /repos
+      // /repos — hidden alias (still works)
       if (text === '/repos') {
         return await handleRepos(runtime, callback);
       }
 
-      // /machines
-      if (text === '/machines') {
-        return await handleMachines(runtime, callback);
+      // /machines [engines|repos|sync] — consolidated from /machines + /engines + /repos + /sync_repos
+      if (text === '/machines' || text.startsWith('/machines ')) {
+        const sub = text.substring('/machines'.length).trim();
+        if (sub === 'repos') {
+          return await handleRepos(runtime, callback);
+        }
+        if (sub === 'sync') {
+          return await handleSyncRepos(runtime, callback);
+        }
+        if (sub.startsWith('engines')) {
+          // Rewrite as /engines with remaining args
+          const engArgs = sub.substring('engines'.length).trim();
+          return await handleEngines(runtime, '/engines ' + engArgs, callback);
+        }
+        if (!sub) {
+          return await handleMachines(runtime, callback);
+        }
+        // Unknown subcommand — show help
+        if (callback) await callback({ text: 'Usage: /machines [engines|repos|sync]\n- `/machines` — show machines\n- `/machines engines [machine] [engines]` — view/update engines\n- `/machines repos` — list repos\n- `/machines sync` — sync GitHub repos' });
+        return { success: true };
       }
 
-      // /engines [machine] [engine1,engine2,...]
+      // /engines [machine] [engine1,engine2,...] — hidden alias (still works)
       if (text === '/engines' || text.startsWith('/engines ')) {
         return await handleEngines(runtime, text, callback);
       }
 
-      // /sync-repos or /sync_repos
+      // /sync-repos or /sync_repos — hidden alias (still works)
       if (text === '/sync-repos' || text === '/sync_repos') {
         return await handleSyncRepos(runtime, callback);
       }
 
-      // /close-done or /close_done or /close_finished
+      // /close [done|failed|all] — consolidated from /close_done + /close_failed
+      if (text === '/close' || text.startsWith('/close ')) {
+        const sub = text.substring('/close'.length).trim().replace(/^[-_]/, '');
+        if (sub === 'done' || sub === 'finished') {
+          return await handleCloseTopics(runtime, 'completed', callback);
+        }
+        if (sub === 'failed') {
+          return await handleCloseTopics(runtime, 'failed', callback);
+        }
+        if (sub === 'all') {
+          const r1 = await handleCloseTopics(runtime, 'completed', callback);
+          const r2 = await handleCloseTopics(runtime, 'failed', callback);
+          return { success: r1.success && r2.success };
+        }
+        if (callback) await callback({ text: 'Usage: /close done|failed|all' });
+        return { success: false, error: 'Unknown close subcommand' };
+      }
+
+      // /close-done, /close_done, /close_finished — hidden aliases (still work)
       if (text === '/close-done' || text === '/close_done' || text === '/close_finished') {
         return await handleCloseTopics(runtime, 'completed', callback);
       }
 
-      // /close-failed or /close_failed
+      // /close-failed or /close_failed — hidden aliases (still work)
       if (text === '/close-failed' || text === '/close_failed') {
         return await handleCloseTopics(runtime, 'failed', callback);
       }
@@ -730,57 +770,51 @@ function timeSince(dateStr: string): string {
 }
 
 async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
-  const help = `**Tasks & Projects**
+  const help = `**Tasks**
   /task [@machine] <project> <description> — Create a coding task
   /status — Show task queue & recent completions
   /cancel <id> — Cancel a queued or running task
   /feedback <id> <good|bad> <reason> — Rate a completed task
 
 **Sessions & SSH**
-  /session <target> <prompt> — Start interactive CLI session (alias: /chat)
-  /ssh <target> <command> — Run a one-off SSH command
-  /exec @machine <command> — Run command on orchestrator machine
-  /pull @machine — Git pull & rebuild on machine
-  /restart @machine — Restart orchestrator on machine
+  /session <target> <prompt> — Interactive CLI session
+  /ssh <target> <cmd> — Run command on machine
+  /ssh targets — List SSH targets
+  /ssh test — Test SSH connectivity
 
-**Server & Deployment**
-  /deploy — Redeploy bot container
-  /update — Pull latest code & rebuild bot
-  /logs [lines] — View container logs
-  /containers — List running containers
-  /restart-bot — Restart bot container
-  /ssh-targets — List available SSH targets
-  /ssh-test — Test SSH connectivity
+**Server Operations**
+  /ops deploy [target] — Redeploy bot container
+  /ops update — Pull latest code & rebuild bot
+  /ops logs [lines] — View container logs
+  /ops containers [target] — List running containers
+  /ops restart [target] — Restart bot container
 
 **GitHub**
-  /gh <repo> — Show repo summary
-  /prs <repo> — List pull requests
-  /issues <repo> — List issues
-  /branches <repo> — List branches
-
-**Agents**
-  /spawn <profile> <task> — Spawn a subagent to handle a task
-  /agents — List recent subagent runs
-  /msg <agent-id> <message> — Send a message to a subagent
+  /gh prs|issues|branches <repo> — GitHub queries
 
 **Memory & Knowledge**
-  /recall [project:]<query> — Search memories & learnings
-  /learn <instruction> — Teach a rule or preference
-  /teach <instruction> — Teach with auto-classification (personality/rule/preference)
-  /repos — List registered repositories
+  /recall [project:]<query> — Search memories
+  /teach <instruction> — Teach a rule/preference/personality
+
+**Machines & Repos**
   /machines — Show orchestrator machines
-  /engines [machine] [engines] — View/update engine priorities
-  /sync-repos — Sync GitHub repos into registry
+  /machines engines [machine] [engines] — View/update engine priorities
+  /machines repos — List registered repositories
+  /machines sync — Sync GitHub repos into registry
 
 **Reminders**
   /remind <time> <message> — Set a reminder
-  /schedule <freq> <time> <action> — Schedule recurring action
-  /reminders — List upcoming reminders
-  /unremind <id> — Cancel a reminder
+  /remind list — List upcoming reminders
+  /remind cancel <id> — Cancel a reminder
+  /remind schedule <freq> <time> <action> — Schedule recurring action
+
+**Agents**
+  /spawn <profile> <task> — Spawn a subagent
+  /agents — List recent subagent runs
+  /agents msg <id> <message> — Message an agent
 
 **Housekeeping**
-  /close-done — Delete completed task topics
-  /close-failed — Delete failed task topics
+  /close done|failed|all — Cleanup task topics
   /help — Show this message`;
 
   if (callback) await callback({ text: help });

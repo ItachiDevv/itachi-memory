@@ -54,7 +54,7 @@ export const reminderCommandsAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
-    return text.startsWith('/remind ') || text === '/reminders' ||
+    return text.startsWith('/remind') || text === '/reminders' ||
       text.startsWith('/unremind ') || text.startsWith('/schedule ');
   },
 
@@ -74,20 +74,49 @@ export const reminderCommandsAction: Action = {
         return { success: false, error: 'Reminder service not available' };
       }
 
+      // /reminders — hidden alias (still works)
       if (text === '/reminders') {
         return await handleList(reminderService, message, callback);
       }
 
+      // /unremind <id> — hidden alias (still works)
       if (text.startsWith('/unremind ')) {
         return await handleCancel(reminderService, text, callback);
       }
 
+      // /schedule <time> <action> — hidden alias (still works)
       if (text.startsWith('/schedule ')) {
         return await handleSchedule(reminderService, runtime, message, text, callback);
       }
 
-      if (text.startsWith('/remind ')) {
-        return await handleCreate(reminderService, runtime, message, text, callback);
+      if (text.startsWith('/remind')) {
+        const sub = text.substring('/remind'.length).trim();
+
+        // /remind list — alias for /reminders
+        if (sub === 'list') {
+          return await handleList(reminderService, message, callback);
+        }
+
+        // /remind cancel <id> — alias for /unremind <id>
+        if (sub.startsWith('cancel ')) {
+          const id = sub.substring('cancel '.length).trim();
+          return await handleCancel(reminderService, '/unremind ' + id, callback);
+        }
+
+        // /remind schedule <freq> <time> <action> — alias for /schedule
+        if (sub.startsWith('schedule ')) {
+          const schedArgs = sub.substring('schedule '.length).trim();
+          return await handleSchedule(reminderService, runtime, message, '/schedule ' + schedArgs, callback);
+        }
+
+        // /remind <time> <message> — create a reminder
+        if (sub) {
+          return await handleCreate(reminderService, runtime, message, text, callback);
+        }
+
+        // bare /remind with no args
+        if (callback) await callback({ text: 'Usage:\n  /remind <time> <message> — set a reminder\n  /remind list — list reminders\n  /remind cancel <id> — cancel a reminder\n  /remind schedule <freq> <time> <action> — schedule recurring' });
+        return { success: false, error: 'No input' };
       }
 
       return { success: false, error: 'Unknown command' };
