@@ -319,13 +319,35 @@ function mergeEnv(local: string, remote: string): string {
 }
 
 export async function getFilesChanged(workspacePath: string): Promise<string[]> {
-    const result = await exec('git', ['diff', '--stat', '--name-only', 'HEAD~1'], workspacePath);
-    if (result.code !== 0) {
-        // Try diff against initial state
-        const alt = await exec('git', ['diff', '--name-only', '--cached'], workspacePath);
-        return alt.stdout.split('\n').filter(Boolean);
+    const files = new Set<string>();
+
+    // 1. Find the base branch to compare against
+    const defaultBranch = await detectDefaultBranch(workspacePath, false);
+    const baseRef = defaultBranch || 'origin/main';
+
+    // 2. Find merge-base (where task branch forked from base)
+    const mergeBase = await exec('git', ['merge-base', 'HEAD', baseRef], workspacePath);
+    if (mergeBase.code === 0 && mergeBase.stdout) {
+        // Get all files changed in commits since the fork point
+        const committed = await exec('git', ['diff', '--name-only', mergeBase.stdout, 'HEAD'], workspacePath);
+        if (committed.code === 0) {
+            committed.stdout.split('\n').filter(Boolean).forEach(f => files.add(f));
+        }
     }
-    return result.stdout.split('\n').filter(Boolean);
+
+    // 3. Uncommitted changes in working directory
+    const uncommitted = await exec('git', ['diff', '--name-only'], workspacePath);
+    if (uncommitted.code === 0) {
+        uncommitted.stdout.split('\n').filter(Boolean).forEach(f => files.add(f));
+    }
+
+    // 4. Staged changes
+    const staged = await exec('git', ['diff', '--name-only', '--cached'], workspacePath);
+    if (staged.code === 0) {
+        staged.stdout.split('\n').filter(Boolean).forEach(f => files.add(f));
+    }
+
+    return [...files];
 }
 
 export async function commitAndPush(workspacePath: string, task: Task): Promise<string | null> {

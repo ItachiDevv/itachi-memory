@@ -30,15 +30,15 @@ export async function reportResult(
         let prUrl: string | null = null;
 
         if (!result.isError) {
-            // Get changed files
+            // Get changed files (committed by Claude + uncommitted + staged)
             filesChanged = await getFilesChanged(workspacePath);
 
-            // Commit and push if there are changes
-            if (filesChanged.length > 0) {
-                const committed = await commitAndPush(workspacePath, task);
-                if (committed) {
-                    prUrl = await createPR(workspacePath, task);
-                }
+            // Always attempt commit/push — commitAndPush handles both:
+            // 1. Uncommitted changes left by Claude
+            // 2. Changes already committed by Claude during the session
+            const committed = await commitAndPush(workspacePath, task);
+            if (committed) {
+                prUrl = await createPR(workspacePath, task);
             }
         }
 

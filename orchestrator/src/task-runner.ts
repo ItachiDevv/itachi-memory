@@ -259,6 +259,65 @@ async function runTask(task: Task): Promise<void> {
 
     activeSessions.delete(task.id);
 
+    // --- Post-completion follow-up prompt ---
+    // After Claude finishes, ask the user in the topic if they want a follow-up.
+    // This keeps the topic interactive instead of silently marking done.
+    if (!result.isError) {
+        const shortId = task.id.substring(0, 8);
+        const costStr = result.costUsd > 0 ? ` ($${result.costUsd.toFixed(2)})` : '';
+
+        streamToEliza(task.id, {
+            type: 'text',
+            text: `\n✅ Task ${shortId} finished${costStr}.\n\nReply here with a follow-up description, or say "done" to close.`,
+        });
+
+        await updateTask(task.id, {
+            status: 'waiting_input' as any,
+            result_summary: `Task finished — waiting for user feedback`,
+        });
+
+        // Wait for user reply (10 min timeout)
+        const followUpMaxWaitMs = 10 * 60 * 1000;
+        const followUpPollMs = 5_000;
+        const followUpStart = Date.now();
+        let followUpReply: string | null = null;
+
+        while (Date.now() - followUpStart < followUpMaxWaitMs) {
+            await sleep(followUpPollMs);
+            const inputs = await fetchUserInput(task.id);
+            if (inputs.length > 0) {
+                followUpReply = typeof inputs[0] === 'string'
+                    ? inputs[0]
+                    : (inputs[0] as any).text || String(inputs[0]);
+                break;
+            }
+        }
+
+        if (followUpReply) {
+            const lower = followUpReply.trim().toLowerCase();
+            const isDone = /^(done|ok|thanks|thank you|good|lgtm|close|finish|no|nope|👍)$/i.test(lower);
+
+            if (!isDone && followUpReply.trim().split(/\s+/).length >= 2) {
+                // Substantive reply — create follow-up task via ElizaOS API
+                console.log(`[runner] Creating follow-up task for ${shortId} from reply: "${followUpReply.substring(0, 80)}"`);
+                const created = await createFollowUpTask(task, followUpReply.trim());
+                if (created) {
+                    streamToEliza(task.id, {
+                        type: 'text',
+                        text: `📋 Follow-up task created: "${followUpReply.trim().substring(0, 100)}"`,
+                    });
+                }
+            } else {
+                console.log(`[runner] User said done for task ${shortId}`);
+            }
+        } else {
+            console.log(`[runner] No follow-up reply for task ${shortId} after 10 min`);
+        }
+
+        // Restore to running so reportResult can set final status
+        await updateTask(task.id, { status: 'running' });
+    }
+
     // Report results (handles commit, push, PR, notification)
     await reportResult(task, result, workspacePath);
 }
@@ -461,4 +520,34 @@ async function promptForRepo(task: Task): Promise<boolean> {
         text: 'Timed out waiting for repo configuration. Task will be marked as failed.',
     });
     return false;
+}
+
+/**
+ * Create a follow-up task via ElizaOS API.
+ * Reuses the original task's project, repo, machine, and chat IDs.
+ */
+async function createFollowUpTask(originalTask: Task, description: string): Promise<boolean> {
+    try {
+        const res = await fetch(`${config.apiUrl}/api/tasks`, {
+            method: 'POST',
+            headers: getApiHeaders(),
+            body: JSON.stringify({
+                description,
+                project: originalTask.project,
+                repo_url: originalTask.repo_url,
+                branch: originalTask.branch,
+                assigned_machine: (originalTask as any).assigned_machine,
+                telegram_chat_id: originalTask.telegram_chat_id,
+                telegram_user_id: originalTask.telegram_user_id,
+            }),
+        });
+        if (!res.ok) {
+            console.error(`[runner] Follow-up task creation failed: ${res.status}`);
+            return false;
+        }
+        return true;
+    } catch (err) {
+        console.error(`[runner] Follow-up task creation error:`, err instanceof Error ? err.message : String(err));
+        return false;
+    }
 }
