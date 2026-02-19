@@ -1,10 +1,13 @@
 import type { Provider, IAgentRuntime, Memory, State, ProviderResult } from '@elizaos/core';
 import { stripBotMention } from '../utils/telegram.js';
+import { TelegramTopicsService } from '../services/telegram-topics.js';
+import { getFlow } from '../shared/conversation-flows.js';
 
 /**
  * When a message is an explicit bot command (/status, /repos, /cancel, etc.),
+ * or there's an active conversation flow waiting for input,
  * injects context telling the LLM NOT to generate its own response.
- * The command action handler will send the response via callback.
+ * The command/flow action handler will send the response via callback.
  *
  * This prevents duplicate responses: one from the LLM and one from the action handler.
  */
@@ -41,12 +44,38 @@ export const commandSuppressorProvider: Provider = {
   position: 0, // Run before everything
 
   get: async (
-    _runtime: IAgentRuntime,
+    runtime: IAgentRuntime,
     message: Memory,
     _state?: State
   ): Promise<ProviderResult> => {
     const rawText = (message.content?.text as string)?.trim() || '';
     const text = stripBotMention(rawText);
+
+    // Check for active conversation flow at await_description step.
+    // When active, the user's message is a task description for the flow.
+    // Suppress LLM response to prevent confusing duplicate messages.
+    if (!text.startsWith('/') && message.content?.source === 'telegram') {
+      try {
+        const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+        const flowChatId = topicsService?.chatId;
+        if (flowChatId) {
+          const flow = getFlow(flowChatId);
+          if (flow && flow.step === 'await_description') {
+            return {
+              text: `## Active Task Flow
+The user is providing a task description for an active interactive flow.
+Machine: ${flow.machine || 'auto'}, Project: ${flow.project || flow.taskName || 'unknown'}.
+You MUST NOT generate any response text. Output nothing.
+Select ONLY the TELEGRAM_COMMANDS action. The flow handler will create the task and respond.`,
+              values: { activeFlow: 'await_description', suppressResponse: 'true' },
+              data: { activeFlow: flow.step },
+            };
+          }
+        }
+      } catch {
+        // Non-critical
+      }
+    }
 
     if (!text.startsWith('/')) {
       return { text: '', values: {}, data: {} };
