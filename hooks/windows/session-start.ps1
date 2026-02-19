@@ -563,6 +563,7 @@ const cwd = process.argv[1];
 const briefingJson = process.argv[2];
 const learningsJson = process.argv[3];
 const globalLearningsJson = process.argv[4];
+const itachiClient = process.argv[5] || '';
 
 // Encode cwd for Claude's project directory structure
 // Replace :\ or :/ with --, replace remaining \ and / with --, strip leading/trailing --
@@ -574,6 +575,9 @@ try {
     const encodedCwd = encodeCwd(cwd);
     const memoryDir = path.join(os.homedir(), '.claude', 'projects', encodedCwd, 'memory');
     const memoryFile = path.join(memoryDir, 'MEMORY.md');
+
+    // For Codex: also write to ~/.codex/instructions.md
+    const codexInstructionsFile = path.join(os.homedir(), '.codex', 'instructions.md');
 
     const briefing = briefingJson ? JSON.parse(briefingJson) : null;
     let learnings = null;
@@ -680,6 +684,38 @@ try {
     }
 
     fs.writeFileSync(memoryFile, existing);
+
+    // Also write to Codex instructions.md (same sections, always — so both CLIs stay in sync)
+    try {
+        if (fs.existsSync(path.dirname(codexInstructionsFile))) {
+            let codexContent = '';
+            if (fs.existsSync(codexInstructionsFile)) {
+                codexContent = fs.readFileSync(codexInstructionsFile, 'utf8');
+            }
+            if (lines.length > 3) {
+                codexContent = upsertSection(codexContent, '## Itachi Session Context', lines.join('\n') + '\n');
+            }
+            if (learnings && learnings.rules && learnings.rules.length > 0) {
+                const ruleLines2 = ['## Project Rules', '<!-- auto-updated by itachi session-start hook -->', ''];
+                for (const r of learnings.rules) {
+                    const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
+                    ruleLines2.push('- ' + r.rule + reinforced);
+                }
+                ruleLines2.push('');
+                codexContent = upsertSection(codexContent, '## Project Rules', ruleLines2.join('\n'));
+            }
+            if (globalLearnings && globalLearnings.rules && globalLearnings.rules.length > 0) {
+                const globalLines2 = ['## Global Operational Rules', '<!-- auto-updated by itachi session-start hook -->', ''];
+                for (const r of globalLearnings.rules.slice(0, 10)) {
+                    const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
+                    globalLines2.push('- ' + r.rule + reinforced);
+                }
+                globalLines2.push('');
+                codexContent = upsertSection(codexContent, '## Global Operational Rules', globalLines2.join('\n'));
+            }
+            fs.writeFileSync(codexInstructionsFile, codexContent);
+        }
+    } catch(e2) {}
 } catch(e) {}
 "@
         $briefingJsonArg = ""
@@ -688,8 +724,9 @@ try {
         }
         $learningsJsonArg = if ($learningsJson) { $learningsJson } else { "" }
         $globalLearningsJsonArg = if ($globalLearningsJson) { $globalLearningsJson } else { "" }
+        $clientArg = if ($env:ITACHI_CLIENT) { $env:ITACHI_CLIENT } else { "claude" }
         if ($briefingJsonArg -or $learningsJsonArg -or $globalLearningsJsonArg) {
-            node -e $memoryMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg 2>$null
+            node -e $memoryMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg $clientArg 2>$null
         }
     } catch {}
 }
