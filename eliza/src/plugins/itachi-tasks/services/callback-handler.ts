@@ -1,6 +1,7 @@
 import type { IAgentRuntime } from '@elizaos/core';
 import { SSHService } from './ssh-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
+import { TaskService } from './task-service.js';
 import { MachineRegistryService } from './machine-registry.js';
 import { listRemoteDirectory } from '../utils/directory-browser.js';
 import { getStartingDir } from '../shared/start-dir.js';
@@ -170,14 +171,45 @@ async function handleTaskFlowCallback(
     const { dirs, error } = await listRemoteDirectory(sshService, sshTarget, startDir);
 
     if (error || dirs.length === 0) {
-      await topicsService.editMessageWithKeyboard(
-        chatId, messageId,
-        `No repos found in ${startDir} on ${sshTarget}.\n${error || ''}\n\nDescribe the task:`,
-        [],
-      );
-      flow.step = 'await_description';
+      runtime.logger.warn(`[callback-handler] Dir listing failed for ${sshTarget}:${startDir}: ${error || 'empty'}`);
+
+      // Fall back to known projects from the task service registry
+      const taskService = runtime.getService<TaskService>('itachi-tasks');
+      let knownRepos: string[] = [];
+      if (taskService) {
+        try {
+          knownRepos = await taskService.getMergedRepoNames();
+        } catch { /* ignore */ }
+      }
+
+      if (knownRepos.length > 0) {
+        // Show known projects as buttons instead of failing
+        flow.cachedDirs = knownRepos;
+        flow.step = 'select_repo';
+
+        const keyboard = buildDirKeyboard(knownRepos, 'tf:r');
+        keyboard.push([{ text: '\u2795 New Repo (skip)', callback_data: 'tf:rm:new' }]);
+
+        await topicsService.editMessageWithKeyboard(
+          chatId, messageId,
+          `Could not list ${startDir} on ${sshTarget}${error ? `\n(${error})` : ''}.\n\nKnown projects from registry:`,
+          keyboard,
+        );
+      } else {
+        // No known repos either — offer retry or new repo
+        const keyboard = [
+          [
+            { text: '\ud83d\udd04 Retry', callback_data: 'tf:rm:existing' },
+            { text: '\u2795 New Repo', callback_data: 'tf:rm:new' },
+          ],
+        ];
+        await topicsService.editMessageWithKeyboard(
+          chatId, messageId,
+          `Could not list ${startDir} on ${sshTarget}${error ? `\n(${error})` : ''}.\n\nNo known repos found. Retry or use a new repo?`,
+          keyboard,
+        );
+      }
       setFlow(chatId, userId, flow);
-      runtime.logger.info(`[callback-handler] Set flow to await_description: chatId=${chatId} key=${chatId}`);
       return;
     }
 
@@ -250,25 +282,50 @@ async function handleSessionFlowCallback(
       return;
     }
 
-    // List repos on target
-    const startDir = getStartingDir(selected.id);
-    const { dirs, error } = await listRemoteDirectory(sshService, selected.id, startDir);
+    // List repos on target (session flow uses SSH target names directly)
+    const sshTarget = resolveSSHTarget(selected.id);
+    const startDir = getStartingDir(sshTarget);
+    const { dirs, error } = await listRemoteDirectory(sshService, sshTarget, startDir);
 
     if (error || dirs.length === 0) {
-      // No dirs — start here
-      flow.repoPath = startDir;
-      flow.step = 'select_start_mode';
-      const keyboard = [
-        [
-          { text: 'Start (itachi --ds)', callback_data: 'sf:s:ds' },
-          { text: 'Continue (itachi --cds)', callback_data: 'sf:s:cds' },
-        ],
-      ];
-      await topicsService.editMessageWithKeyboard(
-        chatId, messageId,
-        `Session on ${selected.name}\nPath: ${startDir}\n${error ? `(${error})` : '(no subdirectories)'}\n\nStart mode:`,
-        keyboard,
-      );
+      runtime.logger.warn(`[callback-handler] Session dir listing failed for ${sshTarget}:${startDir}: ${error || 'empty'}`);
+
+      // Try known repos from registry as fallback
+      const taskService = runtime.getService<TaskService>('itachi-tasks');
+      let knownRepos: string[] = [];
+      if (taskService) {
+        try {
+          knownRepos = await taskService.getMergedRepoNames();
+        } catch { /* ignore */ }
+      }
+
+      if (knownRepos.length > 0) {
+        flow.cachedDirs = knownRepos;
+        flow.step = 'select_repo';
+
+        const keyboard = buildDirKeyboard(knownRepos, 'sf:r', true);
+        await topicsService.editMessageWithKeyboard(
+          chatId, messageId,
+          `Session on ${selected.name}\nCould not list ${startDir}${error ? ` (${error})` : ''}.\n\nKnown projects:`,
+          keyboard,
+        );
+      } else {
+        // No repos — offer to start at base dir
+        flow.repoPath = startDir;
+        flow.step = 'select_start_mode';
+        flow.engineCommand = await resolveEngine(runtime, sshTarget);
+        const keyboard = [
+          [
+            { text: 'Start (itachi --ds)', callback_data: 'sf:s:ds' },
+            { text: 'Continue (itachi --cds)', callback_data: 'sf:s:cds' },
+          ],
+        ];
+        await topicsService.editMessageWithKeyboard(
+          chatId, messageId,
+          `Session on ${selected.name}\nPath: ${startDir}\n${error ? `(${error})` : '(no subdirectories)'}\n\nStart mode:`,
+          keyboard,
+        );
+      }
       setFlow(chatId, userId, flow);
       return;
     }

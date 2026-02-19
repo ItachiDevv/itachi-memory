@@ -101,7 +101,13 @@ export const telegramCommandsAction: Action = {
       // Clean up stale flows
       cleanupStaleFlows();
 
+      // Check if the evaluator already handled this flow description
+      if ((message.content as Record<string, unknown>)?._flowHandled) {
+        return { success: true, data: { handledByEvaluator: true } };
+      }
+
       // Check for active conversation flow at await_description step (plain text → task creation)
+      // This is a backup — the evaluator should handle this first, but if it didn't, we catch it here.
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
       const flowChatId = topicsService?.chatId;
       if (flowChatId && !text.startsWith('/')) {
