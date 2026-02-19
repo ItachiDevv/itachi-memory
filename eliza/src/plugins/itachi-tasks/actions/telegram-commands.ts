@@ -101,21 +101,21 @@ export const telegramCommandsAction: Action = {
       // Clean up stale flows
       cleanupStaleFlows();
 
-      // Flow description handling is done exclusively by the TOPIC_INPUT_RELAY evaluator.
-      // If the evaluator already handled it, bail. If not, still don't handle here to avoid
-      // race conditions that cause double task/topic creation.
-      if ((message.content as Record<string, unknown>)?._flowHandled || !text.startsWith('/')) {
+      // Flow description handling: when user sends plain text and there's an active
+      // flow at await_description, create the task directly here.
+      // (Previously deferred to evaluator, but evaluator doesn't reliably run.)
+      if ((message.content as Record<string, unknown>)?._flowHandled) {
+        return { success: true, data: { handledByEvaluator: true } };
+      }
+      if (!text.startsWith('/')) {
         const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
         const flowChatId = topicsService?.chatId;
         if (flowChatId) {
           const flow = getFlow(flowChatId);
           if (flow && flow.step === 'await_description') {
-            // Evaluator should handle this — don't duplicate
-            return { success: true, data: { deferredToEvaluator: true } };
+            runtime.logger.info(`[telegram-commands] handling flow description: "${text.substring(0, 40)}"`);
+            return await handleFlowDescription(runtime, flow, text, flowChatId, flow.userId || 0, callback);
           }
-        }
-        if ((message.content as Record<string, unknown>)?._flowHandled) {
-          return { success: true, data: { handledByEvaluator: true } };
         }
       }
 
@@ -1203,3 +1203,4 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   if (callback) await callback({ text: help });
   return { success: true };
 }
+

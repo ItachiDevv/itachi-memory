@@ -1,5 +1,5 @@
 import type { Evaluator, IAgentRuntime, Memory } from '@elizaos/core';
-import { TaskService, generateTaskTitle, type CreateTaskParams } from '../services/task-service.js';
+import { TaskService, generateTaskTitle } from '../services/task-service.js';
 import { SSHService } from '../services/ssh-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
@@ -7,7 +7,7 @@ import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { activeSessions } from '../shared/active-sessions.js';
 import { spawnSessionInTopic } from '../actions/interactive-session.js';
-import { getFlow, clearFlow, cleanupStaleFlows, type ConversationFlow } from '../shared/conversation-flows.js';
+import { cleanupStaleFlows } from '../shared/conversation-flows.js';
 import {
   browsingSessionMap,
   listRemoteDirectory,
@@ -46,52 +46,17 @@ export const topicInputRelayEvaluator: Evaluator = {
     // Quick check: skip non-Telegram messages to avoid unnecessary room lookups
     if (message.content?.source !== 'telegram') return false;
 
-    // Check for active conversation flow at await_description step.
-    // This must work even for main chat messages (no topic threadId).
-    const text = ((message.content?.text as string) || '').trim();
-    if (text && !text.startsWith('/')) {
-      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
-      const flowChatId = topicsService?.chatId;
-      if (flowChatId) {
-        const flow = getFlow(flowChatId);
-        if (flow && flow.step === 'await_description') {
-          runtime.logger.info(`[topic-relay] validate: flow detected, returning true for "${text.substring(0, 30)}"`);
-          return true;
-        }
-      }
-    }
+    // Flow description handling is now in the TELEGRAM_COMMANDS action handler
+    // (evaluator handler doesn't reliably run in ElizaOS message pipeline).
 
     // Check if this message is in a Telegram forum topic by looking up the room
     const threadId = await getTopicThreadId(runtime, message);
-    if (threadId) {
-      runtime.logger.info(`[topic-relay] validate: threadId=${threadId} for "${text.substring(0, 30)}"`);
-    }
     return threadId !== null;
   },
 
   handler: async (runtime: IAgentRuntime, message: Memory): Promise<void> => {
     const text = ((message.content?.text as string) || '').trim();
-    runtime.logger.info(`[topic-relay] handler called, text="${text.substring(0, 40)}" _flowHandled=${(message.content as any)?._flowHandled}`);
     if (!text) return;
-
-    // ── Flow description handler ──────────────────────────────────────
-    // Handle plain text when there's an active task flow at await_description.
-    // This runs BEFORE topic/action processing to ensure reliable interception.
-    if (!text.startsWith('/')) {
-      const topicsServiceForFlow = runtime.getService<TelegramTopicsService>('telegram-topics');
-      const flowChatId = topicsServiceForFlow?.chatId;
-      if (flowChatId) {
-        const flow = getFlow(flowChatId);
-        runtime.logger.info(`[topic-relay] handler flow check: chatId=${flowChatId} flow=${flow ? flow.step : 'none'}`);
-        if (flow && flow.step === 'await_description') {
-          runtime.logger.info(`[topic-relay] handler: processing flow description for "${text.substring(0, 40)}"`);
-          await handleFlowDescriptionDirect(runtime, flow, text, flowChatId, topicsServiceForFlow);
-          (message.content as Record<string, unknown>)._topicRelayQueued = true;
-          (message.content as Record<string, unknown>)._flowHandled = true;
-          return;
-        }
-      }
-    }
 
     // ── Topic-based handling ──────────────────────────────────────────
     const threadId = await getTopicThreadId(runtime, message);
@@ -264,72 +229,3 @@ async function handleBrowsingInput(
   }
 }
 
-/**
- * Handle task description from a conversation flow directly in the evaluator.
- * This bypasses the LLM action selection to ensure reliable flow completion.
- */
-async function handleFlowDescriptionDirect(
-  runtime: IAgentRuntime,
-  flow: ConversationFlow,
-  description: string,
-  chatId: number,
-  topicsService: TelegramTopicsService,
-): Promise<void> {
-  if (description.length < 3) {
-    await topicsService.sendMessageWithKeyboard(
-      'Description too short. Please describe the task:',
-      [],
-    );
-    return;
-  }
-
-  const taskService = runtime.getService<TaskService>('itachi-tasks');
-  if (!taskService) {
-    clearFlow(chatId);
-    runtime.logger.error('[topic-relay] TaskService not available for flow description');
-    return;
-  }
-
-  const project = flow.project || flow.taskName || 'unknown';
-  const machine = flow.machine === 'auto' ? undefined : flow.machine;
-
-  const params: CreateTaskParams = {
-    description,
-    project,
-    telegram_chat_id: chatId,
-    telegram_user_id: flow.userId || 0,
-    assigned_machine: machine,
-  };
-
-  try {
-    const task = await taskService.createTask(params);
-    const shortId = task.id.substring(0, 8);
-    const title = generateTaskTitle(description);
-    const machineLabel = machine || 'auto-dispatch';
-
-    // Create Telegram topic for the task
-    topicsService.createTopicForTask(task).catch((err) => {
-      runtime.logger.error(`[topic-relay] Failed to create topic for ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
-    });
-
-    // Clear the flow
-    clearFlow(chatId);
-
-    const queuedCount = await taskService.getQueuedCount();
-
-    // Send confirmation directly (not via callback since we're in an evaluator)
-    await topicsService.sendMessageWithKeyboard(
-      `Task QUEUED.\n\nID: ${shortId} (${title})\nProject: ${project}\nMachine: ${machineLabel}\nRepo: ${flow.repoPath || '(auto)'}\nQueue position: ${queuedCount}`,
-      [],
-    );
-
-    runtime.logger.info(`[topic-relay] Flow completed: task ${shortId} created for ${project}`);
-  } catch (err) {
-    clearFlow(chatId);
-    runtime.logger.error(`[topic-relay] Flow task creation failed: ${err instanceof Error ? err.message : String(err)}`);
-    await topicsService.sendMessageWithKeyboard(
-      `Failed to create task: ${err instanceof Error ? err.message : String(err)}`,
-      [],
-    );
-  }
-}
