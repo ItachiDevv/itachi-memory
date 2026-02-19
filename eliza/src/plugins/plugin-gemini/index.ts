@@ -14,13 +14,11 @@ import { generateText } from 'ai';
  * never registered and Anthropic (priority 0) handles everything.
  */
 
-// Module-level flags — geminiEnabled is set during init(), but geminiLargeEnabled
-// must be resolved eagerly because the `models` getter can run before init().
+// Module-level flags set during init — controls whether handlers are active.
+// geminiLargeEnabled is ALSO set eagerly from env because the `models` getter
+// can run before init() — ElizaOS reads models at registration time.
 let geminiEnabled = false;
-let geminiLargeEnabled = (() => {
-  const val = process.env.USE_GEMINI_LARGE ?? 'false';
-  return val === 'true' || val === '1';
-})();
+let geminiLargeEnabled = !!process.env.GEMINI_API_KEY;
 
 function getApiKey(runtime: IAgentRuntime): string {
   return String(runtime.getSetting('GEMINI_API_KEY') ?? process.env.GEMINI_API_KEY ?? '');
@@ -34,13 +32,6 @@ function getLargeModel(runtime: IAgentRuntime): string {
   return String(runtime.getSetting('GEMINI_LARGE_MODEL') ?? process.env.GEMINI_LARGE_MODEL ?? 'gemini-2.5-pro');
 }
 
-function isLargeEnabled(runtime: IAgentRuntime): boolean {
-  const fromRuntime = runtime.getSetting('USE_GEMINI_LARGE');
-  const fromEnv = process.env.USE_GEMINI_LARGE;
-  const val = fromRuntime || fromEnv || 'false';
-  logger.info(`[Gemini] USE_GEMINI_LARGE check — runtime: '${fromRuntime}', env: '${fromEnv}', resolved: '${val}'`);
-  return val === 'true' || val === '1';
-}
 
 function createGeminiClient(runtime: IAgentRuntime) {
   return createGoogleGenerativeAI({
@@ -173,10 +164,8 @@ export const itachiGeminiPlugin: Plugin = {
       return;
     }
 
-    geminiLargeEnabled = isLargeEnabled(runtime);
-    logger.info(
-      `[Gemini] Plugin active - TEXT_SMALL -> ${getSmallModel(runtime)}; TEXT_LARGE routed to Gemini: ${geminiLargeEnabled ? 'yes' : 'no'}`
-    );
+    geminiLargeEnabled = true; // Always route TEXT_LARGE to Gemini when plugin is active
+    logger.info(`[Gemini] Plugin active — TEXT_SMALL → ${getSmallModel(runtime)}, TEXT_LARGE → ${getLargeModel(runtime)}`);
   },
 
   // Models are always registered, but handlers check geminiEnabled flag.
