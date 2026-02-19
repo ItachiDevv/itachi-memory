@@ -457,33 +457,40 @@ async function handleDeleteTopics(
   if (callback) await callback({ text: `Deleting ${withTopics.length} ${status} topic(s)...` });
 
   let deleted = 0;
+  let cleaned = 0;
   for (const task of withTopics) {
     const topicId = (task as any).telegram_topic_id;
     try {
-      // Reopen first (topics may have been renamed/closed, need open state for deletion)
-      await topicsService.reopenTopic(topicId);
-      await new Promise(r => setTimeout(r, 300));
-      // Close the topic (required before deletion)
-      await topicsService.closeTopic(topicId);
-      await new Promise(r => setTimeout(r, 1000)); // Let Telegram propagate
-      let ok = false;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        ok = await topicsService.deleteTopic(topicId);
-        if (ok) break;
-        await new Promise(r => setTimeout(r, attempt * 1500));
+      // Try reopen — if topic is stale/invalid, this fails immediately
+      const reopened = await topicsService.reopenTopic(topicId);
+      if (!reopened) {
+        // Topic doesn't exist in Telegram anymore — just clear from DB
+        await taskService.updateTask(task.id, { telegram_topic_id: null } as any);
+        cleaned++;
+        continue;
       }
+
+      await new Promise(r => setTimeout(r, 300));
+      await topicsService.closeTopic(topicId);
+      await new Promise(r => setTimeout(r, 500));
+
+      const ok = await topicsService.deleteTopic(topicId);
       if (ok) {
         deleted++;
-        // Clear topic_id from task so it doesn't show up again
-        await taskService.updateTask(task.id, { telegram_topic_id: null } as any);
       }
+      // Clear topic_id from task regardless so it doesn't show up again
+      await taskService.updateTask(task.id, { telegram_topic_id: null } as any);
     } catch (err) {
-      runtime.logger.error(`[close-topics] Error deleting topic ${topicId}: ${err instanceof Error ? err.message : String(err)}`);
+      // On any error, clear the stale topic_id so we don't retry next time
+      await taskService.updateTask(task.id, { telegram_topic_id: null } as any).catch(() => {});
+      cleaned++;
+      runtime.logger.error(`[delete-topics] Error deleting topic ${topicId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  if (callback) await callback({ text: `Deleted ${deleted}/${withTopics.length} ${status} topic(s).` });
-  return { success: true, data: { deleted, total: withTopics.length } };
+  const cleanedMsg = cleaned > 0 ? ` (${cleaned} stale topic(s) cleared from DB)` : '';
+  if (callback) await callback({ text: `Deleted ${deleted}/${withTopics.length} ${status} topic(s).${cleanedMsg}` });
+  return { success: true, data: { deleted, cleaned, total: withTopics.length } };
 }
 
 async function handleFeedback(
