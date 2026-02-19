@@ -40,27 +40,27 @@ export interface ConversationFlow {
   cachedDirs?: string[];
 }
 
-/** One active flow per user per chat. Key: `${chatId}:${userId}` */
+/** One active flow per chat. Key: `${chatId}` (single-user bot group) */
 export const conversationFlows = new Map<string, ConversationFlow>();
 
-/** Build the flow map key */
-export function flowKey(chatId: number, userId: number): string {
-  return `${chatId}:${userId}`;
+/** Build the flow map key — uses chatId only since bot groups are typically single-user */
+export function flowKey(chatId: number, _userId?: number): string {
+  return `${chatId}`;
 }
 
-/** Get a user's active flow */
-export function getFlow(chatId: number, userId: number): ConversationFlow | undefined {
-  return conversationFlows.get(flowKey(chatId, userId));
+/** Get the active flow for a chat */
+export function getFlow(chatId: number, _userId?: number): ConversationFlow | undefined {
+  return conversationFlows.get(flowKey(chatId));
 }
 
-/** Set/replace a user's active flow */
-export function setFlow(chatId: number, userId: number, flow: ConversationFlow): void {
-  conversationFlows.set(flowKey(chatId, userId), flow);
+/** Set/replace the active flow for a chat */
+export function setFlow(chatId: number, _userId: number | undefined, flow: ConversationFlow): void {
+  conversationFlows.set(flowKey(chatId), flow);
 }
 
-/** Clear a user's active flow */
-export function clearFlow(chatId: number, userId: number): void {
-  conversationFlows.delete(flowKey(chatId, userId));
+/** Clear the active flow for a chat */
+export function clearFlow(chatId: number, _userId?: number): void {
+  conversationFlows.delete(flowKey(chatId));
 }
 
 // ── TTL Cleanup ──────────────────────────────────────────────────────

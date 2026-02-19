@@ -52,15 +52,15 @@ export const telegramCommandsAction: Action = {
     ],
   ],
 
-  validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+  validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
 
     // Check for active conversation flow at await_description (plain text → task creation)
     if (!text.startsWith('/')) {
-      const chatId = (message.content as Record<string, unknown>)?.chatId as number | undefined;
-      const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number | undefined;
-      if (chatId && userId) {
-        const flow = getFlow(chatId, userId);
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      const chatId = topicsService?.chatId;
+      if (chatId) {
+        const flow = getFlow(chatId);
         if (flow && flow.step === 'await_description') return true;
       }
       return false;
@@ -103,12 +103,12 @@ export const telegramCommandsAction: Action = {
       cleanupStaleFlows();
 
       // Check for active conversation flow at await_description step (plain text → task creation)
-      const chatId = (message.content as Record<string, unknown>)?.chatId as number | undefined;
-      const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number | undefined;
-      if (chatId && userId && !text.startsWith('/')) {
-        const flow = getFlow(chatId, userId);
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      const flowChatId = topicsService?.chatId;
+      if (flowChatId && !text.startsWith('/')) {
+        const flow = getFlow(flowChatId);
         if (flow && flow.step === 'await_description') {
-          return await handleFlowDescription(runtime, flow, text, chatId, userId, callback);
+          return await handleFlowDescription(runtime, flow, text, flowChatId, flow.userId, callback);
         }
       }
 
@@ -925,11 +925,11 @@ async function handleTaskFlow(
   }
 
   const chatIdNum = topicsService.chatId;
-  const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number || 0;
-  if (!chatIdNum || !userId) {
-    if (callback) await callback({ text: 'Could not determine chat/user context.' });
+  if (!chatIdNum) {
+    if (callback) await callback({ text: 'TELEGRAM_GROUP_CHAT_ID not configured.' });
     return { success: false, error: 'Missing chat context' };
   }
+  const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number || 0;
 
   // Fetch machines for keyboard
   const machines = await registry.getAllMachines();
@@ -1011,11 +1011,11 @@ async function handleSessionFlow(
   }
 
   const chatIdNum = topicsService.chatId;
-  const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number || 0;
-  if (!chatIdNum || !userId) {
-    if (callback) await callback({ text: 'Could not determine chat/user context.' });
+  if (!chatIdNum) {
+    if (callback) await callback({ text: 'TELEGRAM_GROUP_CHAT_ID not configured.' });
     return { success: false, error: 'Missing chat context' };
   }
+  const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number || 0;
 
   // Build keyboard from SSH targets
   const targets = sshService.getTargets();

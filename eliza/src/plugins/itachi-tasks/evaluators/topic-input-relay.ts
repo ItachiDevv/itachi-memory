@@ -87,10 +87,10 @@ export const topicInputRelayEvaluator: Evaluator = {
 
     // Check for active conversation flow at await_description step
     // If present, the telegram-commands handler will pick up the text instead
-    const flowChatId = (message.content as Record<string, unknown>)?.chatId as number | undefined;
-    const flowUserId = (message.content as Record<string, unknown>)?.telegram_user_id as number | undefined;
-    if (flowChatId && flowUserId) {
-      const flow = getFlow(flowChatId, flowUserId);
+    const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+    const flowChatId = topicsService?.chatId;
+    if (flowChatId) {
+      const flow = getFlow(flowChatId);
       if (flow && flow.step === 'await_description') {
         // Don't relay — the command handler will process this
         return;
