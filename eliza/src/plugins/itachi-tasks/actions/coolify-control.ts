@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { SSHService } from '../services/ssh-service.js';
+import { MachineRegistryService } from '../services/machine-registry.js';
 import { stripBotMention } from '../utils/telegram.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
@@ -48,6 +49,66 @@ const DIAGNOSTICS: Record<string, { label: string; cmd: string }[]> = {
   ],
 };
 
+// ── Windows diagnostic commands ───────────────────────────────────────
+const DIAGNOSTICS_WINDOWS: Record<string, { label: string; cmd: string }[]> = {
+  investigate: [
+    { label: 'Running processes (top CPU)', cmd: 'powershell -Command "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, Id, CPU, @{N=\'Mem(MB)\';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize"' },
+    { label: 'System info', cmd: 'powershell -Command "$os = Get-CimInstance Win32_OperatingSystem; \\"CPU: $((Get-CimInstance Win32_Processor).LoadPercentage)% | Memory: $([math]::Round(($os.TotalVisibleMemorySize - $os.FreePhysicalMemory)/1MB,1))GB / $([math]::Round($os.TotalVisibleMemorySize/1MB,1))GB | Uptime: $((Get-Date) - $os.LastBootUpTime)\\"" ' },
+    { label: 'Disk usage', cmd: 'powershell -Command "Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N=\'Used(GB)\';E={[math]::Round($_.Used/1GB,1)}}, @{N=\'Free(GB)\';E={[math]::Round($_.Free/1GB,1)}}, @{N=\'Total(GB)\';E={[math]::Round(($_.Used+$_.Free)/1GB,1)}} | Format-Table -AutoSize"' },
+    { label: 'Recent errors (Event Log)', cmd: 'powershell -Command "Get-WinEvent -LogName Application -MaxEvents 5 -FilterXPath \'*[System[Level=2]]\' 2>$null | Select-Object TimeCreated, Message | Format-List"' },
+  ],
+  status: [
+    { label: 'System overview', cmd: 'powershell -Command "$os = Get-CimInstance Win32_OperatingSystem; \\"Hostname: $env:COMPUTERNAME | OS: $($os.Caption) | Uptime: $((Get-Date) - $os.LastBootUpTime)\\"" ' },
+    { label: 'CPU & Memory', cmd: 'powershell -Command "$os = Get-CimInstance Win32_OperatingSystem; \\"CPU: $((Get-CimInstance Win32_Processor).LoadPercentage)% | Memory: $([math]::Round(($os.TotalVisibleMemorySize - $os.FreePhysicalMemory)/1MB,1))GB / $([math]::Round($os.TotalVisibleMemorySize/1MB,1))GB\\"" ' },
+    { label: 'Disk usage', cmd: 'powershell -Command "Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N=\'Used(GB)\';E={[math]::Round($_.Used/1GB,1)}}, @{N=\'Free(GB)\';E={[math]::Round($_.Free/1GB,1)}} | Format-Table -AutoSize"' },
+  ],
+  disk: [
+    { label: 'Disk usage', cmd: 'powershell -Command "Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N=\'Used(GB)\';E={[math]::Round($_.Used/1GB,1)}}, @{N=\'Free(GB)\';E={[math]::Round($_.Free/1GB,1)}}, @{N=\'Total(GB)\';E={[math]::Round(($_.Used+$_.Free)/1GB,1)}} | Format-Table -AutoSize"' },
+    { label: 'Largest folders', cmd: 'powershell -Command "Get-ChildItem C:\\ -Directory -ErrorAction SilentlyContinue | ForEach-Object { $size = (Get-ChildItem $_.FullName -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum; [PSCustomObject]@{Name=$_.Name; SizeGB=[math]::Round($size/1GB,2)} } | Sort-Object SizeGB -Descending | Select-Object -First 10 | Format-Table -AutoSize"' },
+  ],
+  logs: [
+    { label: 'Recent application events', cmd: 'powershell -Command "Get-WinEvent -LogName Application -MaxEvents 20 2>$null | Select-Object TimeCreated, LevelDisplayName, Message | Format-List"' },
+  ],
+  containers: [
+    { label: 'Docker containers', cmd: 'docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}" 2>nul || powershell -Command "Write-Output \'Docker not available on this machine\'"' },
+  ],
+};
+
+// ── macOS diagnostic commands ─────────────────────────────────────────
+const DIAGNOSTICS_DARWIN: Record<string, { label: string; cmd: string }[]> = {
+  investigate: [
+    { label: 'Running processes (top CPU)', cmd: 'ps aux --sort=-%cpu | head -15' },
+    { label: 'System resources', cmd: 'echo "CPU: $(uptime)"; echo "Memory: $(vm_stat 2>/dev/null | head -5)"; echo "Disk: $(df -h / 2>/dev/null | tail -1)"' },
+    { label: 'Docker status', cmd: 'docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || echo "Docker not running"' },
+    { label: 'Recent logs', cmd: 'docker ps --format "{{.Names}}" 2>/dev/null | head -1 | xargs -I{} docker logs --tail 20 {} 2>&1 || echo "No containers"' },
+  ],
+  status: [
+    { label: 'System overview', cmd: 'echo "Host: $(hostname)"; uptime; echo "Disk: $(df -h / | tail -1)"' },
+    { label: 'Docker', cmd: 'docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "Docker not available"' },
+  ],
+  disk: [
+    { label: 'Disk usage', cmd: 'df -h 2>/dev/null' },
+    { label: 'Largest dirs', cmd: 'du -sh /Users/*/Library /Users/*/Documents /opt /usr/local 2>/dev/null | sort -rh | head -10' },
+  ],
+  logs: [
+    { label: 'Recent logs', cmd: 'docker ps --format "{{.Names}}" 2>/dev/null | head -1 | xargs -I{} docker logs --tail 50 {} 2>&1 || echo "No containers"' },
+  ],
+  containers: [
+    { label: 'Docker containers', cmd: 'docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}" 2>/dev/null || echo "Docker not available"' },
+  ],
+};
+
+/**
+ * Pick the right diagnostics table based on the target OS.
+ * Falls back to Linux (DIAGNOSTICS) if OS is unknown.
+ */
+function getDiagnosticsForOS(os: string | null | undefined): Record<string, { label: string; cmd: string }[]> {
+  const osLower = (os || '').toLowerCase();
+  if (osLower.includes('win')) return DIAGNOSTICS_WINDOWS;
+  if (osLower.includes('darwin') || osLower.includes('mac')) return DIAGNOSTICS_DARWIN;
+  return DIAGNOSTICS; // Linux / default
+}
+
 /**
  * Extract a machine target name from natural language text.
  * Returns the SSH target name (e.g. "mac", "windows", "coolify") or null.
@@ -75,6 +136,31 @@ function detectIntent(text: string): string {
     if (pattern.test(text)) return intent;
   }
   return 'investigate'; // Default: investigate
+}
+
+/**
+ * Detect the OS of a target machine from the machine registry, falling back
+ * to the SSH target name alias mapping for well-known names.
+ */
+async function detectTargetOS(runtime: IAgentRuntime, target: string): Promise<string | null> {
+  // Try machine registry first
+  try {
+    const registry = runtime.getService<MachineRegistryService>('machine-registry');
+    if (registry) {
+      const { machine } = await registry.resolveMachine(target);
+      if (machine?.os) return machine.os;
+    }
+  } catch {
+    // Registry not available — fall through
+  }
+
+  // Fallback: infer from well-known target names
+  const lower = target.toLowerCase();
+  if (lower === 'windows' || lower === 'pc' || lower === 'win' || lower === 'desktop' || lower === 'laptop') return 'windows';
+  if (lower === 'mac' || lower === 'macbook' || lower === 'apple') return 'darwin';
+  // coolify/hetzner/server are Linux
+  if (lower === 'coolify' || lower === 'hetzner' || lower === 'server' || lower === 'vps') return 'linux';
+  return null;
 }
 
 /**
@@ -221,9 +307,11 @@ export const coolifyControlAction: Action = {
         }
 
         default: {
-          // investigate, status, logs, disk, containers — run diagnostics
-          const diagSteps = DIAGNOSTICS[intent] || DIAGNOSTICS.investigate;
-          if (callback) await callback({ text: `Investigating ${target}...` });
+          // investigate, status, logs, disk, containers — run OS-appropriate diagnostics
+          const targetOS = await detectTargetOS(runtime, target);
+          const diagTable = getDiagnosticsForOS(targetOS);
+          const diagSteps = diagTable[intent] || diagTable.investigate;
+          if (callback) await callback({ text: `Investigating ${target}${targetOS ? ` (${targetOS})` : ''}...` });
           const report = await runDiagnostics(sshService, target, diagSteps, callback);
           if (callback) await callback({ text: report });
           return { success: true, data: { target, intent, report } };

@@ -66,6 +66,7 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'ops', description: 'Server operations — /ops deploy|logs|restart|update' },
         { command: 'recall', description: 'Search memories — /recall <query>' },
         { command: 'teach', description: 'Teach a rule — /teach <instruction>' },
+        { command: 'unteach', description: 'Delete a rule — /unteach <query>' },
         { command: 'feedback', description: 'Rate a task — /feedback <id> <good|bad> <reason>' },
         { command: 'remind', description: 'Reminders — /remind <time> <msg> | list | cancel <id>' },
         { command: 'machines', description: 'Machines, engines, repos — /machines [engines|repos|sync]' },

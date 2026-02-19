@@ -49,6 +49,7 @@ export const telegramCommandsAction: Action = {
     const text = stripBotMention(message.content?.text?.trim() || '');
     return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text.startsWith('/learn ') || text.startsWith('/teach ') ||
+      text.startsWith('/unteach ') || text.startsWith('/forget ') ||
       text.startsWith('/spawn ') || text === '/agents' || text.startsWith('/agents ') ||
       text.startsWith('/msg ') ||
       text === '/repos' || text === '/machines' || text.startsWith('/machines ') ||
@@ -87,6 +88,12 @@ export const telegramCommandsAction: Action = {
       // /teach <instruction>
       if (text.startsWith('/teach ')) {
         return await handleTeach(runtime, text, callback);
+      }
+
+      // /unteach <query> or /forget <query> — delete a learned rule
+      if (text.startsWith('/unteach ') || text.startsWith('/forget ')) {
+        const query = text.startsWith('/unteach ') ? text.substring('/unteach '.length).trim() : text.substring('/forget '.length).trim();
+        return await handleUnteach(runtime, query, callback);
       }
 
       // /spawn <profile> <task>
@@ -758,6 +765,68 @@ async function handleMsg(
   }
 }
 
+async function handleUnteach(
+  runtime: IAgentRuntime,
+  query: string,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  if (!query || query.length < 3) {
+    if (callback) await callback({ text: 'Usage: /unteach <query>\nSearches for matching rules/preferences and deletes them.\nExample: /unteach always use bun' });
+    return { success: false, error: 'No query provided' };
+  }
+
+  const memoryService = runtime.getService<MemoryService>('itachi-memory');
+  if (!memoryService) {
+    if (callback) await callback({ text: 'Memory service not available.' });
+    return { success: false, error: 'Memory service not available' };
+  }
+
+  // Search across rule-like categories
+  const categories = ['project_rule', 'personality_trait', 'task_lesson', 'fact', 'identity'];
+  const allMatches: Array<{ id: string; summary: string; category: string; similarity: number }> = [];
+
+  for (const cat of categories) {
+    const results = await memoryService.searchMemories(query, undefined, 3, undefined, cat);
+    for (const r of results) {
+      if ((r.similarity ?? 0) > 0.7) {
+        allMatches.push({ id: r.id, summary: r.summary, category: r.category, similarity: r.similarity ?? 0 });
+      }
+    }
+  }
+
+  if (allMatches.length === 0) {
+    if (callback) await callback({ text: `No matching rules or preferences found for: "${query}"` });
+    return { success: true, data: { deleted: 0 } };
+  }
+
+  // Sort by similarity descending
+  allMatches.sort((a, b) => b.similarity - a.similarity);
+
+  // Delete the best match
+  const best = allMatches[0];
+  const deleted = await memoryService.deleteMemory(best.id);
+
+  if (!deleted) {
+    if (callback) await callback({ text: `Found a match but failed to delete it. ID: ${best.id.substring(0, 8)}` });
+    return { success: false, error: 'Delete failed' };
+  }
+
+  let response = `Deleted ${best.category}: "${best.summary.substring(0, 100)}" (similarity: ${best.similarity.toFixed(2)})`;
+
+  // If there are other close matches, mention them
+  const others = allMatches.slice(1).filter(m => m.similarity > 0.8);
+  if (others.length > 0) {
+    response += `\n\nOther close matches (not deleted):`;
+    for (const o of others) {
+      response += `\n- [${o.category}] "${o.summary.substring(0, 60)}" (${o.similarity.toFixed(2)})`;
+    }
+    response += `\n\nRun /unteach again with a more specific query to delete these.`;
+  }
+
+  if (callback) await callback({ text: response });
+  return { success: true, data: { deleted: 1, id: best.id, category: best.category } };
+}
+
 function timeSince(dateStr: string): string {
   const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
   if (seconds < 60) return `${seconds}s ago`;
@@ -795,6 +864,7 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
 **Memory & Knowledge**
   /recall [project:]<query> — Search memories
   /teach <instruction> — Teach a rule/preference/personality
+  /unteach <query> — Delete a learned rule or preference
 
 **Machines & Repos**
   /machines — Show orchestrator machines

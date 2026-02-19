@@ -10,12 +10,28 @@ import { stripBotMention } from '../utils/telegram.js';
  */
 
 const KNOWN_COMMANDS = new Set([
-  '/status', '/task', '/cancel', '/recall', '/repos', '/machines',
-  '/sync_repos', '/sync-repos', '/close_done', '/close-done', '/close_failed',
-  '/close-failed', '/close_finished', '/remind', '/reminders', '/unremind',
-  '/schedule', '/exec', '/pull', '/restart', '/ssh', '/deploy', '/logs',
-  '/containers', '/restart_bot', '/restart-bot', '/ssh_targets', '/ssh-targets',
-  '/ssh_test', '/ssh-test', '/feedback', '/update', '/tasks', '/queue',
+  // Core
+  '/task', '/status', '/cancel', '/help',
+  // Sessions & SSH
+  '/session', '/chat', '/ssh', '/exec',
+  // Server ops (new umbrella + old aliases)
+  '/ops', '/deploy', '/update', '/logs', '/containers', '/restart',
+  '/restart_bot', '/restart-bot', '/pull',
+  // GitHub
+  '/gh', '/prs', '/issues', '/branches',
+  // Memory & knowledge
+  '/recall', '/teach', '/learn', '/unteach', '/forget',
+  // Machines & repos
+  '/machines', '/engines', '/repos', '/sync_repos', '/sync-repos',
+  // Reminders
+  '/remind', '/reminders', '/unremind', '/schedule',
+  // Agents
+  '/spawn', '/agents', '/msg',
+  // Housekeeping
+  '/close', '/close_done', '/close-done', '/close_failed', '/close-failed', '/close_finished',
+  // Misc
+  '/feedback', '/tasks', '/queue',
+  '/ssh_targets', '/ssh-targets', '/ssh_test', '/ssh-test',
 ]);
 
 export const commandSuppressorProvider: Provider = {

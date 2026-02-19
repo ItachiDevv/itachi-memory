@@ -357,6 +357,18 @@ export class MemoryService extends Service {
       .eq('id', memoryId);
   }
 
+  /** Delete a memory by ID. Returns true if a row was deleted. */
+  async deleteMemory(memoryId: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from('itachi_memories')
+      .delete()
+      .eq('id', memoryId)
+      .select('id');
+
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
+  }
+
   /** Update the summary of an existing memory (for rule refinement) */
   async updateMemorySummary(
     memoryId: string,
