@@ -25,16 +25,20 @@ const ENGINE_WRAPPERS: Record<string, string> = {
 /**
  * Register a Telegram callback_query handler on the Telegraf bot instance.
  * Polls for the bot instance since TelegramClientInterface starts async.
+ *
+ * IMPORTANT: ElizaOS launches Telegraf with allowedUpdates: ["message", "message_reaction"]
+ * which excludes callback_query. We must restart polling to include it.
  */
 export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<void> {
-  const maxRetries = 10;
-  const retryMs = 1_000;
+  const maxRetries = 15;
+  const retryMs = 2_000;
 
   for (let i = 0; i < maxRetries; i++) {
     try {
       const telegramService = runtime.getService('telegram') as any;
       const bot = telegramService?.messageManager?.bot;
       if (bot) {
+        // Register our callback_query handler
         bot.on('callback_query', async (ctx: any) => {
           try {
             await handleCallback(runtime, ctx);
@@ -42,6 +46,20 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
             runtime.logger.error(`[callback-handler] Error: ${err instanceof Error ? err.message : String(err)}`);
           }
         });
+
+        // ElizaOS launches Telegraf with allowedUpdates: ["message", "message_reaction"]
+        // which excludes callback_query. Restart polling to include it.
+        try {
+          await bot.stop('restart-for-callbacks');
+          await new Promise((r) => setTimeout(r, 500));
+          bot.launch({
+            allowedUpdates: ['message', 'message_reaction', 'callback_query'],
+          });
+          runtime.logger.info('[callback-handler] Restarted Telegraf polling with callback_query support');
+        } catch (restartErr: any) {
+          runtime.logger.warn(`[callback-handler] Could not restart polling: ${restartErr?.message}. Callbacks may not work.`);
+        }
+
         runtime.logger.info('[callback-handler] Registered Telegram callback_query handler');
         return;
       }
