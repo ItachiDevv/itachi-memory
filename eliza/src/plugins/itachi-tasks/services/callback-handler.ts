@@ -177,6 +177,7 @@ async function handleTaskFlowCallback(
       );
       flow.step = 'await_description';
       setFlow(chatId, userId, flow);
+      runtime.logger.info(`[callback-handler] Set flow to await_description: chatId=${chatId} key=${chatId}`);
       return;
     }
 

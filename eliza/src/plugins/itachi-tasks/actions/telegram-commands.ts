@@ -10,7 +10,7 @@ import { getStartingDir } from '../shared/start-dir.js';
 import { listRemoteDirectory } from '../utils/directory-browser.js';
 import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
-  flowKey, type ConversationFlow,
+  flowKey, conversationFlows, type ConversationFlow,
 } from '../shared/conversation-flows.js';
 
 /**
@@ -59,10 +59,9 @@ export const telegramCommandsAction: Action = {
     if (!text.startsWith('/')) {
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
       const chatId = topicsService?.chatId;
-      if (chatId) {
-        const flow = getFlow(chatId);
-        if (flow && flow.step === 'await_description') return true;
-      }
+      const flow = chatId ? getFlow(chatId) : undefined;
+      runtime.logger.info(`[telegram-commands] validate: text="${text.substring(0, 30)}" chatId=${chatId} flowStep=${flow?.step || 'none'} flowsCount=${conversationFlows.size}`);
+      if (flow && flow.step === 'await_description') return true;
       return false;
     }
 
