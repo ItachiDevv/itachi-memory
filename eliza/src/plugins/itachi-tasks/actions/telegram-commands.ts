@@ -5,7 +5,7 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { SSHService } from '../services/ssh-service.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { syncGitHubRepos } from '../services/github-sync.js';
-import { stripBotMention } from '../utils/telegram.js';
+import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { listRemoteDirectory } from '../utils/directory-browser.js';
 import {
@@ -237,8 +237,15 @@ export const telegramCommandsAction: Action = {
       }
 
       // /close [done|failed|all] — hidden alias for /delete in main chat (backward compat)
-      // NOTE: /close inside a topic is handled by topic-input-relay evaluator (closes the topic)
+      // NOTE: bare /close inside a topic is handled by topic-input-relay evaluator (closes the topic)
       if (text === '/close' || text.startsWith('/close ')) {
+        // Skip bare /close inside a topic — evaluator handles it as "close this topic"
+        if (text === '/close') {
+          const threadId = await getTopicThreadId(runtime, message);
+          if (threadId) {
+            return { success: true, data: { handledByEvaluator: true, topicClose: true } };
+          }
+        }
         const sub = text.substring('/close'.length).trim().replace(/^[-_]/, '');
         if (sub === 'done' || sub === 'finished') {
           return await handleDeleteTopics(runtime, 'completed', callback);
