@@ -51,15 +51,16 @@ export const topicInputRelayEvaluator: Evaluator = {
 
     // Check if this message is in a Telegram forum topic by looking up the room
     const threadId = await getTopicThreadId(runtime, message);
-    const text = ((message.content?.text as string) || '').substring(0, 30);
-    runtime.logger.info(`[topic-relay] validate: text="${text}" roomId=${message.roomId} threadId=${threadId} browsingKeys=[${[...browsingSessionMap.keys()].join(',')}]`);
+    if (threadId !== null) {
+      const text = ((message.content?.text as string) || '').substring(0, 30);
+      runtime.logger.info(`[topic-relay] validate: threadId=${threadId} text="${text}" browsingSessions=${browsingSessionMap.size} activeSessions=${activeSessions.size}`);
+    }
     return threadId !== null;
   },
 
   handler: async (runtime: IAgentRuntime, message: Memory): Promise<void> => {
     const text = ((message.content?.text as string) || '').trim();
     if (!text) return;
-    runtime.logger.info(`[topic-relay] handler: text="${text.substring(0, 30)}" browsingKeys=[${[...browsingSessionMap.keys()].join(',')}]`);
 
     // ── Topic-based handling ──────────────────────────────────────────
     const threadId = await getTopicThreadId(runtime, message);
