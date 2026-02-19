@@ -20,13 +20,8 @@ function stripAnsi(text: string): string {
     .trim();
 }
 
-// ── Machine alias → SSH target name ──────────────────────────────────
-const MACHINE_TO_SSH_TARGET: Record<string, string> = {
-  mac: 'mac',
-  windows: 'windows',
-  hetzner: 'coolify',
-  coolify: 'coolify',
-};
+// Machine alias → SSH target imported from shared module
+import { resolveSSHTarget } from '../shared/repo-utils.js';
 
 // ── Engine wrappers ──────────────────────────────────────────────────
 const ENGINE_WRAPPERS: Record<string, string> = {
@@ -195,7 +190,7 @@ export class TaskExecutorService extends Service {
       }
 
       // 3. Resolve SSH target
-      const sshTarget = MACHINE_TO_SSH_TARGET[machineId] || machineId;
+      const sshTarget = resolveSSHTarget(machineId);
       if (!sshService.getTarget(sshTarget)) {
         throw new Error(`SSH target "${sshTarget}" not configured`);
       }
@@ -514,7 +509,7 @@ export class TaskExecutorService extends Service {
     const workspace = task.workspace_path;
     if (!machineId || !workspace) return false;
 
-    const sshTarget = MACHINE_TO_SSH_TARGET[machineId] || machineId;
+    const sshTarget = resolveSSHTarget(machineId);
     if (!sshService.getTarget(sshTarget)) return false;
 
     const topicId = task.telegram_topic_id || 0;

@@ -4,6 +4,7 @@ import { TelegramTopicsService } from './telegram-topics.js';
 import { MachineRegistryService } from './machine-registry.js';
 import { listRemoteDirectory } from '../utils/directory-browser.js';
 import { getStartingDir } from '../shared/start-dir.js';
+import { resolveSSHTarget } from '../shared/repo-utils.js';
 import { spawnSessionInTopic } from '../actions/interactive-session.js';
 import {
   conversationFlows,
@@ -164,7 +165,7 @@ async function handleTaskFlowCallback(
       return;
     }
 
-    const sshTarget = flow.machine || 'mac';
+    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
     const startDir = getStartingDir(sshTarget);
     const { dirs, error } = await listRemoteDirectory(sshService, sshTarget, startDir);
 
@@ -199,7 +200,7 @@ async function handleTaskFlowCallback(
     if (idx < 0 || idx >= dirs.length) return;
 
     const selected = dirs[idx];
-    const sshTarget = flow.machine || 'mac';
+    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
     const startDir = getStartingDir(sshTarget);
     flow.repoPath = `${startDir}/${selected}`;
     flow.project = selected;
@@ -288,7 +289,7 @@ async function handleSessionFlowCallback(
   if (key === 'r') {
     if (!sshService) return;
 
-    const sshTarget = flow.machine || 'mac';
+    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
     const startDir = getStartingDir(sshTarget);
 
     if (value === 'here') {
@@ -345,7 +346,7 @@ async function handleSessionFlowCallback(
   // sf:d:<idx>|here — subfolder selected
   if (key === 'd') {
     if (!sshService) return;
-    const sshTarget = flow.machine || 'mac';
+    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
 
     if (value === 'here') {
       // Use current repoPath
@@ -378,7 +379,7 @@ async function handleSessionFlowCallback(
   if (key === 's') {
     if (!sshService) return;
 
-    const sshTarget = flow.machine || 'mac';
+    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
     const repoPath = flow.repoPath || getStartingDir(sshTarget);
     const engineCmd = flow.engineCommand || await resolveEngine(runtime, sshTarget);
     const dsFlag = value === 'cds' ? '--cds' : '--ds';

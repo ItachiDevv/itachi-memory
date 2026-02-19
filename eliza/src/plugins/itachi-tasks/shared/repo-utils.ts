@@ -4,6 +4,31 @@ import type { TaskService } from '../services/task-service.js';
 import type { TelegramTopicsService } from '../services/telegram-topics.js';
 import { getStartingDir } from './start-dir.js';
 
+/**
+ * Map machine_id (registry) or common aliases → SSH target name.
+ * Used by task-executor-service, callback-handler, and interactive flows.
+ */
+export const MACHINE_TO_SSH_TARGET: Record<string, string> = {
+  // Direct SSH target names
+  mac: 'mac',
+  windows: 'windows',
+  hetzner: 'coolify',
+  coolify: 'coolify',
+  // Machine registry IDs (from orchestrator registration)
+  'itachi-m1': 'mac',
+  'windows-pc': 'windows',
+  // Common aliases
+  macbook: 'mac',
+  desktop: 'windows',
+  server: 'coolify',
+  vps: 'coolify',
+};
+
+/** Resolve a machine identifier to an SSH target name */
+export function resolveSSHTarget(machineId: string): string {
+  return MACHINE_TO_SSH_TARGET[machineId] || MACHINE_TO_SSH_TARGET[machineId.toLowerCase()] || machineId;
+}
+
 /** Default repo paths per SSH target */
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
   mac: '~/itachi/itachi-memory',
