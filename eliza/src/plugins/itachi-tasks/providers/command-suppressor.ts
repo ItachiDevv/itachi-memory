@@ -31,7 +31,7 @@ const KNOWN_COMMANDS = new Set([
   // Agents
   '/spawn', '/agents', '/msg',
   // Housekeeping
-  '/close', '/close_done', '/close-done', '/close_failed', '/close-failed', '/close_finished',
+  '/delete', '/close', '/close_done', '/close-done', '/close_failed', '/close-failed', '/close_finished',
   // Misc
   '/feedback', '/tasks', '/queue',
   '/ssh_targets', '/ssh-targets', '/ssh_test', '/ssh-test',

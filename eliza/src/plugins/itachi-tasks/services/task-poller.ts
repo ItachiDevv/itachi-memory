@@ -196,14 +196,7 @@ export class TaskPollerService extends Service {
           .update({ notified_at: new Date().toISOString() })
           .eq('id', task.id);
 
-        // Rename the Telegram topic to show status (keep open for follow-up interaction)
-        if (task.telegram_topic_id) {
-          const topicsService = this.runtime.getService('telegram-topics') as TelegramTopicsService | null;
-          if (topicsService) {
-            const statusLabel = task.status === 'completed' ? '✅ DONE' : '❌ FAILED';
-            await topicsService.renameTopic(task.telegram_topic_id, `${statusLabel} | ${title} | ${task.project}`);
-          }
-        }
+        // Topic stays open — user can /close manually when ready
 
         // Extract a lesson from the task outcome (fire-and-forget)
         this.extractLessonFromCompletion(task).catch((err: unknown) => {

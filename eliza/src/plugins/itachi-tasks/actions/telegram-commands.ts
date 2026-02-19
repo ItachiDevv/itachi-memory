@@ -129,6 +129,7 @@ export const telegramCommandsAction: Action = {
       }
 
       // /delete [done|failed|all] — cleanup task topics (renamed from /close)
+      // Bare /delete defaults to 'all'
       if (text === '/delete' || text.startsWith('/delete ')) {
         const sub = text.substring('/delete'.length).trim().replace(/^[-_]/, '');
         if (sub === 'done' || sub === 'finished') {
@@ -137,12 +138,12 @@ export const telegramCommandsAction: Action = {
         if (sub === 'failed') {
           return await handleDeleteTopics(runtime, 'failed', callback);
         }
-        if (sub === 'all') {
+        if (sub === 'all' || sub === '') {
           const r1 = await handleDeleteTopics(runtime, 'completed', callback);
           const r2 = await handleDeleteTopics(runtime, 'failed', callback);
           return { success: r1.success && r2.success };
         }
-        if (callback) await callback({ text: 'Usage: /delete done|failed|all' });
+        if (callback) await callback({ text: 'Usage: /delete [done|failed|all] (default: all)' });
         return { success: false, error: 'Unknown delete subcommand' };
       }
 
@@ -233,7 +234,8 @@ export const telegramCommandsAction: Action = {
         return await handleSyncRepos(runtime, callback);
       }
 
-      // /close [done|failed|all] — hidden alias for /delete (backward compat)
+      // /close [done|failed|all] — hidden alias for /delete in main chat (backward compat)
+      // NOTE: /close inside a topic is handled by topic-input-relay evaluator (closes the topic)
       if (text === '/close' || text.startsWith('/close ')) {
         const sub = text.substring('/close'.length).trim().replace(/^[-_]/, '');
         if (sub === 'done' || sub === 'finished') {
@@ -242,12 +244,12 @@ export const telegramCommandsAction: Action = {
         if (sub === 'failed') {
           return await handleDeleteTopics(runtime, 'failed', callback);
         }
-        if (sub === 'all') {
+        if (sub === 'all' || sub === '') {
           const r1 = await handleDeleteTopics(runtime, 'completed', callback);
           const r2 = await handleDeleteTopics(runtime, 'failed', callback);
           return { success: r1.success && r2.success };
         }
-        if (callback) await callback({ text: 'Usage: /delete done|failed|all (or /close done|failed|all)' });
+        if (callback) await callback({ text: 'Usage: /delete [done|failed|all] (default: all)' });
         return { success: false, error: 'Unknown close subcommand' };
       }
 
