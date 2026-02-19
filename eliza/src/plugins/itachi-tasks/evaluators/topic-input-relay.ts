@@ -54,17 +54,24 @@ export const topicInputRelayEvaluator: Evaluator = {
       const flowChatId = topicsService?.chatId;
       if (flowChatId) {
         const flow = getFlow(flowChatId);
-        if (flow && flow.step === 'await_description') return true;
+        if (flow && flow.step === 'await_description') {
+          runtime.logger.info(`[topic-relay] validate: flow detected, returning true for "${text.substring(0, 30)}"`);
+          return true;
+        }
       }
     }
 
     // Check if this message is in a Telegram forum topic by looking up the room
     const threadId = await getTopicThreadId(runtime, message);
+    if (threadId) {
+      runtime.logger.info(`[topic-relay] validate: threadId=${threadId} for "${text.substring(0, 30)}"`);
+    }
     return threadId !== null;
   },
 
   handler: async (runtime: IAgentRuntime, message: Memory): Promise<void> => {
     const text = ((message.content?.text as string) || '').trim();
+    runtime.logger.info(`[topic-relay] handler called, text="${text.substring(0, 40)}" _flowHandled=${(message.content as any)?._flowHandled}`);
     if (!text) return;
 
     // ── Flow description handler ──────────────────────────────────────
@@ -75,7 +82,9 @@ export const topicInputRelayEvaluator: Evaluator = {
       const flowChatId = topicsServiceForFlow?.chatId;
       if (flowChatId) {
         const flow = getFlow(flowChatId);
+        runtime.logger.info(`[topic-relay] handler flow check: chatId=${flowChatId} flow=${flow ? flow.step : 'none'}`);
         if (flow && flow.step === 'await_description') {
+          runtime.logger.info(`[topic-relay] handler: processing flow description for "${text.substring(0, 40)}"`);
           await handleFlowDescriptionDirect(runtime, flow, text, flowChatId, topicsServiceForFlow);
           (message.content as Record<string, unknown>)._topicRelayQueued = true;
           (message.content as Record<string, unknown>)._flowHandled = true;
