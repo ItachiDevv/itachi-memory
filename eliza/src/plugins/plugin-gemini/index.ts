@@ -14,9 +14,13 @@ import { generateText } from 'ai';
  * never registered and Anthropic (priority 0) handles everything.
  */
 
-// Module-level flags set during init — controls whether handlers are active
+// Module-level flags — geminiEnabled is set during init(), but geminiLargeEnabled
+// must be resolved eagerly because the `models` getter can run before init().
 let geminiEnabled = false;
-let geminiLargeEnabled = false;
+let geminiLargeEnabled = (() => {
+  const val = process.env.USE_GEMINI_LARGE ?? 'false';
+  return val === 'true' || val === '1';
+})();
 
 function getApiKey(runtime: IAgentRuntime): string {
   return String(runtime.getSetting('GEMINI_API_KEY') ?? process.env.GEMINI_API_KEY ?? '');
