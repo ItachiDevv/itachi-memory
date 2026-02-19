@@ -4,6 +4,7 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
+import { getFlow } from '../shared/conversation-flows.js';
 
 export const createTaskAction: Action = {
   name: 'CREATE_TASK',
@@ -78,6 +79,20 @@ export const createTaskAction: Action = {
         }
       } catch {
         // Non-critical — fall through to normal validation
+      }
+    }
+
+    // If there's an active conversation flow at await_description, defer to TELEGRAM_COMMANDS
+    // which handles the flow completion. Without this, the LLM picks CREATE_TASK for the
+    // description text and bypasses the flow entirely.
+    if (!text.startsWith('/task ')) {
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      const flowChatId = topicsService?.chatId;
+      if (flowChatId) {
+        const flow = getFlow(flowChatId);
+        if (flow && flow.step === 'await_description') {
+          return false; // TELEGRAM_COMMANDS handles flow descriptions
+        }
       }
     }
 
