@@ -452,19 +452,31 @@ async function handleSessionFlowCallback(
 
     clearFlow(chatId, userId);
 
-    // Create a topic and spawn the session
-    const topicResult = await topicsService.sendMessageWithKeyboard(
-      `Interactive session on ${sshTarget}:${repoPath}`,
-      [],
-      undefined,
-      undefined,
-    );
+    // Create a forum topic for this session
+    const projectName = flow.project || repoPath.split('/').pop() || 'session';
+    const topicName = `Session: ${projectName} | ${sshTarget}`;
+    const topicCreateResult = await (topicsService as any).apiCall('createForumTopic', {
+      chat_id: (topicsService as any).groupChatId,
+      name: topicName.substring(0, 128),
+    });
 
-    // Spawn session in main chat topic (simplified — the session action creates its own topic)
+    if (!topicCreateResult?.ok || !topicCreateResult.result?.message_thread_id) {
+      runtime.logger.error(`[callback-handler] Failed to create session topic: ${topicCreateResult?.description || 'unknown'}`);
+      // Fallback: send message to main chat
+      await topicsService.sendMessageWithKeyboard(
+        `Failed to create topic for session on ${sshTarget}:${repoPath}. Session not started.`,
+        [], undefined, undefined,
+      );
+      return;
+    }
+
+    const sessionTopicId = topicCreateResult.result.message_thread_id;
+
+    // Spawn session inside the topic
     await spawnSessionInTopic(
       runtime, sshService, topicsService,
       sshTarget, repoPath,
-      prompt, `${engineCmd} ${dsFlag}`, 0,
+      prompt, `${engineCmd} ${dsFlag}`, sessionTopicId,
       flow.project,
     );
     return;

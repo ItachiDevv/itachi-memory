@@ -128,7 +128,11 @@ export async function spawnSessionInTopic(
   project?: string,
 ): Promise<string | null> {
   const escapedPrompt = prompt.replace(/'/g, "'\\''");
-  const sshCommand = `cd ${repoPath} && ${engineCommand} --ds '${escapedPrompt}'`;
+  // engineCommand may already include flags like --ds or --cds (from callback handler)
+  const hasFlag = /\s--c?ds\b/.test(engineCommand);
+  const sshCommand = hasFlag
+    ? `cd ${repoPath} && ${engineCommand} '${escapedPrompt}'`
+    : `cd ${repoPath} && ${engineCommand} --ds '${escapedPrompt}'`;
 
   await topicsService.sendToTopic(
     topicId,
