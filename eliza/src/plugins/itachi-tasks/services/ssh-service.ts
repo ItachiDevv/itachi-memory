@@ -156,7 +156,10 @@ export class SSHService extends Service {
       args.push('-p', String(target.port));
     }
 
-    args.push(`${target.user}@${target.host}`, command);
+    // Wrap command to ensure common bin dirs are in PATH (non-login SSH shells
+    // don't source .zshrc/.bash_profile, so /usr/local/bin etc. are missing)
+    const wrappedCommand = `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
+    args.push(`${target.user}@${target.host}`, wrappedCommand);
 
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const sessionId = `${targetName}-${proc.pid || Date.now()}`;
@@ -221,7 +224,9 @@ export class SSHService extends Service {
       args.push('-p', String(target.port));
     }
 
-    args.push(`${target.user}@${target.host}`, command);
+    // Ensure common bin dirs are in PATH for non-login SSH shells
+    const wrappedCommand = `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
+    args.push(`${target.user}@${target.host}`, wrappedCommand);
 
     return new Promise<SSHResult>((resolve) => {
       const proc = execFile('ssh', args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
