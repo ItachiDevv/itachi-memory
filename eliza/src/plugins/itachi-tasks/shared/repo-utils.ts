@@ -2,6 +2,7 @@ import type { IAgentRuntime } from '@elizaos/core';
 import type { SSHService } from '../services/ssh-service.js';
 import type { TaskService } from '../services/task-service.js';
 import type { TelegramTopicsService } from '../services/telegram-topics.js';
+import { getStartingDir } from './start-dir.js';
 
 /** Default repo paths per SSH target */
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
@@ -63,7 +64,7 @@ export async function resolveRepoPath(
     return { repoPath: fallback, project: fallbackProject, fallbackUsed: true };
   }
 
-  const base = DEFAULT_REPO_BASES[target] || '~/repos';
+  const base = getStartingDir(target);
   const candidatePath = `${base}/${matched.name}`;
 
   // Check if repo exists on target (case-insensitive directory lookup)
@@ -121,7 +122,7 @@ export async function resolveRepoPathByProject(
   sshService: SSHService,
   logger: IAgentRuntime['logger'],
 ): Promise<string | null> {
-  const base = DEFAULT_REPO_BASES[target] || '~/repos';
+  const base = getStartingDir(target);
 
   try {
     const findCmd = `found=$(find ${base} -maxdepth 1 -iname '${project.replace(/'/g, "'\\''")}' -type d 2>/dev/null | head -1) && [ -n "$found" ] && echo "$found" || echo MISSING`;

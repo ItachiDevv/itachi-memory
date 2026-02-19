@@ -29,6 +29,11 @@ export class TelegramTopicsService extends Service {
   private baseUrl: string;
   private buffers: Map<string, StreamBuffer> = new Map();
 
+  /** Public getter for the group chat ID */
+  get chatId(): number {
+    return this.groupChatId;
+  }
+
   constructor(runtime: IAgentRuntime) {
     super(runtime);
     this.botToken = String(runtime.getSetting('TELEGRAM_BOT_TOKEN') || '');
@@ -281,6 +286,78 @@ export class TelegramTopicsService extends Service {
       return result.ok;
     } catch (error) {
       this.runtime.logger.error('deleteTopic error:', error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
+  // ============================================================
+  // Inline keyboard support
+  // ============================================================
+
+  /**
+   * Send a message with an inline keyboard to the group chat.
+   * Returns the sent message's ID for later editing.
+   */
+  async sendMessageWithKeyboard(
+    text: string,
+    keyboard: Array<Array<{ text: string; callback_data: string }>>,
+    chatId?: number,
+    topicId?: number,
+  ): Promise<{ messageId: number } | null> {
+    if (!this.isEnabled()) return null;
+
+    const params: Record<string, unknown> = {
+      chat_id: chatId || this.groupChatId,
+      text,
+      reply_markup: { inline_keyboard: keyboard },
+    };
+    if (topicId) params.message_thread_id = topicId;
+
+    try {
+      const result = await this.apiCall('sendMessage', params);
+      if (!result.ok || !result.result?.message_id) {
+        this.runtime.logger.error(`sendMessageWithKeyboard failed: ${result.description}`);
+        return null;
+      }
+      return { messageId: result.result.message_id };
+    } catch (error) {
+      this.runtime.logger.error('sendMessageWithKeyboard error:', error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  }
+
+  /**
+   * Edit an existing message, optionally updating the inline keyboard.
+   * Pass keyboard=undefined to keep existing, keyboard=[] to remove.
+   */
+  async editMessageWithKeyboard(
+    chatId: number,
+    messageId: number,
+    text: string,
+    keyboard?: Array<Array<{ text: string; callback_data: string }>>,
+  ): Promise<boolean> {
+    if (!this.isEnabled()) return false;
+
+    const params: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: messageId,
+      text: text.substring(0, 4096),
+    };
+
+    if (keyboard !== undefined) {
+      params.reply_markup = keyboard.length > 0
+        ? { inline_keyboard: keyboard }
+        : { inline_keyboard: [] };
+    }
+
+    try {
+      const result = await this.apiCall('editMessageText', params);
+      if (!result.ok) {
+        this.runtime.logger.error(`editMessageWithKeyboard failed: ${result.description}`);
+      }
+      return result.ok;
+    } catch (error) {
+      this.runtime.logger.error('editMessageWithKeyboard error:', error instanceof Error ? error.message : String(error));
       return false;
     }
   }

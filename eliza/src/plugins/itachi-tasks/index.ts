@@ -26,6 +26,7 @@ import { sshCapabilitiesProvider } from './providers/ssh-capabilities.js';
 import { commandSuppressorProvider } from './providers/command-suppressor.js';
 import { taskStreamRoutes } from './routes/task-stream.js';
 import { machineRoutes } from './routes/machine-routes.js';
+import { registerCallbackHandler } from './services/callback-handler.js';
 
 export { TelegramTopicsService } from './services/telegram-topics.js';
 export { MachineRegistryService } from './services/machine-registry.js';
@@ -53,12 +54,17 @@ export const itachiTasksPlugin: Plugin = {
     }
     runtime.logger.info(`itachi-tasks: registered ${taskStreamRoutes.length + machineRoutes.length} routes at top level`);
 
+    // Register Telegram callback_query handler for inline button flows
+    registerCallbackHandler(runtime).catch((err) => {
+      runtime.logger.warn('itachi-tasks: failed to register callback handler:', err instanceof Error ? err.message : String(err));
+    });
+
     // Register Telegram bot command menu
     const botToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
     if (botToken) {
       const commands = [
-        { command: 'task', description: 'Create a task — /task [@machine] <project> <description>' },
-        { command: 'session', description: 'Interactive CLI session — /session <target> <prompt>' },
+        { command: 'task', description: 'Create a task — /task <name> (interactive) or /task <project> <desc>' },
+        { command: 'session', description: 'Interactive CLI session — /session (interactive) or /session <target> <prompt>' },
         { command: 'status', description: 'Show task queue status' },
         { command: 'cancel', description: 'Cancel a task — /cancel <id>' },
         { command: 'gh', description: 'GitHub queries — /gh prs|issues|branches <repo>' },
@@ -70,7 +76,7 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'feedback', description: 'Rate a task — /feedback <id> <good|bad> <reason>' },
         { command: 'remind', description: 'Reminders — /remind <time> <msg> | list | cancel <id>' },
         { command: 'machines', description: 'Machines, engines, repos — /machines [engines|repos|sync]' },
-        { command: 'close', description: 'Cleanup topics — /close done|failed|all' },
+        { command: 'delete', description: 'Delete task topics — /delete done|failed|all' },
         { command: 'spawn', description: 'Spawn a subagent — /spawn <profile> <task>' },
         { command: 'agents', description: 'Subagents — /agents [msg <id> <message>]' },
         { command: 'help', description: 'Show all commands' },

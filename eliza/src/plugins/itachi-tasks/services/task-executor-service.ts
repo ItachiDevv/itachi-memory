@@ -4,7 +4,8 @@ import { TaskService, type ItachiTask, generateTaskTitle } from './task-service.
 import { TelegramTopicsService } from './telegram-topics.js';
 import { MachineRegistryService } from './machine-registry.js';
 import { activeSessions } from '../shared/active-sessions.js';
-import { DEFAULT_REPO_BASES, resolveRepoPathByProject } from '../shared/repo-utils.js';
+import { resolveRepoPathByProject } from '../shared/repo-utils.js';
+import { getStartingDir } from '../shared/start-dir.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
@@ -240,7 +241,6 @@ export class TaskExecutorService extends Service {
         const topicId = this.activeTasks.get(task.id)?.topicId;
         if (topicId) {
           await topicsService.sendToTopic(topicId, `Task failed: ${msg}`);
-          await topicsService.renameTopic(topicId, `FAIL | ${generateTaskTitle(task.description)} | ${task.project}`);
         }
       }
 
@@ -265,7 +265,7 @@ export class TaskExecutorService extends Service {
 
     if (!repoPath) {
       // Try default fallback
-      const base = DEFAULT_REPO_BASES[sshTarget] || '~/repos';
+      const base = getStartingDir(sshTarget);
       const fallback = `${base}/${task.project}`;
       const check = await sshService.exec(sshTarget, `test -d ${fallback} && echo EXISTS || echo MISSING`, 5_000);
       if (check.stdout?.trim() !== 'EXISTS') {
@@ -717,11 +717,6 @@ export class TaskExecutorService extends Service {
       lines.push('', 'Reply in this topic to resume the session or create a follow-up.');
 
       await topicsService.sendToTopic(topicId, lines.join('\n'));
-
-      // Rename topic with status
-      const statusEmoji = exitCode === 0 ? '✅' : '❌';
-      const titleSlug = generateTaskTitle(task.description);
-      await topicsService.renameTopic(topicId, `${statusEmoji} ${titleSlug} | ${task.project}`);
     }
 
     // 6. Cleanup worktree (optional — keep for follow-ups/resume)

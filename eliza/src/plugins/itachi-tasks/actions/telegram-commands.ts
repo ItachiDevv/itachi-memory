@@ -1,10 +1,17 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
-import { TaskService } from '../services/task-service.js';
+import { TaskService, type CreateTaskParams, generateTaskTitle } from '../services/task-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
+import { SSHService } from '../services/ssh-service.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { syncGitHubRepos } from '../services/github-sync.js';
 import { stripBotMention } from '../utils/telegram.js';
+import { getStartingDir } from '../shared/start-dir.js';
+import { listRemoteDirectory } from '../utils/directory-browser.js';
+import {
+  getFlow, setFlow, clearFlow, cleanupStaleFlows,
+  flowKey, type ConversationFlow,
+} from '../shared/conversation-flows.js';
 
 /**
  * Handles /recall, /repos, and /machines Telegram commands.
@@ -13,8 +20,8 @@ import { stripBotMention } from '../utils/telegram.js';
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /close, /close_done, /close_failed, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg Telegram commands',
-  similes: ['help', 'show commands', 'recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'unteach', 'forget rule', 'spawn agent', 'list agents', 'message agent', 'engine priority', 'show engines', 'set engines'],
+  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete, /close, /close_done, /close_failed, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, and interactive /task and /session flows',
+  similes: ['help', 'show commands', 'recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'delete done topics', 'delete failed topics', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'unteach', 'forget rule', 'spawn agent', 'list agents', 'message agent', 'engine priority', 'show engines', 'set engines'],
   examples: [
     [
       { name: 'user', content: { text: '/recall auth middleware changes' } },
@@ -47,6 +54,28 @@ export const telegramCommandsAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
+
+    // Check for active conversation flow at await_description (plain text → task creation)
+    if (!text.startsWith('/')) {
+      const chatId = (message.content as Record<string, unknown>)?.chatId as number | undefined;
+      const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number | undefined;
+      if (chatId && userId) {
+        const flow = getFlow(chatId, userId);
+        if (flow && flow.step === 'await_description') return true;
+      }
+      return false;
+    }
+
+    // /task <singleWord> (no spaces after task name) → interactive flow
+    const taskMatch = text.match(/^\/task\s+(\S+)$/);
+    if (taskMatch && !taskMatch[1].includes(' ')) return true;
+
+    // /session (no args) → interactive flow
+    if (text === '/session') return true;
+
+    // /delete command (replaces /close for topic cleanup)
+    if (text === '/delete' || text.startsWith('/delete ')) return true;
+
     return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text.startsWith('/learn ') || text.startsWith('/teach ') ||
       text.startsWith('/unteach ') || text.startsWith('/forget ') ||
@@ -70,6 +99,48 @@ export const telegramCommandsAction: Action = {
     const text = stripBotMention(message.content?.text?.trim() || '');
 
     try {
+      // Clean up stale flows
+      cleanupStaleFlows();
+
+      // Check for active conversation flow at await_description step (plain text → task creation)
+      const chatId = (message.content as Record<string, unknown>)?.chatId as number | undefined;
+      const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number | undefined;
+      if (chatId && userId && !text.startsWith('/')) {
+        const flow = getFlow(chatId, userId);
+        if (flow && flow.step === 'await_description') {
+          return await handleFlowDescription(runtime, flow, text, chatId, userId, callback);
+        }
+      }
+
+      // /task <singleWord> → interactive flow (no spaces = just a task name)
+      const taskFlowMatch = text.match(/^\/task\s+(\S+)$/);
+      if (taskFlowMatch && !taskFlowMatch[1].includes(' ')) {
+        return await handleTaskFlow(runtime, taskFlowMatch[1], message, callback);
+      }
+
+      // /session (no args) → interactive flow
+      if (text === '/session') {
+        return await handleSessionFlow(runtime, message, callback);
+      }
+
+      // /delete [done|failed|all] — cleanup task topics (renamed from /close)
+      if (text === '/delete' || text.startsWith('/delete ')) {
+        const sub = text.substring('/delete'.length).trim().replace(/^[-_]/, '');
+        if (sub === 'done' || sub === 'finished') {
+          return await handleDeleteTopics(runtime, 'completed', callback);
+        }
+        if (sub === 'failed') {
+          return await handleDeleteTopics(runtime, 'failed', callback);
+        }
+        if (sub === 'all') {
+          const r1 = await handleDeleteTopics(runtime, 'completed', callback);
+          const r2 = await handleDeleteTopics(runtime, 'failed', callback);
+          return { success: r1.success && r2.success };
+        }
+        if (callback) await callback({ text: 'Usage: /delete done|failed|all' });
+        return { success: false, error: 'Unknown delete subcommand' };
+      }
+
       // /help
       if (text === '/help') {
         return await handleHelp(callback);
@@ -157,32 +228,32 @@ export const telegramCommandsAction: Action = {
         return await handleSyncRepos(runtime, callback);
       }
 
-      // /close [done|failed|all] — consolidated from /close_done + /close_failed
+      // /close [done|failed|all] — hidden alias for /delete (backward compat)
       if (text === '/close' || text.startsWith('/close ')) {
         const sub = text.substring('/close'.length).trim().replace(/^[-_]/, '');
         if (sub === 'done' || sub === 'finished') {
-          return await handleCloseTopics(runtime, 'completed', callback);
+          return await handleDeleteTopics(runtime, 'completed', callback);
         }
         if (sub === 'failed') {
-          return await handleCloseTopics(runtime, 'failed', callback);
+          return await handleDeleteTopics(runtime, 'failed', callback);
         }
         if (sub === 'all') {
-          const r1 = await handleCloseTopics(runtime, 'completed', callback);
-          const r2 = await handleCloseTopics(runtime, 'failed', callback);
+          const r1 = await handleDeleteTopics(runtime, 'completed', callback);
+          const r2 = await handleDeleteTopics(runtime, 'failed', callback);
           return { success: r1.success && r2.success };
         }
-        if (callback) await callback({ text: 'Usage: /close done|failed|all' });
+        if (callback) await callback({ text: 'Usage: /delete done|failed|all (or /close done|failed|all)' });
         return { success: false, error: 'Unknown close subcommand' };
       }
 
       // /close-done, /close_done, /close_finished — hidden aliases (still work)
       if (text === '/close-done' || text === '/close_done' || text === '/close_finished') {
-        return await handleCloseTopics(runtime, 'completed', callback);
+        return await handleDeleteTopics(runtime, 'completed', callback);
       }
 
       // /close-failed or /close_failed — hidden aliases (still work)
       if (text === '/close-failed' || text === '/close_failed') {
-        return await handleCloseTopics(runtime, 'failed', callback);
+        return await handleDeleteTopics(runtime, 'failed', callback);
       }
 
       return { success: false, error: 'Unknown command' };
@@ -350,7 +421,7 @@ async function handleSyncRepos(
   return { success: true, data: result as unknown as Record<string, unknown> };
 }
 
-async function handleCloseTopics(
+async function handleDeleteTopics(
   runtime: IAgentRuntime,
   status: 'completed' | 'failed',
   callback?: HandlerCallback
@@ -838,15 +909,233 @@ function timeSince(dateStr: string): string {
   return `${days}d ago`;
 }
 
+// ── Interactive Task Flow ─────────────────────────────────────────────
+
+async function handleTaskFlow(
+  runtime: IAgentRuntime,
+  taskName: string,
+  message: Memory,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  const registry = runtime.getService<MachineRegistryService>('machine-registry');
+  if (!topicsService || !registry) {
+    if (callback) await callback({ text: 'Required services not available (topics or machine registry).' });
+    return { success: false, error: 'Services not available' };
+  }
+
+  const chatIdNum = topicsService.chatId;
+  const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number || 0;
+  if (!chatIdNum || !userId) {
+    if (callback) await callback({ text: 'Could not determine chat/user context.' });
+    return { success: false, error: 'Missing chat context' };
+  }
+
+  // Fetch machines for keyboard
+  const machines = await registry.getAllMachines();
+  const machineList = machines.map((m) => ({
+    id: m.machine_id,
+    name: m.display_name || m.machine_id,
+    status: m.status || 'unknown',
+  }));
+
+  if (machineList.length === 0) {
+    if (callback) await callback({ text: 'No machines registered. Use /machines to check.' });
+    return { success: false, error: 'No machines' };
+  }
+
+  // Build inline keyboard
+  const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+  // "First Available" option
+  keyboard.push([{ text: 'First Available', callback_data: 'tf:m:0' }]);
+
+  // Add each machine as a row (skipping index 0 for "first available" — we reuse idx 0)
+  // Actually, let's include all machines with their actual indices
+  const allOptions = [
+    { id: 'auto', name: 'First Available', status: 'auto' },
+    ...machineList,
+  ];
+
+  const kbRows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < allOptions.length; i += 2) {
+    const row: Array<{ text: string; callback_data: string }> = [];
+    const m = allOptions[i];
+    const statusIcon = m.status === 'online' ? '\u2705' : m.status === 'auto' ? '\u26a1' : '\ud83d\udfe1';
+    row.push({ text: `${statusIcon} ${m.name}`, callback_data: `tf:m:${i}` });
+    if (i + 1 < allOptions.length) {
+      const m2 = allOptions[i + 1];
+      const s2 = m2.status === 'online' ? '\u2705' : '\ud83d\udfe1';
+      row.push({ text: `${s2} ${m2.name}`, callback_data: `tf:m:${i + 1}` });
+    }
+    kbRows.push(row);
+  }
+
+  const sent = await topicsService.sendMessageWithKeyboard(
+    `Creating task: ${taskName}\n\nSelect target machine:`,
+    kbRows,
+  );
+
+  if (!sent) {
+    if (callback) await callback({ text: 'Failed to send keyboard message.' });
+    return { success: false, error: 'Failed to send keyboard' };
+  }
+
+  // Store flow state
+  const flow: ConversationFlow = {
+    flowType: 'task',
+    step: 'select_machine',
+    chatId: chatIdNum,
+    userId,
+    messageId: sent.messageId,
+    createdAt: Date.now(),
+    taskName,
+    cachedMachines: allOptions,
+  };
+  setFlow(chatIdNum, userId, flow);
+
+  return { success: true, data: { flowStarted: true, taskName } };
+}
+
+// ── Interactive Session Flow ─────────────────────────────────────────
+
+async function handleSessionFlow(
+  runtime: IAgentRuntime,
+  message: Memory,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  const sshService = runtime.getService<SSHService>('ssh');
+  if (!topicsService || !sshService) {
+    if (callback) await callback({ text: 'Required services not available (topics or SSH).' });
+    return { success: false, error: 'Services not available' };
+  }
+
+  const chatIdNum = topicsService.chatId;
+  const userId = (message.content as Record<string, unknown>)?.telegram_user_id as number || 0;
+  if (!chatIdNum || !userId) {
+    if (callback) await callback({ text: 'Could not determine chat/user context.' });
+    return { success: false, error: 'Missing chat context' };
+  }
+
+  // Build keyboard from SSH targets
+  const targets = sshService.getTargets();
+  const targetList = Array.from(targets.entries()).map(([name]) => ({
+    id: name,
+    name,
+    status: 'available',
+  }));
+
+  if (targetList.length === 0) {
+    if (callback) await callback({ text: 'No SSH targets configured.' });
+    return { success: false, error: 'No SSH targets' };
+  }
+
+  const kbRows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < targetList.length; i += 2) {
+    const row: Array<{ text: string; callback_data: string }> = [];
+    row.push({ text: `\ud83d\udda5\ufe0f ${targetList[i].name}`, callback_data: `sf:m:${i}` });
+    if (i + 1 < targetList.length) {
+      row.push({ text: `\ud83d\udda5\ufe0f ${targetList[i + 1].name}`, callback_data: `sf:m:${i + 1}` });
+    }
+    kbRows.push(row);
+  }
+
+  const sent = await topicsService.sendMessageWithKeyboard(
+    'Interactive session\n\nSelect target machine:',
+    kbRows,
+  );
+
+  if (!sent) {
+    if (callback) await callback({ text: 'Failed to send keyboard message.' });
+    return { success: false, error: 'Failed to send keyboard' };
+  }
+
+  const flow: ConversationFlow = {
+    flowType: 'session',
+    step: 'select_machine',
+    chatId: chatIdNum,
+    userId,
+    messageId: sent.messageId,
+    createdAt: Date.now(),
+    cachedMachines: targetList,
+  };
+  setFlow(chatIdNum, userId, flow);
+
+  return { success: true, data: { flowStarted: true } };
+}
+
+// ── Flow Description Handler ─────────────────────────────────────────
+// Called when a user has an active task flow at await_description and sends plain text.
+
+async function handleFlowDescription(
+  runtime: IAgentRuntime,
+  flow: ConversationFlow,
+  description: string,
+  chatId: number,
+  userId: number,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  if (!description || description.length < 3) {
+    if (callback) await callback({ text: 'Description too short. Please describe the task:' });
+    return { success: false, error: 'Description too short' };
+  }
+
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!taskService) {
+    if (callback) await callback({ text: 'Task service not available.' });
+    clearFlow(chatId, userId);
+    return { success: false, error: 'Task service not available' };
+  }
+
+  // Resolve project from flow
+  const project = flow.project || flow.taskName || 'unknown';
+  const machine = flow.machine === 'auto' ? undefined : flow.machine;
+
+  const params: CreateTaskParams = {
+    description,
+    project,
+    telegram_chat_id: chatId,
+    telegram_user_id: userId,
+    assigned_machine: machine,
+  };
+
+  const task = await taskService.createTask(params);
+  const shortId = task.id.substring(0, 8);
+  const title = generateTaskTitle(description);
+  const machineLabel = machine || 'auto-dispatch';
+
+  // Create Telegram topic
+  if (topicsService) {
+    topicsService.createTopicForTask(task).catch((err) => {
+      runtime.logger.error(`[task-flow] Failed to create topic for ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  // Clear the flow
+  clearFlow(chatId, userId);
+
+  const queuedCount = await taskService.getQueuedCount();
+  if (callback) {
+    await callback({
+      text: `Task QUEUED.\n\nID: ${shortId} (${title})\nProject: ${project}\nMachine: ${machineLabel}\nRepo: ${flow.repoPath || '(auto)'}\nQueue position: ${queuedCount}`,
+    });
+  }
+
+  return { success: true, data: { taskId: task.id, shortId, project, assignedMachine: machineLabel } };
+}
+
 async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   const help = `**Tasks**
-  /task [@machine] <project> <description> — Create a coding task
+  /task <name> — Interactive task creation (pick machine, repo, describe)
+  /task [@machine] <project> <description> — Quick task creation
   /status — Show task queue & recent completions
   /cancel <id> — Cancel a queued or running task
   /feedback <id> <good|bad> <reason> — Rate a completed task
 
 **Sessions & SSH**
-  /session <target> <prompt> — Interactive CLI session
+  /session — Interactive session (pick machine, folder, mode)
+  /session <target> <prompt> — Quick session start
   /ssh <target> <cmd> — Run command on machine
   /ssh targets — List SSH targets
   /ssh test — Test SSH connectivity
@@ -883,8 +1172,9 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /agents — List recent subagent runs
   /agents msg <id> <message> — Message an agent
 
-**Housekeeping**
-  /close done|failed|all — Cleanup task topics
+**Topic Management**
+  /close — Close current topic (use inside a topic)
+  /delete done|failed|all — Delete completed/failed topics
   /help — Show this message`;
 
   if (callback) await callback({ text: help });

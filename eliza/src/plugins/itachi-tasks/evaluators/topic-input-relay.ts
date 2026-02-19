@@ -1,5 +1,5 @@
 import type { Evaluator, IAgentRuntime, Memory } from '@elizaos/core';
-import { TaskService } from '../services/task-service.js';
+import { TaskService, generateTaskTitle } from '../services/task-service.js';
 import { SSHService } from '../services/ssh-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
@@ -7,6 +7,7 @@ import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { activeSessions } from '../shared/active-sessions.js';
 import { spawnSessionInTopic } from '../actions/interactive-session.js';
+import { getFlow, clearFlow, cleanupStaleFlows } from '../shared/conversation-flows.js';
 import {
   browsingSessionMap,
   listRemoteDirectory,
@@ -55,11 +56,46 @@ export const topicInputRelayEvaluator: Evaluator = {
 
     if (!threadId || !text) return;
 
-    // Skip explicit commands
+    // Handle /close typed inside a topic — manually close the topic
+    if (text === '/close') {
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      if (topicsService) {
+        // Resolve topic task to build a status name
+        const taskService = runtime.getService<TaskService>('itachi-tasks');
+        let statusName: string | undefined;
+        if (taskService) {
+          const recentTasks = await taskService.listTasks({ limit: 50 });
+          const task = recentTasks.find((t: any) => t.telegram_topic_id === threadId);
+          if (task) {
+            const emoji = task.status === 'completed' ? '\u2705' : task.status === 'failed' ? '\u274c' : '\u23f9\ufe0f';
+            statusName = `${emoji} ${generateTaskTitle(task.description)} | ${task.project}`;
+          }
+        }
+        await topicsService.sendToTopic(threadId, 'Closing topic...');
+        await topicsService.closeTopic(threadId, statusName);
+      }
+      (message.content as Record<string, unknown>)._topicRelayQueued = true;
+      return;
+    }
+
+    // Skip other explicit commands
     if (text.startsWith('/')) return;
 
-    // Cleanup stale browsing sessions (cheap check)
+    // Cleanup stale flows and browsing sessions (cheap checks)
+    cleanupStaleFlows();
     cleanupStaleBrowsingSessions();
+
+    // Check for active conversation flow at await_description step
+    // If present, the telegram-commands handler will pick up the text instead
+    const flowChatId = (message.content as Record<string, unknown>)?.chatId as number | undefined;
+    const flowUserId = (message.content as Record<string, unknown>)?.telegram_user_id as number | undefined;
+    if (flowChatId && flowUserId) {
+      const flow = getFlow(flowChatId, flowUserId);
+      if (flow && flow.step === 'await_description') {
+        // Don't relay — the command handler will process this
+        return;
+      }
+    }
 
     // Check for directory browsing session BEFORE active session check
     const browsing = browsingSessionMap.get(threadId);

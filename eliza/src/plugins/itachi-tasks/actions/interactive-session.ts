@@ -298,7 +298,8 @@ export const interactiveSessionAction: Action = {
 
       if (resolved.fallbackUsed) {
         // Enter directory browsing mode — let user pick the right folder
-        const startPath = DEFAULT_REPO_BASES[target] || '~';
+        const { getStartingDir } = await import('../shared/start-dir.js');
+        const startPath = getStartingDir(target);
         const { dirs } = await listRemoteDirectory(sshService, target, startPath);
         const listing = formatDirectoryListing(startPath, dirs, target);
         await topicsService.sendToTopic(topicId, listing);
