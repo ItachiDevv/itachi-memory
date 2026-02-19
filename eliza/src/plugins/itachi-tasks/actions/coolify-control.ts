@@ -1,6 +1,8 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { SSHService } from '../services/ssh-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
+import { TaskService } from '../services/task-service.js';
+import { DEFAULT_REPO_BASES } from '../shared/repo-utils.js';
 import { stripBotMention } from '../utils/telegram.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
@@ -53,13 +55,13 @@ const DIAGNOSTICS: Record<string, { label: string; cmd: string }[]> = {
 const DIAGNOSTICS_WINDOWS: Record<string, { label: string; cmd: string }[]> = {
   investigate: [
     { label: 'Running processes (top CPU)', cmd: 'powershell -Command "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 Name, Id, CPU, @{N=\'Mem(MB)\';E={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table -AutoSize"' },
-    { label: 'System info', cmd: 'powershell -Command "$os = Get-CimInstance Win32_OperatingSystem; \\"CPU: $((Get-CimInstance Win32_Processor).LoadPercentage)% | Memory: $([math]::Round(($os.TotalVisibleMemorySize - $os.FreePhysicalMemory)/1MB,1))GB / $([math]::Round($os.TotalVisibleMemorySize/1MB,1))GB | Uptime: $((Get-Date) - $os.LastBootUpTime)\\"" ' },
+    { label: 'System info', cmd: 'powershell -Command "Get-CimInstance Win32_OperatingSystem | Select-Object Caption, @{N=\'MemUsedMB\';E={[math]::Round(($_.TotalVisibleMemorySize-$_.FreePhysicalMemory)/1KB)}}, @{N=\'MemTotalMB\';E={[math]::Round($_.TotalVisibleMemorySize/1KB)}}, LastBootUpTime | Format-List; Get-CimInstance Win32_Processor | Select-Object Name, LoadPercentage | Format-List"' },
     { label: 'Disk usage', cmd: 'powershell -Command "Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N=\'Used(GB)\';E={[math]::Round($_.Used/1GB,1)}}, @{N=\'Free(GB)\';E={[math]::Round($_.Free/1GB,1)}}, @{N=\'Total(GB)\';E={[math]::Round(($_.Used+$_.Free)/1GB,1)}} | Format-Table -AutoSize"' },
     { label: 'Recent errors (Event Log)', cmd: 'powershell -Command "Get-WinEvent -LogName Application -MaxEvents 5 -FilterXPath \'*[System[Level=2]]\' 2>$null | Select-Object TimeCreated, Message | Format-List"' },
   ],
   status: [
-    { label: 'System overview', cmd: 'powershell -Command "$os = Get-CimInstance Win32_OperatingSystem; \\"Hostname: $env:COMPUTERNAME | OS: $($os.Caption) | Uptime: $((Get-Date) - $os.LastBootUpTime)\\"" ' },
-    { label: 'CPU & Memory', cmd: 'powershell -Command "$os = Get-CimInstance Win32_OperatingSystem; \\"CPU: $((Get-CimInstance Win32_Processor).LoadPercentage)% | Memory: $([math]::Round(($os.TotalVisibleMemorySize - $os.FreePhysicalMemory)/1MB,1))GB / $([math]::Round($os.TotalVisibleMemorySize/1MB,1))GB\\"" ' },
+    { label: 'System overview', cmd: 'powershell -Command "Get-CimInstance Win32_OperatingSystem | Select-Object Caption, CSName, LastBootUpTime | Format-List"' },
+    { label: 'CPU & Memory', cmd: 'powershell -Command "Get-CimInstance Win32_Processor | Select-Object Name, LoadPercentage | Format-List; Get-CimInstance Win32_OperatingSystem | Select-Object @{N=\'MemUsedMB\';E={[math]::Round(($_.TotalVisibleMemorySize-$_.FreePhysicalMemory)/1KB)}}, @{N=\'MemTotalMB\';E={[math]::Round($_.TotalVisibleMemorySize/1KB)}} | Format-List"' },
     { label: 'Disk usage', cmd: 'powershell -Command "Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N=\'Used(GB)\';E={[math]::Round($_.Used/1GB,1)}}, @{N=\'Free(GB)\';E={[math]::Round($_.Free/1GB,1)}} | Format-Table -AutoSize"' },
   ],
   disk: [
@@ -254,7 +256,12 @@ export const coolifyControlAction: Action = {
 
       // ── Natural language handling ───────────────────────────────
       const target = extractTarget(text, sshService);
-      const intent = detectIntent(text);
+      let intent = detectIntent(text);
+
+      // If defaulted to 'investigate' but user mentions a repo/project, treat as navigate
+      if (intent === 'investigate' && (/\b(repo|project)\b/i.test(text) || /specifically\s+into/i.test(text))) {
+        intent = 'navigate';
+      }
 
       if (!target) {
         // No machine identified — list available targets
@@ -304,6 +311,51 @@ export const coolifyControlAction: Action = {
             return { success: result.success, data: { output: truncated } };
           }
           // Fall through to investigate if we can't parse the command
+        }
+
+        case 'navigate': {
+          // User wants to browse a specific repo/project on the target machine
+          const taskService = runtime.getService<TaskService>('itachi-tasks');
+          let matchedRepo: { name: string; repo_url: string | null } | undefined;
+          if (taskService) {
+            try {
+              const repos = await taskService.getMergedRepos();
+              matchedRepo = repos.find(r => {
+                const pat = new RegExp(`\\b${r.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+                return pat.test(text);
+              });
+            } catch { /* registry unavailable */ }
+          }
+
+          if (matchedRepo) {
+            const base = DEFAULT_REPO_BASES[target] || '~/repos';
+            const repoPath = `${base}/${matchedRepo.name}`;
+            const navOS = await detectTargetOS(runtime, target);
+            const isWin = navOS?.toLowerCase().includes('win');
+
+            if (callback) await callback({ text: `Navigating to **${matchedRepo.name}** on ${target}...` });
+
+            const listCmd = isWin
+              ? `powershell -Command "if (Test-Path '${repoPath}') { Get-ChildItem '${repoPath}' | Format-Table Mode, LastWriteTime, Length, Name -AutoSize } else { Write-Output 'Directory not found: ${repoPath}' }"`
+              : `if [ -d "${repoPath}" ]; then ls -la "${repoPath}"; else echo "Directory not found: ${repoPath}"; fi`;
+
+            const navResult = await sshService.exec(target, listCmd, 15_000);
+            const navOutput = (navResult.stdout || navResult.stderr || '(no output)').trim();
+            const navTrunc = navOutput.length > 3000 ? navOutput.substring(0, 3000) : navOutput;
+
+            if (callback) await callback({
+              text: `**${matchedRepo.name}** on ${target} (\`${repoPath}\`):\n\`\`\`\n${navTrunc}\n\`\`\``,
+            });
+            return { success: true, data: { target, project: matchedRepo.name, repoPath, output: navTrunc } };
+          }
+
+          // No repo matched — fall through to investigate
+          if (callback) await callback({ text: `No matching repo found in prompt. Investigating ${target} instead...` });
+          const navDiagOS = await detectTargetOS(runtime, target);
+          const navDiagTable = getDiagnosticsForOS(navDiagOS);
+          const navReport = await runDiagnostics(sshService, target, navDiagTable.investigate, callback);
+          if (callback) await callback({ text: navReport });
+          return { success: true, data: { target, intent: 'investigate', report: navReport } };
         }
 
         default: {
