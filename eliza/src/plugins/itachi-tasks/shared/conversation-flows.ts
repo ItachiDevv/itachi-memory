@@ -53,8 +53,9 @@ export function getFlow(chatId: number, _userId?: number): ConversationFlow | un
   return conversationFlows.get(flowKey(chatId));
 }
 
-/** Set/replace the active flow for a chat */
+/** Set/replace the active flow for a chat. Resets TTL on each call. */
 export function setFlow(chatId: number, _userId: number | undefined, flow: ConversationFlow): void {
+  (flow as any).lastActivity = Date.now();
   conversationFlows.set(flowKey(chatId), flow);
 }
 
@@ -64,12 +65,14 @@ export function clearFlow(chatId: number, _userId?: number): void {
 }
 
 // ── TTL Cleanup ──────────────────────────────────────────────────────
-const FLOW_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const FLOW_TTL_MS = 10 * 60 * 1000; // 10 minutes from last activity
 
 export function cleanupStaleFlows(): void {
   const now = Date.now();
   for (const [key, flow] of conversationFlows) {
-    if (now - flow.createdAt > FLOW_TTL_MS) {
+    // Use lastActivity if available (updated on each step), fall back to createdAt
+    const lastActive = (flow as any).lastActivity || flow.createdAt;
+    if (now - lastActive > FLOW_TTL_MS) {
       conversationFlows.delete(key);
     }
   }
