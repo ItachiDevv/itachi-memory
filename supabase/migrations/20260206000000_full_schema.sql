@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS itachi_tasks (
     branch text DEFAULT 'master',
     target_branch text,
     status text NOT NULL DEFAULT 'queued'
-        CHECK (status IN ('queued','claimed','running','completed','failed','cancelled','timeout')),
+        CHECK (status IN ('queued','claimed','running','waiting_input','completed','failed','cancelled','timeout')),
     priority int DEFAULT 0,
     model text DEFAULT 'sonnet',
     max_budget_usd numeric(6,2) DEFAULT 5.00,
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS itachi_tasks (
     pr_url text,
     telegram_chat_id bigint NOT NULL,
     telegram_user_id bigint NOT NULL,
+    assigned_machine text,
     orchestrator_id text,
     workspace_path text,
     notified_at timestamptz,
@@ -65,6 +66,35 @@ CREATE INDEX IF NOT EXISTS idx_itachi_tasks_queue
     WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS idx_itachi_tasks_user
     ON itachi_tasks (telegram_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_itachi_tasks_assigned_machine
+    ON itachi_tasks (assigned_machine)
+    WHERE assigned_machine IS NOT NULL;
+
+-- ============================================================
+-- 2b. machine_registry — orchestrator machine state
+-- ============================================================
+CREATE TABLE IF NOT EXISTS machine_registry (
+    machine_id text PRIMARY KEY,
+    display_name text,
+    projects text[] DEFAULT '{}',
+    max_concurrent int DEFAULT 2,
+    active_tasks int DEFAULT 0,
+    os text,
+    specs jsonb DEFAULT '{}',
+    engine_priority text[] DEFAULT ARRAY['claude','codex','gemini'],
+    health_url text,
+    last_heartbeat timestamptz DEFAULT now(),
+    registered_at timestamptz DEFAULT now(),
+    status text DEFAULT 'online' CHECK (status IN ('online', 'offline', 'busy'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_machine_registry_status_heartbeat
+    ON machine_registry (status, last_heartbeat DESC);
+
+ALTER TABLE itachi_tasks
+    ADD CONSTRAINT fk_itachi_tasks_assigned_machine
+    FOREIGN KEY (assigned_machine) REFERENCES machine_registry(machine_id)
+    ON DELETE SET NULL;
 
 -- Add FK from memories to tasks
 ALTER TABLE itachi_memories
@@ -241,12 +271,13 @@ BEGIN
     LIMIT match_limit;
 END; $$;
 
--- Atomic task claiming with optional project filter
+-- Atomic task claiming with optional machine/project/budget filters
 CREATE OR REPLACE FUNCTION claim_next_task(
     p_orchestrator_id text,
-    p_max_budget numeric DEFAULT NULL,
-    p_project text DEFAULT NULL
-) RETURNS SETOF itachi_tasks LANGUAGE plpgsql AS $$
+    p_machine_id text DEFAULT NULL,
+    p_project text DEFAULT NULL,
+    p_max_budget numeric DEFAULT NULL
+) RETURNS SETOF itachi_tasks LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
     RETURN QUERY
     UPDATE itachi_tasks
@@ -254,8 +285,9 @@ BEGIN
     WHERE id = (
         SELECT id FROM itachi_tasks
         WHERE status = 'queued'
-            AND (p_max_budget IS NULL OR max_budget_usd <= p_max_budget)
+            AND (p_machine_id IS NULL OR assigned_machine IS NULL OR assigned_machine = p_machine_id)
             AND (p_project IS NULL OR project = p_project)
+            AND (p_max_budget IS NULL OR max_budget_usd <= p_max_budget)
         ORDER BY priority DESC, created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED

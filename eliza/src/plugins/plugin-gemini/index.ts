@@ -169,8 +169,10 @@ export const itachiGeminiPlugin: Plugin = {
       return;
     }
 
-    geminiLargeEnabled = true; // Always route TEXT_LARGE to Gemini when plugin is active
-    logger.info(`[Gemini] Plugin active — TEXT_SMALL → ${getSmallModel(runtime)}, TEXT_LARGE → ${getLargeModel(runtime)}`);
+    geminiLargeEnabled = isLargeEnabled(runtime);
+    logger.info(
+      `[Gemini] Plugin active - TEXT_SMALL -> ${getSmallModel(runtime)}; TEXT_LARGE routed to Gemini: ${geminiLargeEnabled ? 'yes' : 'no'}`
+    );
   },
 
   // Models are always registered, but handlers check geminiEnabled flag.

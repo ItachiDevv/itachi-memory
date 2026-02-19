@@ -28,6 +28,15 @@ interface WorkerDef {
   execute: (runtime: IAgentRuntime) => Promise<void>;
 }
 
+let intervalSchedulerStarted = false;
+
+function resolveBoolSetting(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes';
+}
+
 function scheduleWorkers(runtime: IAgentRuntime, workers: WorkerDef[]): void {
   for (const w of workers) {
     const run = async () => {
@@ -62,6 +71,10 @@ const agent: ProjectAgent = {
     runtime.logger.info('Itachi agent initialized');
     runtime.logger.info(`Supabase URL: ${runtime.getSetting('SUPABASE_URL') ? 'configured' : 'MISSING'}`);
     runtime.logger.info(`Telegram: ${runtime.getSetting('TELEGRAM_BOT_TOKEN') ? 'configured' : 'MISSING'}`);
+    const useNativeTaskworker = resolveBoolSetting(
+      runtime.getSetting('ITACHI_USE_NATIVE_TASKWORKER') ?? process.env.ITACHI_USE_NATIVE_TASKWORKER,
+      false
+    );
 
     // Register workers with ElizaOS TaskWorker system (backup, currently non-functional)
     const allWorkers = [
@@ -89,7 +102,16 @@ const agent: ProjectAgent = {
     }
     runtime.logger.info(`Registered ${allWorkers.length} TaskWorkers with ElizaOS`);
 
-    // Schedule workers via setInterval (reliable execution)
+    // Schedule workers via setInterval (reliable execution fallback)
+    if (useNativeTaskworker) {
+      runtime.logger.info('[scheduler] ITACHI_USE_NATIVE_TASKWORKER=true, skipping interval fallback scheduler');
+      return;
+    }
+    if (intervalSchedulerStarted) {
+      runtime.logger.warn('[scheduler] Interval scheduler already started, skipping duplicate init');
+      return;
+    }
+    intervalSchedulerStarted = true;
     scheduleWorkers(runtime, [
       // Critical: task dispatch (10s, start after 10s)
       { name: 'task-dispatcher', intervalMs: 10_000, delayMs: 10_000,
