@@ -577,7 +577,7 @@ try {
     const memoryFile = path.join(memoryDir, 'MEMORY.md');
 
     // For Codex: also write to ~/.codex/instructions.md
-    const codexInstructionsFile = path.join(os.homedir(), '.codex', 'instructions.md');
+    const codexInstructionsFile = path.join(os.homedir(), '.codex', 'AGENTS.md');
 
     const briefing = briefingJson ? JSON.parse(briefingJson) : null;
     let learnings = null;

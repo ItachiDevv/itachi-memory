@@ -519,7 +519,7 @@ try {
     const encodedCwd = encodeCwd(cwd);
     const memoryDir = path.join(os.homedir(), '.claude', 'projects', encodedCwd, 'memory');
     const memoryFile = path.join(memoryDir, 'MEMORY.md');
-    const codexInstructionsFile = path.join(os.homedir(), '.codex', 'instructions.md');
+    const codexInstructionsFile = path.join(os.homedir(), '.codex', 'AGENTS.md');
 
     const briefing = briefingJson ? JSON.parse(briefingJson) : null;
     let learnings = null;
