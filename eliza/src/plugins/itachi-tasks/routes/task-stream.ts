@@ -168,10 +168,7 @@ export const taskStreamRoutes: Route[] = [
         // Final flush on result events
         if (eventType === 'result') {
           await topicsService.finalFlush(id);
-          // Rename topic to show status but keep it open for follow-up interaction
-          const title = generateTaskTitle(task.description);
-          const statusLabel = resultData?.is_error ? '❌ FAILED' : '✅ DONE';
-          await topicsService.renameTopic(topicId, `${statusLabel} | ${title} | ${task.project}`);
+          // Topic stays open — user can /close manually when ready
 
           // Analyze transcript (fire-and-forget)
           const transcript = taskTranscripts.get(id);
