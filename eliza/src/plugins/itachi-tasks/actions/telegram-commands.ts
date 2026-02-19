@@ -101,19 +101,21 @@ export const telegramCommandsAction: Action = {
       // Clean up stale flows
       cleanupStaleFlows();
 
-      // Check if the evaluator already handled this flow description
-      if ((message.content as Record<string, unknown>)?._flowHandled) {
-        return { success: true, data: { handledByEvaluator: true } };
-      }
-
-      // Check for active conversation flow at await_description step (plain text → task creation)
-      // This is a backup — the evaluator should handle this first, but if it didn't, we catch it here.
-      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
-      const flowChatId = topicsService?.chatId;
-      if (flowChatId && !text.startsWith('/')) {
-        const flow = getFlow(flowChatId);
-        if (flow && flow.step === 'await_description') {
-          return await handleFlowDescription(runtime, flow, text, flowChatId, flow.userId, callback);
+      // Flow description handling is done exclusively by the TOPIC_INPUT_RELAY evaluator.
+      // If the evaluator already handled it, bail. If not, still don't handle here to avoid
+      // race conditions that cause double task/topic creation.
+      if ((message.content as Record<string, unknown>)?._flowHandled || !text.startsWith('/')) {
+        const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+        const flowChatId = topicsService?.chatId;
+        if (flowChatId) {
+          const flow = getFlow(flowChatId);
+          if (flow && flow.step === 'await_description') {
+            // Evaluator should handle this — don't duplicate
+            return { success: true, data: { deferredToEvaluator: true } };
+          }
+        }
+        if ((message.content as Record<string, unknown>)?._flowHandled) {
+          return { success: true, data: { handledByEvaluator: true } };
         }
       }
 

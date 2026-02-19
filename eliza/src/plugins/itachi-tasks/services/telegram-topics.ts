@@ -28,6 +28,8 @@ export class TelegramTopicsService extends Service {
   private groupChatId: number;
   private baseUrl: string;
   private buffers: Map<string, StreamBuffer> = new Map();
+  /** Guards against concurrent/duplicate topic creation for the same task */
+  private topicCreationInProgress = new Set<string>();
 
   /** Public getter for the group chat ID */
   get chatId(): number {
@@ -90,6 +92,13 @@ export class TelegramTopicsService extends Service {
   async createTopicForTask(task: ItachiTask): Promise<{ topicId: number; messageId: number } | null> {
     if (!this.isEnabled()) return null;
 
+    // Dedup guard: prevent concurrent/duplicate topic creation for the same task
+    if (this.topicCreationInProgress.has(task.id)) {
+      this.runtime.logger.info(`[topics] Topic creation already in progress for task ${task.id.substring(0, 8)}, skipping`);
+      return null;
+    }
+    this.topicCreationInProgress.add(task.id);
+
     const slug = generateTaskTitle(task.description);
     const topicName = `${slug} | ${task.project}`;
 
@@ -130,6 +139,8 @@ export class TelegramTopicsService extends Service {
     } catch (error) {
       this.runtime.logger.error('Failed to create forum topic:', error instanceof Error ? error.message : String(error));
       return null;
+    } finally {
+      this.topicCreationInProgress.delete(task.id);
     }
   }
 

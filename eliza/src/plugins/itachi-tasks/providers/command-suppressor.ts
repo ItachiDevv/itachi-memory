@@ -62,11 +62,12 @@ export const commandSuppressorProvider: Provider = {
           const flow = getFlow(flowChatId);
           if (flow && flow.step === 'await_description') {
             return {
-              text: `## Active Task Flow
+              text: `## CRITICAL: Active Task Flow — DO NOT REPLY
 The user is providing a task description for an active interactive flow.
 Machine: ${flow.machine || 'auto'}, Project: ${flow.project || flow.taskName || 'unknown'}.
-You MUST NOT generate any response text. Output nothing.
-Select ONLY the TELEGRAM_COMMANDS action. The flow handler will create the task and respond.`,
+The evaluator will handle task creation automatically.
+DO NOT select the REPLY action. DO NOT generate any <text>. Leave <text> empty.
+Select ONLY the TELEGRAM_COMMANDS action with empty text. The flow handler does everything.`,
               values: { activeFlow: 'await_description', suppressResponse: 'true' },
               data: { activeFlow: flow.step },
             };
