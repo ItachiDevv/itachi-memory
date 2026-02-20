@@ -1,7 +1,9 @@
 import type { Provider, IAgentRuntime, Memory, State, ProviderResult } from '@elizaos/core';
-import { stripBotMention } from '../utils/telegram.js';
+import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { getFlow } from '../shared/conversation-flows.js';
+import { browsingSessionMap } from '../utils/directory-browser.js';
+import { activeSessions } from '../shared/active-sessions.js';
 
 /**
  * When a message is an explicit bot command (/status, /repos, /cancel, etc.),
@@ -78,6 +80,38 @@ Select ONLY the TELEGRAM_COMMANDS action with empty text. The flow handler does 
       }
     }
 
+    // Suppress LLM for messages in topics with active browsing or SSH sessions.
+    // The topic-input-relay evaluator handles these, but runs AFTER the LLM pipeline.
+    if (message.content?.source === 'telegram') {
+      try {
+        const threadId = await getTopicThreadId(runtime, message);
+        if (threadId !== null) {
+          if (browsingSessionMap.has(threadId)) {
+            return {
+              text: `## CRITICAL: Directory Browsing Session Active — DO NOT REPLY
+The user is navigating directories in a browsing session. The evaluator will handle this input.
+DO NOT generate any <text>. Leave <text> COMPLETELY EMPTY. Select the IGNORE action.
+Any text you generate will be confusing noise alongside the directory listing.`,
+              values: { suppressResponse: 'true', activeBrowsing: 'true' },
+              data: { threadId },
+            };
+          }
+          if (activeSessions.has(threadId)) {
+            return {
+              text: `## CRITICAL: Interactive SSH Session Active — DO NOT REPLY
+The user is interacting with a live SSH session. Their input is piped to the remote process.
+DO NOT generate any <text>. Leave <text> COMPLETELY EMPTY. Select the IGNORE action.
+Any text you generate will be confusing noise alongside the session output.`,
+              values: { suppressResponse: 'true', activeSession: 'true' },
+              data: { threadId },
+            };
+          }
+        }
+      } catch {
+        // Non-critical — if lookup fails, let the message through normally
+      }
+    }
+
     if (!text.startsWith('/')) {
       return { text: '', values: {}, data: {} };
     }
@@ -94,10 +128,11 @@ Select ONLY the TELEGRAM_COMMANDS action with empty text. The flow handler does 
     }
 
     return {
-      text: `## Bot Command Detected: ${command}
-The user sent a bot command. The command handler will process this and send a response.
-You MUST NOT generate any response text. Do not respond at all. Output nothing.
-The action handler for this command will send the appropriate response directly.`,
+      text: `## CRITICAL: Bot Command "${command}" — DO NOT REPLY
+The user sent the "${command}" command. The action handler will process it and respond.
+DO NOT select the REPLY action. DO NOT generate any <text>. Leave <text> COMPLETELY EMPTY.
+Select the TELEGRAM_COMMANDS action with empty text. The command handler does everything.
+Any text you generate will cause a confusing DUPLICATE response. Output NOTHING.`,
       values: { botCommand: command, suppressResponse: 'true' },
       data: { botCommand: command },
     };
