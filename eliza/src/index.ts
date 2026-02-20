@@ -137,8 +137,8 @@ const agent: ProjectAgent = {
       // Code-intel: cross-project (weekly, start after 4m)
       { name: 'cross-project', intervalMs: 604_800_000, delayMs: 240_000,
         execute: (rt) => crossProjectWorker.execute(rt, {}, { name: 'ITACHI_CROSS_PROJECT', tags: [], description: '' }) },
-      // Code-intel: cleanup (monthly, start after 5m)
-      { name: 'cleanup', intervalMs: 2_592_000_000, delayMs: 300_000,
+      // Code-intel: cleanup (weekly, start after 5m) — capped to fit 32-bit signed int
+      { name: 'cleanup', intervalMs: 604_800_000, delayMs: 300_000,
         execute: (rt) => cleanupWorker.execute(rt, {}, { name: 'ITACHI_CLEANUP', tags: [], description: '' }) },
       // Self-improve: reflection (weekly, start after 6m)
       { name: 'reflection', intervalMs: 604_800_000, delayMs: 360_000,
