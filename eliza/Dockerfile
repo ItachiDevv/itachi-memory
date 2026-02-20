@@ -1,29 +1,27 @@
-FROM oven/bun:1.1
+FROM oven/bun:1.1.45
+
 WORKDIR /app
 
-# Install SSH client + Node/npm (for Codex CLI)
-RUN apt-get update -qq \
- && apt-get install -y -qq openssh-client nodejs npm \
- && npm i -g @openai/codex \
- && rm -rf /var/lib/apt/lists/*
+# System deps + Node 20 (needed because tsup runs via `node`)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git python3 make g++ \
+  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs \
+  && npm -v && node -v \
+  && npm i -g @openai/codex \
+  && rm -rf /var/lib/apt/lists/*
 
-# Copy repo first so postinstall scripts exist (important)
-COPY . .
-
-# Install deps (use bun.lockb if present; fallback allowed)
+# Install deps first (better caching)
+COPY package.json ./
+COPY bun.lockb* ./
 RUN bun install --frozen-lockfile || bun install
 
-# Build
+# App source + build
+COPY . .
 RUN bun run build
 
-# Entrypoint sets up SSH keys from mounted volume
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
-
+ENV PORT=3000
 EXPOSE 3000
-ENV NODE_ENV=production
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
-
-# Force bind + PORT (Coolify sets PORT, default 3000)
-CMD ["sh","-c","bun x next start -H 0.0.0.0 -p ${PORT:-3000}"]
+# Bind to 0.0.0.0 for Coolify and use $PORT
+CMD ["sh", "-lc", "bun run start -- --host 0.0.0.0 --port ${PORT:-3000}"]
