@@ -4,6 +4,7 @@ import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
 import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask, proactiveMonitorWorker, registerProactiveMonitorTask } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
+import { itachiCodexPlugin } from './plugins/plugin-codex/index.js';
 import { itachiGeminiPlugin } from './plugins/plugin-gemini/index.js';
 import {
   itachiCodeIntelPlugin,
@@ -59,6 +60,7 @@ function scheduleWorkers(runtime: IAgentRuntime, workers: WorkerDef[]): void {
 const agent: ProjectAgent = {
   character,
   plugins: [
+    itachiCodexPlugin,
     itachiGeminiPlugin,
     itachiMemoryPlugin,
     itachiTasksPlugin,

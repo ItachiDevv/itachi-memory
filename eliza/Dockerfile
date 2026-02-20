@@ -16,8 +16,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && node -v && npm -v \
   && rm -rf /var/lib/apt/lists/*
 
-# (Optional) if you truly need Codex inside the container:
-# RUN npm i -g @openai/codex
+# Codex CLI for subscription-auth text generation
+RUN npm i -g @openai/codex
 
 # ===== Install deps (cache-friendly) =====
 COPY package.json bun.lock* ./
