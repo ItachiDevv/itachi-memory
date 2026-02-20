@@ -1,8 +1,12 @@
 FROM oven/bun:1.1
 WORKDIR /app
 
-# Install SSH client for remote machine control via Tailscale
-RUN apt-get update -qq && apt-get install -y -qq openssh-client && rm -rf /var/lib/apt/lists/*
+# Install SSH client (for remote machine control via Tailscale) + Node/npm (for Codex CLI)
+# Then install Codex CLI globally.
+RUN apt-get update -qq \
+ && apt-get install -y -qq openssh-client nodejs npm \
+ && npm i -g @openai/codex \
+ && rm -rf /var/lib/apt/lists/*
 
 # Install deps first (cache layer)
 COPY package.json bun.lock* ./
