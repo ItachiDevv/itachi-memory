@@ -1,80 +1,53 @@
-# Itachi Memory - Codex SessionStart Hook
+#!/bin/bash
+# Itachi Memory - Gemini SessionStart Hook
 # 1) Pulls + decrypts synced .env/.md files from remote
 # 2) Fetches session briefing from code-intel API
 # 3) Fetches recent memories for context
-# 4) Writes briefing data to AGENTS.md in project root for Codex persistent context
-# Runs for ALL Codex sessions (manual + orchestrator). Set ITACHI_DISABLED=1 to opt out.
+# 4) Writes briefing data to GEMINI.md in project root for Gemini persistent context
 
-if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
+BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
+MEMORY_API="$BASE_API/api/memory"
+SYNC_API="$BASE_API/api/sync"
+SESSION_API="$BASE_API/api/session"
+AUTH_HEADER="Authorization: Bearer ${ITACHI_API_KEY:-}"
 
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# ============ Project Resolution ============
+PROJECT_NAME=""
+if [ -n "$ITACHI_PROJECT_NAME" ]; then
+    PROJECT_NAME="$ITACHI_PROJECT_NAME"
+fi
+if [ -z "$PROJECT_NAME" ] && [ -f ".itachi-project" ]; then
+    PROJECT_NAME=$(cat .itachi-project | tr -d '\n\r')
+fi
+if [ -z "$PROJECT_NAME" ]; then
+    REMOTE_URL=$(git remote get-url origin 2>/dev/null)
+    if [ -n "$REMOTE_URL" ]; then
+        PROJECT_NAME=$(echo "$REMOTE_URL" | sed 's/\.git$//' | sed 's/.*[/:]//')
+    fi
+fi
+if [ -z "$PROJECT_NAME" ]; then
+    PROJECT_NAME=$(basename "$PWD")
+fi
 
-    # Load ITACHI_API_URL: ~/.itachi-api-keys > env var > fallback
-    $BASE_API = $null
-    $apiKeysFile = Join-Path $env:USERPROFILE ".itachi-api-keys"
-    if (Test-Path $apiKeysFile) {
-        $match = Select-String -Path $apiKeysFile -Pattern "^ITACHI_API_URL=(.+)" | Select-Object -First 1
-        if ($match) { $BASE_API = $match.Matches.Groups[1].Value.Trim() }
-    }
-    if (-not $BASE_API -and $env:ITACHI_API_URL) { $BASE_API = $env:ITACHI_API_URL }
-    if (-not $BASE_API) { $BASE_API = "https://itachisbrainserver.online" }
-    $MEMORY_API = "$BASE_API/api/memory"
-    $SYNC_API = "$BASE_API/api/sync"
-    $SESSION_API = "$BASE_API/api/session"
-    $authHeaders = @{}
-    if ($env:ITACHI_API_KEY) { $authHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
+# Detect git branch
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+[ -z "$BRANCH" ] && BRANCH="main"
 
-    # ============ Project Resolution ============
-    $project = $null
-    if ($env:ITACHI_PROJECT_NAME) {
-        $project = $env:ITACHI_PROJECT_NAME
-    }
-    if (-not $project) {
-        $itachiProjectFile = Join-Path (Get-Location) ".itachi-project"
-        if (Test-Path $itachiProjectFile) {
-            $project = (Get-Content $itachiProjectFile -Raw).Trim()
-        }
-    }
-    if (-not $project) {
-        try {
-            $remoteUrl = git remote get-url origin 2>$null
-            if ($remoteUrl) {
-                $project = ($remoteUrl -replace '\.git$','') -replace '.*/','.'
-                $project = ($project -split '[/:]')[-1]
-            }
-        } catch {}
-    }
-    if (-not $project) {
-        $project = Split-Path -Leaf (Get-Location)
-    }
+# ============ Auto-register repo URL ============
+REPO_URL=$(git remote get-url origin 2>/dev/null)
+if [ -n "$REPO_URL" ] && [ -n "$PROJECT_NAME" ]; then
+    curl -s -k -X POST "${BASE_API}/api/repos/register" \
+      -H "Content-Type: application/json" \
+      -H "$AUTH_HEADER" \
+      -d "{\"name\":\"${PROJECT_NAME}\",\"repo_url\":\"${REPO_URL}\"}" \
+      --max-time 5 > /dev/null 2>&1 &
+fi
 
-    # Detect git branch
-    $branchName = "main"
-    try { $branchName = (git rev-parse --abbrev-ref HEAD 2>$null) } catch {}
-    if (-not $branchName) { $branchName = "main" }
+# ============ Encrypted File Sync (Pull) ============
+ITACHI_KEY_FILE="$HOME/.itachi-key"
 
-    # ============ Auto-register repo URL ============
-    $repoUrl = $null
-    try { $repoUrl = git remote get-url origin 2>$null } catch {}
-    if ($repoUrl -and $project) {
-        try {
-            $regHeaders = @{ "Content-Type" = "application/json" }
-            if ($env:ITACHI_API_KEY) { $regHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
-            $regBody = (@{ name = $project; repo_url = $repoUrl } | ConvertTo-Json -Compress)
-            Invoke-RestMethod -Uri "$BASE_API/api/repos/register" `
-                -Method Post `
-                -Headers $regHeaders `
-                -Body $regBody `
-                -TimeoutSec 5 | Out-Null
-        } catch {}
-    }
-
-    # ============ Encrypted File Sync (Pull) ============
-    $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"
-
-    if (Test-Path $itachiKeyFile) {
-        $nodeScript = @"
+if [ -f "$ITACHI_KEY_FILE" ]; then
+    SYNC_OUTPUT=$(node -e "
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -185,16 +158,14 @@ function mergeEnv(localContent, remoteContent) {
         if (output.length > 0) console.log(output.join('\n'));
     } catch(e) {}
 })();
-"@
-        $cwd = (Get-Location).Path
-        $syncOutput = node -e $nodeScript $project $itachiKeyFile $SYNC_API $cwd 2>$null
+" "$PROJECT_NAME" "$ITACHI_KEY_FILE" "$SYNC_API" "$PWD" 2>/dev/null)
 
-        if ($syncOutput) {
-            Write-Output $syncOutput
-        }
+    if [ -n "$SYNC_OUTPUT" ]; then
+        echo "$SYNC_OUTPUT"
+    fi
 
-        # ============ Global Sync (skills + commands → ~/.codex/) ============
-        $globalNodeScript = @"
+    # ============ Global Sync (skills + commands → ~/.gemini/) ============
+    GLOBAL_SYNC_OUTPUT=$(node -e "
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -254,27 +225,23 @@ function decrypt(encB64, saltB64, passphrase) {
             const fileData = await httpGet(syncApi + '/pull/' + encodeURIComponent(repoName) + '/' + f.file_path);
             const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
 
-            // All global files use whole-file replacement
             fs.mkdirSync(path.dirname(localPath), { recursive: true });
             fs.writeFileSync(localPath, remoteContent);
-            output.push('[sync] Updated ~\\.codex\\' + f.file_path.replace(/\//g, '\\') + ' (v' + f.version + ' by ' + f.updated_by + ')');
+            output.push('[sync] Updated ~/' + path.relative(require('os').homedir(), localPath) + ' (v' + f.version + ' by ' + f.updated_by + ')');
         }
         if (output.length > 0) console.log(output.join('\n'));
     } catch(e) {}
 })();
-"@
-        $codexDir = Join-Path $env:USERPROFILE ".codex"
-        $globalSyncOutput = node -e $globalNodeScript $itachiKeyFile $SYNC_API $codexDir 2>$null
+" "$ITACHI_KEY_FILE" "$SYNC_API" "$HOME/.gemini" 2>/dev/null)
 
-        if ($globalSyncOutput) {
-            Write-Output $globalSyncOutput
-        }
-    }
+    if [ -n "$GLOBAL_SYNC_OUTPUT" ]; then
+        echo "$GLOBAL_SYNC_OUTPUT"
+    fi
+fi
 
-    # ============ API Keys Merge ============
-    # Pull api-keys from _global, merge into ~/.itachi-api-keys
-    try {
-        $apiKeysMergeScript = @"
+# ============ API Keys Merge ============
+# Pull api-keys from _global, merge into ~/.itachi-api-keys
+API_KEYS_MERGE_OUTPUT=$(node -e "
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -322,14 +289,12 @@ function decrypt(encB64, saltB64, passphrase) {
         const fileData = await httpGet(syncApi + '/pull/_global/api-keys');
         const remoteContent = decrypt(fileData.encrypted_data, fileData.salt, passphrase);
 
-        // Parse remote keys
         const remoteKV = {};
         for (const line of remoteContent.split('\n')) {
             const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
             if (m) remoteKV[m[1]] = m[2];
         }
 
-        // Parse local keys (if file exists)
         const localKV = {};
         if (fs.existsSync(apiKeysFile)) {
             const localContent = fs.readFileSync(apiKeysFile, 'utf8');
@@ -339,10 +304,8 @@ function decrypt(encB64, saltB64, passphrase) {
             }
         }
 
-        // Merge: remote wins for shared keys, local-only keys preserved
         const merged = { ...localKV, ...remoteKV };
 
-        // Restore machine-specific keys from local
         for (const mk of machineKeys) {
             if (localKV[mk]) merged[mk] = localKV[mk];
             else delete merged[mk];
@@ -353,134 +316,115 @@ function decrypt(encB64, saltB64, passphrase) {
         console.log('[sync] Merged API keys');
     } catch(e) {}
 })();
-"@
-        $apiKeysMergeOutput = node -e $apiKeysMergeScript $itachiKeyFile $SYNC_API 2>$null
-        if ($apiKeysMergeOutput) { Write-Output $apiKeysMergeOutput }
-    } catch {}
+" "$ITACHI_KEY_FILE" "$SYNC_API" 2>/dev/null)
 
-    # ============ Session Briefing (Code-Intel) ============
-    try {
-        $briefingResponse = Invoke-RestMethod -Uri "$SESSION_API/briefing?project=$project&branch=$branchName" `
-            -Method Get `
-            -Headers $authHeaders `
-            -TimeoutSec 10
+if [ -n "$API_KEYS_MERGE_OUTPUT" ]; then
+    echo "$API_KEYS_MERGE_OUTPUT"
+fi
 
-        if ($briefingResponse) {
-            Write-Output ""
-            Write-Output "=== Session Briefing for $project ($branchName) ==="
+# ============ Session Briefing (Code-Intel) ============
+BRIEFING=$(curl -s -k -H "$AUTH_HEADER" "${SESSION_API}/briefing?project=${PROJECT_NAME}&branch=${BRANCH}" --max-time 10 2>/dev/null)
 
-            if ($briefingResponse.recentSessions -and $briefingResponse.recentSessions.Count -gt 0) {
-                Write-Output "Recent sessions:"
-                foreach ($sess in $briefingResponse.recentSessions) {
-                    $files = if ($sess.filesChanged) { ($sess.filesChanged -join ", ") } else { "" }
-                    Write-Output "  - $($sess.summary)$(if($files){" [$files]"})"
-                }
-            }
+if [ -n "$BRIEFING" ]; then
+    BRIEFING_OUTPUT=$(node -e "
+try {
+    const d = JSON.parse(process.argv[1]);
+    const lines = [];
+    lines.push('');
+    lines.push('=== Session Briefing for ${PROJECT_NAME} (${BRANCH}) ===');
 
-            if ($briefingResponse.hotFiles -and $briefingResponse.hotFiles.Count -gt 0) {
-                Write-Output "Hot files (last 7d):"
-                foreach ($hf in $briefingResponse.hotFiles | Select-Object -First 5) {
-                    Write-Output "  - $($hf.path) ($($hf.editCount) edits)"
-                }
-            }
-
-            if ($briefingResponse.activePatterns -and $briefingResponse.activePatterns.Count -gt 0) {
-                Write-Output "Active patterns:"
-                foreach ($pat in $briefingResponse.activePatterns) {
-                    Write-Output "  - $pat"
-                }
-            }
-
-            if ($briefingResponse.activeTasks -and $briefingResponse.activeTasks.Count -gt 0) {
-                Write-Output "Active tasks:"
-                foreach ($task in $briefingResponse.activeTasks) {
-                    Write-Output "  - [$($task.status)] $($task.description)"
-                }
-            }
-
-            if ($briefingResponse.warnings -and $briefingResponse.warnings.Count -gt 0) {
-                foreach ($warn in $briefingResponse.warnings) {
-                    Write-Output "  [warn] $warn"
-                }
-            }
-
-            Write-Output "=== End Briefing ==="
-            Write-Output ""
-        }
-    } catch {}
-
-    # ============ Memory Context (fallback) ============
-    $memHeaders = @{}
-    if ($env:ITACHI_API_KEY) { $memHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
-    $response = Invoke-RestMethod -Uri "$MEMORY_API/recent?project=$project&limit=5&branch=$branchName" `
-        -Method Get `
-        -Headers $memHeaders `
-        -TimeoutSec 10
-
-    if ($response.recent -and $response.recent.Count -gt 0) {
-        Write-Output ""
-        Write-Output "=== Recent Memory Context for $project ($branchName) ==="
-        foreach ($mem in $response.recent) {
-            $files = if ($mem.files) { ($mem.files -join ", ") } else { "none" }
-            Write-Output "[$($mem.category)] $($mem.summary) (Files: $files)"
-        }
-        Write-Output "=== End Memory Context ==="
-        Write-Output ""
+    if (d.recentSessions && d.recentSessions.length > 0) {
+        lines.push('Recent sessions:');
+        d.recentSessions.forEach(s => {
+            const files = (s.filesChanged || []).join(', ');
+            lines.push('  - ' + (s.summary || '(no summary)') + (files ? ' [' + files + ']' : ''));
+        });
     }
 
-    # ============ Fetch Project Learnings (Rules) ============
-    $learningsJson = $null
-    try {
-        $learningsResponse = Invoke-RestMethod -Uri "$BASE_API/api/project/learnings?project=$project&limit=15" `
-            -Method Get `
-            -Headers $authHeaders `
-            -TimeoutSec 10
-        if ($learningsResponse -and $learningsResponse.rules -and $learningsResponse.rules.Count -gt 0) {
-            $learningsJson = ($learningsResponse | ConvertTo-Json -Compress -Depth 5)
-        }
-    } catch {}
+    if (d.hotFiles && d.hotFiles.length > 0) {
+        lines.push('Hot files (last 7d):');
+        d.hotFiles.slice(0, 5).forEach(f => {
+            lines.push('  - ' + f.path + ' (' + f.editCount + ' edits)');
+        });
+    }
 
-    # ============ Fetch Global Learnings (Cross-Project Rules) ============
-    $globalLearningsJson = $null
-    try {
-        $globalLearningsResponse = Invoke-RestMethod -Uri "$BASE_API/api/project/learnings?project=_global&limit=10" `
-            -Method Get `
-            -Headers $authHeaders `
-            -TimeoutSec 10
-        if ($globalLearningsResponse -and $globalLearningsResponse.rules -and $globalLearningsResponse.rules.Count -gt 0) {
-            $globalLearningsJson = ($globalLearningsResponse | ConvertTo-Json -Compress -Depth 5)
-        }
-    } catch {}
+    if (d.activePatterns && d.activePatterns.length > 0) {
+        lines.push('Active patterns:');
+        d.activePatterns.forEach(p => lines.push('  - ' + p));
+    }
 
-    # ============ Write Briefing to AGENTS.md in project root ============
-    # Codex reads AGENTS.md like Claude reads CLAUDE.md
-    try {
-        $cwd = (Get-Location).Path
-        $agentsMdScript = @"
+    if (d.activeTasks && d.activeTasks.length > 0) {
+        lines.push('Active tasks:');
+        d.activeTasks.forEach(t => lines.push('  - [' + t.status + '] ' + t.description));
+    }
+
+    if (d.warnings && d.warnings.length > 0) {
+        d.warnings.forEach(w => lines.push('  [warn] ' + w));
+    }
+
+    lines.push('=== End Briefing ===');
+    lines.push('');
+    console.log(lines.join('\n'));
+} catch(e) {}
+" "$BRIEFING" 2>/dev/null)
+
+    if [ -n "$BRIEFING_OUTPUT" ]; then
+        echo "$BRIEFING_OUTPUT"
+    fi
+fi
+
+# ============ Memory Context (fallback) ============
+RECENT=$(curl -s -k -H "$AUTH_HEADER" "${MEMORY_API}/recent?project=${PROJECT_NAME}&limit=5&branch=${BRANCH}" --max-time 10 2>/dev/null)
+
+if [ -n "$RECENT" ]; then
+    OUTPUT=$(node -e "
+try {
+    const d = JSON.parse(process.argv[1]);
+    if (d.recent && d.recent.length > 0) {
+        console.log('');
+        console.log('=== Recent Memory Context for ${PROJECT_NAME} (${BRANCH}) ===');
+        d.recent.forEach(m => {
+            const files = (m.files || []).join(', ') || 'none';
+            console.log('[' + m.category + '] ' + m.summary + ' (Files: ' + files + ')');
+        });
+        console.log('=== End Memory Context ===');
+        console.log('');
+    }
+} catch(e) {}
+" "$RECENT" 2>/dev/null)
+
+    if [ -n "$OUTPUT" ]; then
+        echo "$OUTPUT"
+    fi
+fi
+
+# ============ Fetch Project Learnings (Rules) ============
+LEARNINGS=$(curl -s -k -H "$AUTH_HEADER" "${BASE_API}/api/project/learnings?project=${PROJECT_NAME}&limit=15" --max-time 10 2>/dev/null)
+
+# ============ Write Briefing to GEMINI.md in project root ============
+# Gemini reads GEMINI.md for persistent context
+if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ]; then
+    node -e "
 const fs = require('fs');
 const path = require('path');
 
 const cwd = process.argv[1];
 const briefingJson = process.argv[2];
 const learningsJson = process.argv[3];
-const globalLearningsJson = process.argv[4];
 
 try {
-    const agentsFile = path.join(cwd, 'AGENTS.md');
+    const geminiFile = path.join(cwd, 'GEMINI.md');
 
     const briefing = briefingJson ? JSON.parse(briefingJson) : null;
     let learnings = null;
     try { learnings = learningsJson ? JSON.parse(learningsJson) : null; } catch {}
-    let globalLearnings = null;
-    try { globalLearnings = globalLearningsJson ? JSON.parse(globalLearningsJson) : null; } catch {}
 
     // Exit early if nothing to write
-    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0) && (!globalLearnings || !globalLearnings.rules || globalLearnings.rules.length === 0)) return;
+    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0)) return;
 
-    // Build the Itachi Session Context section
     const lines = [];
     lines.push('## Itachi Session Context');
-    lines.push('<!-- auto-updated by itachi codex-session-start hook -->');
+    lines.push('<!-- auto-updated by itachi gemini-session-start hook -->');
     lines.push('');
 
     if (briefing) {
@@ -514,13 +458,11 @@ try {
         }
     }
 
-    // Read existing AGENTS.md or create new
     let existing = '';
-    if (fs.existsSync(agentsFile)) {
-        existing = fs.readFileSync(agentsFile, 'utf8');
+    if (fs.existsSync(geminiFile)) {
+        existing = fs.readFileSync(geminiFile, 'utf8');
     }
 
-    // Helper: replace or append a ## section in the file content
     function upsertSection(content, sectionHeading, sectionBody) {
         const startIdx = content.indexOf(sectionHeading);
         if (startIdx !== -1) {
@@ -536,18 +478,16 @@ try {
         }
     }
 
-    // Write Itachi Session Context section (only if briefing has content)
     if (lines.length > 3) {
         lines.push('');
         const sectionContent = lines.join('\n');
         existing = upsertSection(existing, '## Itachi Session Context', sectionContent);
     }
 
-    // Build and write Project Rules section from learnings
     if (learnings && learnings.rules && learnings.rules.length > 0) {
         const ruleLines = [];
         ruleLines.push('## Project Rules');
-        ruleLines.push('<!-- auto-updated by itachi codex-session-start hook -->');
+        ruleLines.push('<!-- auto-updated by itachi gemini-session-start hook -->');
         ruleLines.push('');
         for (const r of learnings.rules) {
             const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
@@ -557,36 +497,9 @@ try {
         existing = upsertSection(existing, '## Project Rules', ruleLines.join('\n'));
     }
 
-    // Build and write Global Operational Rules section
-    if (globalLearnings && globalLearnings.rules && globalLearnings.rules.length > 0) {
-        const globalLines = [];
-        globalLines.push('## Global Operational Rules');
-        globalLines.push('<!-- auto-updated by itachi codex-session-start hook -->');
-        globalLines.push('');
-        for (const r of globalLearnings.rules.slice(0, 10)) {
-            const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
-            globalLines.push('- ' + r.rule + reinforced);
-        }
-        globalLines.push('');
-        existing = upsertSection(existing, '## Global Operational Rules', globalLines.join('\n'));
-    }
-
-    fs.writeFileSync(agentsFile, existing);
+    fs.writeFileSync(geminiFile, existing);
 } catch(e) {}
-"@
-        $briefingJsonArg = ""
-        if ($briefingResponse) {
-            $briefingJsonArg = ($briefingResponse | ConvertTo-Json -Compress -Depth 5)
-        }
-        $learningsJsonArg = if ($learningsJson) { $learningsJson } else { "" }
-        $globalLearningsJsonArg = if ($globalLearningsJson) { $globalLearningsJson } else { "" }
-        if ($briefingJsonArg -or $learningsJsonArg -or $globalLearningsJsonArg) {
-            node -e $agentsMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg 2>$null
-        }
-    } catch {}
-}
-catch {
-    # Silently ignore - don't block session start
-}
+" "$PWD" "$BRIEFING" "$LEARNINGS" 2>/dev/null
+fi
 
 exit 0

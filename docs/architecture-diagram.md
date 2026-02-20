@@ -24,6 +24,8 @@ Complete technical architecture of the Itachi Memory System — an ElizaOS-based
                           │  │  Platform Plugins:             │  │  ├─ Claude CLI     │  │
                           │  │  ├─ plugin-anthropic (chat)    │  │  └─ Codex CLI      │  │
                           │  │  ├─ plugin-openai (embedding)  │  │                    │  │
+                          │  │  ├─ plugin-codex (sub auth)    │  │                    │  │
+                          │  │  ├─ plugin-gemini (TEXT_SMALL)  │  │                    │  │
                           │  │  ├─ plugin-telegram (bot)      │  │  Machine Registry  │  │
                           │  │  ├─ plugin-bootstrap           │  │  Task Dispatcher   │  │
                           │  │  └─ plugin-sql                 │  │  Heartbeat (30s)   │  │
@@ -237,7 +239,7 @@ itachi-code-intel/
 │  ├─ repo-expertise.ts      ITACHI_REPO_EXPERTISE — daily, builds per-project expertise docs
 │  ├─ style-extractor.ts     ITACHI_STYLE_EXTRACTOR — weekly, global coding style profile
 │  ├─ cross-project.ts       ITACHI_CROSS_PROJECT — weekly, finds patterns across repos
-│  └─ cleanup.ts             ITACHI_CLEANUP — monthly, calls cleanup_intelligence_data() RPC
+│  └─ cleanup.ts             ITACHI_CLEANUP — weekly, calls cleanup_intelligence_data() RPC
 └─ index.ts
 ```
 
@@ -838,8 +840,12 @@ User (Telegram)                    ElizaOS                          Orchestrator
 ### Model 2: ElizaOS-only (eliza/Dockerfile)
 
 ```
-Simple Bun build: bun install → bun run build → bun run start
+oven/bun:1.1 + Node 20 (for Codex CLI)
+npm i -g @openai/codex
+bun install → bun run build → bunx elizaos start
 Port 3000 only. No orchestrator. For API + Telegram only.
+
+Volume mount: /root/.codex (OAuth token persistence)
 ```
 
 ### Model 3: Hooks-only (local machine)
@@ -904,17 +910,17 @@ Credential Loading:
 
 | Category | Count | Items |
 |----------|-------|-------|
-| **Plugins** | 6 | itachi-memory, itachi-tasks, itachi-sync, itachi-self-improve, itachi-code-intel, itachi-agents |
+| **Plugins** | 8 | itachi-memory, itachi-tasks, itachi-sync, itachi-self-improve, itachi-code-intel, itachi-agents, plugin-gemini, plugin-codex |
 | **Actions** | 11+ | STORE_MEMORY, SPAWN_CLAUDE_SESSION, CREATE_TASK, LIST_TASKS, CANCEL_TASK, TELEGRAM_COMMANDS, TOPIC_REPLY, INTERACTIVE_SESSION, GITHUB_DIRECT, REMOTE_EXEC, COOLIFY_CONTROL |
 | **Evaluators** | 3 | CONVERSATION_MEMORY (scored, alwaysRun), LESSON_EXTRACTOR (feedback-triggered), PERSONALITY_EXTRACTOR (every ~10 msgs) |
 | **Providers** | 11 | personality(3), lessons(5), session-briefing(8), repo-expertise(9), recent-memories(10), conversation-context(11), cross-project(12), active-tasks(15), repos(20), machine-status, memory-stats(80) |
 | **Services** | 10 | MemoryService, TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, SyncService, CodeIntelService, RLMService |
 | **Routes** | 23+ | 4 memory, 6 task, 3 repo, 3 sync, 2 bootstrap, 3 code-intel, 4 task-stream, 4 machine |
-| **Workers** | 9 | edit-analyzer(15m), session-synthesizer(5m), repo-expertise(1d), style-extractor(7d), cross-project(7d), cleanup(30d), reflection(7d), effectiveness(7d), task-dispatcher(10s) |
+| **Workers** | 9 | edit-analyzer(15m), session-synthesizer(30m), repo-expertise(1d), style-extractor(7d), cross-project(7d), cleanup(7d), reflection(7d), effectiveness(7d), task-dispatcher(10s) |
 | **MCP Tools** | 9 | memory_search, memory_recent, memory_store, memory_stats, session_briefing, project_hot_files, task_list, task_create, sync_list |
 | **Hooks** | 4 | session-start, after-edit, session-end, skill-sync (x2 platforms = 8 files) |
-| **DB Tables** | 27 | 8 Itachi custom + 19 ElizaOS core (all RLS enabled) |
-| **DB RPCs** | 5 | match_memories, match_sessions, claim_next_task, upsert_sync_file, cleanup_intelligence_data |
+| **DB Tables** | 31 | 12 Itachi custom + 19 ElizaOS core (all RLS enabled) |
+| **DB RPCs** | 7 | match_memories, match_sessions, claim_next_task, upsert_sync_file, cleanup_intelligence_data, cleanup_expired_subagents, increment_cron_run_count |
 | **Skills** | 20 | 6 core + 1 elizaos + 2 AI/platform + 1 game + 10 three.js |
 | **Telegram Commands** | 35 | Tasks, sessions, SSH, deployment, GitHub, agents, memory, reminders, housekeeping |
 

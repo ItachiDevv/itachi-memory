@@ -22,7 +22,12 @@ Telegram message in
   → Background workers run (TEXT_SMALL → Gemini Flash)
 ```
 
-**Priority routing**: Gemini plugin registers at priority 10, Anthropic at 0. Higher priority wins for TEXT_SMALL. If GEMINI_API_KEY is missing, Gemini throws → falls back to Anthropic.
+**Priority routing** (updated 2026-02-20): Three-tier model provider chain:
+- **Codex** (priority 20) — Routes TEXT_SMALL/OBJECT_SMALL/TEXT_LARGE through Codex CLI using ChatGPT subscription OAuth. Enabled via `ITACHI_CODEX_ENABLED=true`. When disabled, returns `{}` (transparent fallback).
+- **Gemini** (priority 10) — Routes TEXT_SMALL/OBJECT_SMALL to Gemini Flash. TEXT_LARGE also routed when enabled.
+- **Anthropic** (priority 0) — Default fallback for all model types.
+
+When Codex is enabled, it handles all text generation using the subscription (no API key costs). OpenAI API keys are only used for embeddings (TEXT_EMBEDDING) which Codex doesn't handle.
 
 ### Files Changed
 | File | Change |

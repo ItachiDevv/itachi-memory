@@ -1,8 +1,8 @@
-# Itachi Memory - Codex SessionEnd Hook
+# Itachi Memory - Gemini SessionEnd Hook
 # 1) Logs session end to memory API
 # 2) Posts session complete to code-intel API
 # 3) Extracts conversation insights from transcript (background)
-# Runs for ALL Codex sessions (manual + orchestrator). Set ITACHI_DISABLED=1 to opt out.
+# Runs for ALL Gemini sessions (manual + orchestrator). Set ITACHI_DISABLED=1 to opt out.
 
 if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 
@@ -58,10 +58,10 @@ try {
     # Session ID
     $sessionId = $env:ITACHI_SESSION_ID
     if (-not $sessionId) {
-        $sessionId = "codex-manual-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + [System.Environment]::ProcessId
+        $sessionId = "gemini-manual-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + [System.Environment]::ProcessId
     }
 
-    # Exit code from wrapper (no stdin JSON for Codex — wrapper sets env var)
+    # Exit code from wrapper (no stdin JSON for Gemini — wrapper sets env var)
     $exitCode = $env:ITACHI_EXIT_CODE
     if (-not $exitCode) { $exitCode = "0" }
     $reason = if ([int]$exitCode -eq 0) { "completed" } else { "error" }
@@ -161,9 +161,9 @@ function httpPost(url, body) {
 
 (async () => {
     try {
-        // Codex transcript path: ~/.codex/sessions/{year}/{month}/{day}/*.jsonl
-        const codexSessionsDir = path.join(os.homedir(), '.codex', 'sessions');
-        if (!fs.existsSync(codexSessionsDir)) return;
+        // Gemini transcript path: ~/.gemini/sessions/{year}/{month}/{day}/*.jsonl
+        const geminiSessionsDir = path.join(os.homedir(), '.gemini', 'sessions');
+        if (!fs.existsSync(geminiSessionsDir)) return;
 
         // Find the most recent .jsonl file across all date dirs
         const now = new Date();
@@ -173,11 +173,11 @@ function httpPost(url, body) {
 
         // Check today's dir first, then scan more broadly
         const dirsToCheck = [
-            path.join(codexSessionsDir, year, month, day),
+            path.join(geminiSessionsDir, year, month, day),
         ];
         // Also check yesterday in case session started before midnight
         const yesterday = new Date(now.getTime() - 86400000);
-        dirsToCheck.push(path.join(codexSessionsDir,
+        dirsToCheck.push(path.join(geminiSessionsDir,
             yesterday.getFullYear().toString(),
             String(yesterday.getMonth() + 1).padStart(2, '0'),
             String(yesterday.getDate()).padStart(2, '0')
@@ -204,7 +204,7 @@ function httpPost(url, body) {
 
         if (!transcriptPath) return;
 
-        // Read and parse Codex JSONL, extract agent/assistant messages
+        // Read and parse Gemini JSONL, extract agent/assistant messages
         const content = fs.readFileSync(transcriptPath, 'utf8');
         const lines = content.split('\n').filter(Boolean);
         const assistantTexts = [];
@@ -213,7 +213,7 @@ function httpPost(url, body) {
             try {
                 const entry = JSON.parse(line);
 
-                // Codex format: response_item with role=assistant content
+                // Codex-compatible format: response_item with role=assistant content
                 if (entry.type === 'response_item' && entry.payload) {
                     const payload = entry.payload;
                     if (payload.role === 'assistant' && payload.content) {
@@ -229,11 +229,37 @@ function httpPost(url, body) {
                     }
                 }
 
-                // Also capture event_msg/agent_reasoning
+                // Codex-compatible format: event_msg/agent_reasoning
                 if (entry.type === 'event_msg' && entry.payload && entry.payload.agent_reasoning) {
                     const reasoning = entry.payload.agent_reasoning;
                     if (reasoning.length > 50) {
                         assistantTexts.push(reasoning);
+                    }
+                }
+
+                // Google AI format: entries with role='model' and parts array
+                if (entry.role === 'model' && Array.isArray(entry.parts)) {
+                    const textParts = entry.parts
+                        .filter(p => typeof p.text === 'string')
+                        .map(p => p.text)
+                        .join(' ');
+                    if (textParts.length > 50) {
+                        assistantTexts.push(textParts);
+                    }
+                }
+
+                // Google AI format: candidates array with content.parts
+                if (Array.isArray(entry.candidates)) {
+                    for (const candidate of entry.candidates) {
+                        if (candidate.content && candidate.content.role === 'model' && Array.isArray(candidate.content.parts)) {
+                            const textParts = candidate.content.parts
+                                .filter(p => typeof p.text === 'string')
+                                .map(p => p.text)
+                                .join(' ');
+                            if (textParts.length > 50) {
+                                assistantTexts.push(textParts);
+                            }
+                        }
                     }
                 }
             } catch {}

@@ -327,14 +327,21 @@ Includes `validateResponse()` helper for pattern matching against bot responses.
 
 ---
 
+## Database Status
+
+All agent system tables and RPC functions are **live in Supabase** (created 2026-02-20):
+- `itachi_agent_profiles` — specialist agent definitions
+- `itachi_subagent_runs` — lifecycle tracking for all runs
+- `itachi_agent_messages` — inter-agent message queue
+- `itachi_agent_cron` — self-scheduled recurring tasks
+- `cleanup_expired_subagents()` RPC — atomic timeout marking + old run deletion
+- `increment_cron_run_count(job_id)` RPC — atomic counter increment
+
+Access via: `psql $POSTGRES_URL` on Hetzner host (psql installed).
+
 ## Deployment Checklist
 
-1. **Run SQL migration:**
-   ```bash
-   ssh hetzner
-   # Connect to Supabase and run:
-   psql $DATABASE_URL < sql/agent-system.sql
-   ```
+1. **SQL migrations already applied** (tables live in Supabase as of 2026-02-20)
 
 2. **Build and deploy:**
    ```bash

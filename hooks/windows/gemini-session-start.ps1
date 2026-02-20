@@ -1,9 +1,9 @@
-# Itachi Memory - Codex SessionStart Hook
+# Itachi Memory - Gemini SessionStart Hook
 # 1) Pulls + decrypts synced .env/.md files from remote
 # 2) Fetches session briefing from code-intel API
 # 3) Fetches recent memories for context
-# 4) Writes briefing data to AGENTS.md in project root for Codex persistent context
-# Runs for ALL Codex sessions (manual + orchestrator). Set ITACHI_DISABLED=1 to opt out.
+# 4) Writes briefing data to GEMINI.md in project root for Gemini persistent context
+# Runs for ALL Gemini sessions (manual + orchestrator). Set ITACHI_DISABLED=1 to opt out.
 
 if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 
@@ -193,7 +193,7 @@ function mergeEnv(localContent, remoteContent) {
             Write-Output $syncOutput
         }
 
-        # ============ Global Sync (skills + commands → ~/.codex/) ============
+        # ============ Global Sync (skills + commands → ~/.gemini/) ============
         $globalNodeScript = @"
 const crypto = require('crypto');
 const fs = require('fs');
@@ -257,14 +257,14 @@ function decrypt(encB64, saltB64, passphrase) {
             // All global files use whole-file replacement
             fs.mkdirSync(path.dirname(localPath), { recursive: true });
             fs.writeFileSync(localPath, remoteContent);
-            output.push('[sync] Updated ~\\.codex\\' + f.file_path.replace(/\//g, '\\') + ' (v' + f.version + ' by ' + f.updated_by + ')');
+            output.push('[sync] Updated ~\\.gemini\\' + f.file_path.replace(/\//g, '\\') + ' (v' + f.version + ' by ' + f.updated_by + ')');
         }
         if (output.length > 0) console.log(output.join('\n'));
     } catch(e) {}
 })();
 "@
-        $codexDir = Join-Path $env:USERPROFILE ".codex"
-        $globalSyncOutput = node -e $globalNodeScript $itachiKeyFile $SYNC_API $codexDir 2>$null
+        $geminiDir = Join-Path $env:USERPROFILE ".gemini"
+        $globalSyncOutput = node -e $globalNodeScript $itachiKeyFile $SYNC_API $geminiDir 2>$null
 
         if ($globalSyncOutput) {
             Write-Output $globalSyncOutput
@@ -452,11 +452,11 @@ function decrypt(encB64, saltB64, passphrase) {
         }
     } catch {}
 
-    # ============ Write Briefing to AGENTS.md in project root ============
-    # Codex reads AGENTS.md like Claude reads CLAUDE.md
+    # ============ Write Briefing to GEMINI.md in project root ============
+    # Gemini reads GEMINI.md like Claude reads CLAUDE.md
     try {
         $cwd = (Get-Location).Path
-        $agentsMdScript = @"
+        $geminiMdScript = @"
 const fs = require('fs');
 const path = require('path');
 
@@ -466,7 +466,7 @@ const learningsJson = process.argv[3];
 const globalLearningsJson = process.argv[4];
 
 try {
-    const agentsFile = path.join(cwd, 'AGENTS.md');
+    const geminiFile = path.join(cwd, 'GEMINI.md');
 
     const briefing = briefingJson ? JSON.parse(briefingJson) : null;
     let learnings = null;
@@ -480,7 +480,7 @@ try {
     // Build the Itachi Session Context section
     const lines = [];
     lines.push('## Itachi Session Context');
-    lines.push('<!-- auto-updated by itachi codex-session-start hook -->');
+    lines.push('<!-- auto-updated by itachi gemini-session-start hook -->');
     lines.push('');
 
     if (briefing) {
@@ -514,10 +514,10 @@ try {
         }
     }
 
-    // Read existing AGENTS.md or create new
+    // Read existing GEMINI.md or create new
     let existing = '';
-    if (fs.existsSync(agentsFile)) {
-        existing = fs.readFileSync(agentsFile, 'utf8');
+    if (fs.existsSync(geminiFile)) {
+        existing = fs.readFileSync(geminiFile, 'utf8');
     }
 
     // Helper: replace or append a ## section in the file content
@@ -547,7 +547,7 @@ try {
     if (learnings && learnings.rules && learnings.rules.length > 0) {
         const ruleLines = [];
         ruleLines.push('## Project Rules');
-        ruleLines.push('<!-- auto-updated by itachi codex-session-start hook -->');
+        ruleLines.push('<!-- auto-updated by itachi gemini-session-start hook -->');
         ruleLines.push('');
         for (const r of learnings.rules) {
             const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
@@ -561,7 +561,7 @@ try {
     if (globalLearnings && globalLearnings.rules && globalLearnings.rules.length > 0) {
         const globalLines = [];
         globalLines.push('## Global Operational Rules');
-        globalLines.push('<!-- auto-updated by itachi codex-session-start hook -->');
+        globalLines.push('<!-- auto-updated by itachi gemini-session-start hook -->');
         globalLines.push('');
         for (const r of globalLearnings.rules.slice(0, 10)) {
             const reinforced = r.times_reinforced > 1 ? ' (reinforced ' + r.times_reinforced + 'x)' : '';
@@ -571,7 +571,7 @@ try {
         existing = upsertSection(existing, '## Global Operational Rules', globalLines.join('\n'));
     }
 
-    fs.writeFileSync(agentsFile, existing);
+    fs.writeFileSync(geminiFile, existing);
 } catch(e) {}
 "@
         $briefingJsonArg = ""
@@ -581,7 +581,7 @@ try {
         $learningsJsonArg = if ($learningsJson) { $learningsJson } else { "" }
         $globalLearningsJsonArg = if ($globalLearningsJson) { $globalLearningsJson } else { "" }
         if ($briefingJsonArg -or $learningsJsonArg -or $globalLearningsJsonArg) {
-            node -e $agentsMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg 2>$null
+            node -e $geminiMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg 2>$null
         }
     } catch {}
 }
