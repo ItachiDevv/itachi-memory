@@ -1,39 +1,38 @@
-# ---- Base: Node (includes npm) + Bun ----
-FROM node:23-slim AS base
+FROM oven/bun:1.1
 
 WORKDIR /app
 
-# Tools needed by bun install / native deps occasionally
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  ca-certificates curl git \
+# System deps (ssh client + node/npm because some tooling expects it)
+RUN apt-get update -qq \
+  && apt-get install -y -qq --no-install-recommends \
+     openssh-client nodejs npm ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Install Bun
-RUN curl -fsSL https://bun.sh/install | bash
-ENV BUN_INSTALL=/root/.bun
-ENV PATH="$BUN_INSTALL/bin:/app/node_modules/.bin:$PATH"
+# ---- IMPORTANT: stop ElizaOS CLI from trying to check npm for updates ----
+ENV CI=1
+ENV NO_UPDATE_NOTIFIER=1
+ENV ELIZA_DISABLE_UPDATE_CHECK=1
 
-# ---- Install deps (copy scripts early because your install references it) ----
+# Install deps first (cache layer)
 COPY package.json bun.lock* ./
-COPY scripts ./scripts
-# If you have these folders, keep them early too (harmless if they don't exist in your repo)
-# COPY patches ./patches
+COPY scripts/ scripts/
+RUN bun install --frozen-lockfile || bun install
 
-RUN bun install --frozen-lockfile
-
-# ---- App source ----
+# Copy source and build
 COPY . .
-
-# If your repo has a build step, keep it. If it doesn't, this will fail:
-# remove this line if your project is runtime-only.
 RUN bun run build
 
-# ---- Runtime ----
+# Entrypoint (your existing script)
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 ENV NODE_ENV=production
-ENV HOST=0.0.0.0
 ENV PORT=3000
 
 EXPOSE 3000
 
-# IMPORTANT: no --host flag (it breaks). Bind via HOST env.
-CMD ["bash", "-lc", "bunx elizaos start --port ${PORT}"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# DO NOT use `bun run start` if your package.json start includes `--host`
+# Run the CLI directly, with ONLY the port.
+CMD ["bunx", "--yes", "@elizaos/cli", "start", "--port", "3000"]
