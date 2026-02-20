@@ -1,34 +1,29 @@
-# Bun base
-FROM oven/bun:1.1.38
-
+FROM oven/bun:1.1
 WORKDIR /app
 
-# ---- System deps + Node 20 (for tsup/codex/anything that uses node) ----
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl gnupg git openssh-client \
-  && mkdir -p /etc/apt/keyrings \
-  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
-    > /etc/apt/sources.list.d/nodesource.list \
-  && apt-get update && apt-get install -y --no-install-recommends nodejs \
-  && npm i -g @openai/codex \
-  && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install SSH client + Node/npm (for Codex CLI)
+RUN apt-get update -qq \
+ && apt-get install -y -qq openssh-client nodejs npm \
+ && npm i -g @openai/codex \
+ && rm -rf /var/lib/apt/lists/*
 
-# ---- Install deps ----
-COPY package.json bun.lockb* ./
-RUN bun install --frozen-lockfile
-
-# ---- Build ----
+# Copy repo first so postinstall scripts exist (important)
 COPY . .
+
+# Install deps (use bun.lockb if present; fallback allowed)
+RUN bun install --frozen-lockfile || bun install
+
+# Build
 RUN bun run build
 
-# ---- Runtime ----
-ENV NODE_ENV=production
-ENV HOST=0.0.0.0
-ENV PORT=3000
+# Entrypoint sets up SSH keys from mounted volume
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 3000
+ENV NODE_ENV=production
 
-# If this is Next.js (you literally referenced next start):
-CMD ["sh", "-lc", "bunx next start -H 0.0.0.0 -p ${PORT}"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# Force bind + PORT (Coolify sets PORT, default 3000)
+CMD ["sh","-c","bun x next start -H 0.0.0.0 -p ${PORT:-3000}"]
