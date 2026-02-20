@@ -1,23 +1,12 @@
-FROM node:20-bookworm-slim
-
+FROM oven/bun:1.1
 WORKDIR /app
 
-# Install OS deps (ssh client + curl/unzip for bun installer)
+# Install SSH client (for remote machine control via Tailscale) + Node/npm (for Codex CLI)
+# Then install Codex CLI globally.
 RUN apt-get update -qq \
- && apt-get install -y -qq --no-install-recommends \
-      openssh-client \
-      ca-certificates \
-      curl \
-      unzip \
+ && apt-get install -y -qq openssh-client nodejs npm \
+ && npm i -g @openai/codex \
  && rm -rf /var/lib/apt/lists/*
-
-# Install Bun
-ENV BUN_INSTALL=/root/.bun
-ENV PATH="$BUN_INSTALL/bin:$PATH"
-RUN curl -fsSL https://bun.sh/install | bash
-
-# Install Codex CLI globally (needs modern Node)
-RUN npm i -g @openai/codex
 
 # Install deps first (cache layer)
 COPY package.json bun.lock* ./
@@ -33,7 +22,9 @@ COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 3000
+
 ENV NODE_ENV=production
 
+# IMPORTANT: make sure Next binds to 0.0.0.0 and uses $PORT at runtime
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["bun", "run", "start"]
+CMD ["sh", "-lc", "next start -H 0.0.0.0 -p ${PORT:-3000}"]
