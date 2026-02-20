@@ -1,30 +1,34 @@
-FROM oven/bun:1.1
+# Bun base
+FROM oven/bun:1.1.38
+
 WORKDIR /app
 
-# Install SSH client (for remote machine control via Tailscale) + Node/npm (for Codex CLI)
-# Then install Codex CLI globally.
-RUN apt-get update -qq \
- && apt-get install -y -qq openssh-client nodejs npm \
- && npm i -g @openai/codex \
- && rm -rf /var/lib/apt/lists/*
+# ---- System deps + Node 20 (for tsup/codex/anything that uses node) ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg git openssh-client \
+  && mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list \
+  && apt-get update && apt-get install -y --no-install-recommends nodejs \
+  && npm i -g @openai/codex \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install deps first (cache layer)
-COPY package.json bun.lock* ./
-COPY scripts/ scripts/
-RUN bun install --frozen-lockfile || bun install
+# ---- Install deps ----
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile
 
-# Copy source and build
+# ---- Build ----
 COPY . .
 RUN bun run build
 
-# Entrypoint sets up SSH keys from mounted volume
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# ---- Runtime ----
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=3000
 
 EXPOSE 3000
 
-ENV NODE_ENV=production
-
-# IMPORTANT: make sure Next binds to 0.0.0.0 and uses $PORT at runtime
-ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["sh", "-lc", "next start -H 0.0.0.0 -p ${PORT:-3000}"]
+# If this is Next.js (you literally referenced next start):
+CMD ["sh", "-lc", "bunx next start -H 0.0.0.0 -p ${PORT}"]
