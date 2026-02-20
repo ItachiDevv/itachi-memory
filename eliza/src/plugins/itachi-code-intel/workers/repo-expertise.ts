@@ -6,10 +6,15 @@ import { MemoryService } from '../../itachi-memory/services/memory-service.js';
  * Repo expertise builder: runs daily, builds per-project expertise map.
  * Stores to itachi_memories[repo_expertise] — one per project.
  */
+let lastRepoExpertiseRun = 0;
+const REPO_EXPERTISE_INTERVAL_MS = 86_400_000; // Daily
+
 export const repoExpertiseWorker: TaskWorker = {
   name: 'ITACHI_REPO_EXPERTISE',
 
-  validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
+  validate: async (_runtime: IAgentRuntime): Promise<boolean> => {
+    return Date.now() - lastRepoExpertiseRun >= REPO_EXPERTISE_INTERVAL_MS;
+  },
 
   execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
@@ -126,6 +131,8 @@ Keep it under 400 words. Be specific — this will be injected into Claude Code 
           runtime.logger.error(`[repo-expertise] Error for project ${project}:`, projErr instanceof Error ? projErr.message : String(projErr));
         }
       }
+
+      lastRepoExpertiseRun = Date.now();
     } catch (error: unknown) {
       runtime.logger.error('[repo-expertise] Error:', error instanceof Error ? error.message : String(error));
     }

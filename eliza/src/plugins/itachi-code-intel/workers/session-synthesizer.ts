@@ -5,10 +5,15 @@ import { CodeIntelService } from '../services/code-intel-service.js';
  * Session synthesizer: queue-based worker that enriches session summaries with LLM.
  * Triggered when a session completes (finds unsummarized sessions).
  */
+let lastSessionSynthesizerRun = 0;
+const SESSION_SYNTHESIZER_INTERVAL_MS = 1_800_000; // 30 minutes
+
 export const sessionSynthesizerWorker: TaskWorker = {
   name: 'ITACHI_SESSION_SYNTHESIZER',
 
-  validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
+  validate: async (_runtime: IAgentRuntime): Promise<boolean> => {
+    return Date.now() - lastSessionSynthesizerRun >= SESSION_SYNTHESIZER_INTERVAL_MS;
+  },
 
   execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
@@ -142,6 +147,8 @@ Be specific and technical.`;
           runtime.logger.error(`[session-synthesizer] Error processing session ${session.session_id}:`, sessionErr instanceof Error ? sessionErr.message : String(sessionErr));
         }
       }
+
+      lastSessionSynthesizerRun = Date.now();
     } catch (error: unknown) {
       runtime.logger.error('[session-synthesizer] Error:', error instanceof Error ? error.message : String(error));
     }

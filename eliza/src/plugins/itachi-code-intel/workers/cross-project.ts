@@ -5,10 +5,15 @@ import { CodeIntelService } from '../services/code-intel-service.js';
  * Cross-project correlator: runs weekly, finds patterns across all projects.
  * Stores to cross_project_insights table.
  */
+let lastCrossProjectRun = 0;
+const CROSS_PROJECT_INTERVAL_MS = 604_800_000; // Weekly
+
 export const crossProjectWorker: TaskWorker = {
   name: 'ITACHI_CROSS_PROJECT',
 
-  validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
+  validate: async (_runtime: IAgentRuntime): Promise<boolean> => {
+    return Date.now() - lastCrossProjectRun >= CROSS_PROJECT_INTERVAL_MS;
+  },
 
   execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
@@ -96,6 +101,7 @@ Respond as a JSON array. No markdown code blocks.`;
         }
       }
 
+      lastCrossProjectRun = Date.now();
       runtime.logger.info(`[cross-project] Stored ${Math.min(insights.length, 5)} cross-project insights`);
     } catch (error: unknown) {
       runtime.logger.error('[cross-project] Error:', error instanceof Error ? error.message : String(error));

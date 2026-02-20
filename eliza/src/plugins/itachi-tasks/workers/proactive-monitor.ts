@@ -18,10 +18,14 @@ const MONITOR_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const alertedTaskIds = new Set<string>();
 const alertedMachineIds = new Set<string>();
 
+let lastProactiveMonitorRun = 0;
+
 export const proactiveMonitorWorker: TaskWorker = {
   name: 'ITACHI_PROACTIVE_MONITOR',
 
-  validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
+  validate: async (_runtime: IAgentRuntime): Promise<boolean> => {
+    return Date.now() - lastProactiveMonitorRun >= MONITOR_INTERVAL_MS;
+  },
 
   execute: async (runtime: IAgentRuntime): Promise<void> => {
     try {
@@ -109,6 +113,8 @@ export const proactiveMonitorWorker: TaskWorker = {
         const entries = [...alertedTaskIds];
         entries.slice(0, 100).forEach(id => alertedTaskIds.delete(id));
       }
+
+      lastProactiveMonitorRun = Date.now();
     } catch (error) {
       runtime.logger.error('[monitor] Error:', error instanceof Error ? error.message : String(error));
     }

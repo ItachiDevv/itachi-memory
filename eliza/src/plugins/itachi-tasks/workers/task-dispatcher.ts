@@ -9,10 +9,15 @@ import { TaskExecutorService } from '../services/task-executor-service.js';
  * - Detects stale machines (no heartbeat > 120s) and marks them offline.
  * - Unassigns tasks from offline machines so they can be reassigned.
  */
+let lastTaskDispatcherRun = 0;
+const TASK_DISPATCHER_INTERVAL_MS = 10_000; // 10 seconds
+
 export const taskDispatcherWorker: TaskWorker = {
   name: 'ITACHI_TASK_DISPATCHER',
 
-  validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
+  validate: async (_runtime: IAgentRuntime): Promise<boolean> => {
+    return Date.now() - lastTaskDispatcherRun >= TASK_DISPATCHER_INTERVAL_MS;
+  },
 
   execute: async (runtime: IAgentRuntime): Promise<void> => {
     try {
@@ -75,6 +80,8 @@ export const taskDispatcherWorker: TaskWorker = {
         const shortId = task.id.substring(0, 8);
         runtime.logger.info(`[dispatcher] Assigned task ${shortId} (${task.project}) to ${machine.machine_id}`);
       }
+
+      lastTaskDispatcherRun = Date.now();
     } catch (error) {
       runtime.logger.error('[dispatcher] Error:', error instanceof Error ? error.message : String(error));
     }

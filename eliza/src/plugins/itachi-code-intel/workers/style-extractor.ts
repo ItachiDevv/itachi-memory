@@ -7,10 +7,15 @@ import { MemoryService } from '../../itachi-memory/services/memory-service.js';
  * to extract global coding style preferences.
  * Stores as single itachi_memories row with category 'global_style_profile', project '_global'.
  */
+let lastStyleExtractorRun = 0;
+const STYLE_EXTRACTOR_INTERVAL_MS = 604_800_000; // Weekly
+
 export const styleExtractorWorker: TaskWorker = {
   name: 'ITACHI_STYLE_EXTRACTOR',
 
-  validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
+  validate: async (_runtime: IAgentRuntime): Promise<boolean> => {
+    return Date.now() - lastStyleExtractorRun >= STYLE_EXTRACTOR_INTERVAL_MS;
+  },
 
   execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
@@ -115,6 +120,7 @@ Respond with ONLY the JSON object, no markdown code blocks.`;
         files: [],
       });
 
+      lastStyleExtractorRun = Date.now();
       runtime.logger.info('[style-extractor] Updated global style profile');
     } catch (error: unknown) {
       runtime.logger.error('[style-extractor] Error:', error instanceof Error ? error.message : String(error));

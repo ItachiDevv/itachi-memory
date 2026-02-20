@@ -6,10 +6,15 @@ import { MemoryService } from '../../itachi-memory/services/memory-service.js';
  * Edit analyzer: runs every 15 minutes, detects patterns in recent edits.
  * Stores pattern observations to itachi_memories[pattern_observation].
  */
+let lastEditAnalyzerRun = 0;
+const EDIT_ANALYZER_INTERVAL_MS = 900_000; // 15 minutes
+
 export const editAnalyzerWorker: TaskWorker = {
   name: 'ITACHI_EDIT_ANALYZER',
 
-  validate: async (_runtime: IAgentRuntime): Promise<boolean> => true,
+  validate: async (_runtime: IAgentRuntime): Promise<boolean> => {
+    return Date.now() - lastEditAnalyzerRun >= EDIT_ANALYZER_INTERVAL_MS;
+  },
 
   execute: async (runtime: IAgentRuntime, _options: { [key: string]: unknown }, _task: unknown): Promise<void> => {
     try {
@@ -75,6 +80,8 @@ Respond in 2-3 sentences. Focus on actionable observations.`;
 
         runtime.logger.info(`[edit-analyzer] Stored pattern observation for ${project} (${edits.length} edits)`);
       }
+
+      lastEditAnalyzerRun = Date.now();
     } catch (error: unknown) {
       runtime.logger.error('[edit-analyzer] Error:', error instanceof Error ? error.message : String(error));
     }
