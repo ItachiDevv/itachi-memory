@@ -1,38 +1,41 @@
+# ===== Base: Bun =====
 FROM oven/bun:1.1
 
 WORKDIR /app
 
-# System deps (ssh client + node/npm because some tooling expects it)
+# ===== System deps + Node 20 (NOT Debian's old nodejs) =====
 RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends \
-     openssh-client nodejs npm ca-certificates \
+    ca-certificates curl gnupg openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
-# ---- IMPORTANT: stop ElizaOS CLI from trying to check npm for updates ----
-ENV CI=1
-ENV NO_UPDATE_NOTIFIER=1
-ENV ELIZA_DISABLE_UPDATE_CHECK=1
+# Install Node.js 20.x + npm
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+  && apt-get update -qq \
+  && apt-get install -y -qq --no-install-recommends nodejs \
+  && node -v && npm -v \
+  && rm -rf /var/lib/apt/lists/*
 
-# Install deps first (cache layer)
+# (Optional) if you truly need Codex inside the container:
+# RUN npm i -g @openai/codex
+
+# ===== Install deps (cache-friendly) =====
 COPY package.json bun.lock* ./
 COPY scripts/ scripts/
 RUN bun install --frozen-lockfile || bun install
 
-# Copy source and build
+# ===== Copy app + build =====
 COPY . .
 RUN bun run build
 
-# Entrypoint (your existing script)
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+# ===== Entrypoint for SSH keys (your file) =====
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENV NODE_ENV=production
 ENV PORT=3000
-
 EXPOSE 3000
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
-# DO NOT use `bun run start` if your package.json start includes `--host`
-# Run the CLI directly, with ONLY the port.
-CMD ["bunx", "--yes", "@elizaos/cli", "start", "--port", "3000"]
+# IMPORTANT: no --host (elizaos doesn't support it)
+CMD ["bash", "-lc", "bunx elizaos start --port ${PORT:-3000}"]
