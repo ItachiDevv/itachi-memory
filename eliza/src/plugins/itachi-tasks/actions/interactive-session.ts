@@ -192,7 +192,9 @@ export async function spawnSessionInTopic(
     target,
     sshCommand,
     (chunk: string) => {
-      const clean = filterTuiNoise(stripAnsi(chunk));
+      const stripped = stripAnsi(chunk);
+      const clean = filterTuiNoise(stripped);
+      runtime.logger.info(`[session] stdout raw=${chunk.length}b stripped=${stripped.length}b clean=${clean.length}b`);
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
       topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
@@ -200,7 +202,9 @@ export async function spawnSessionInTopic(
       });
     },
     (chunk: string) => {
-      const clean = filterTuiNoise(stripAnsi(chunk));
+      const stripped = stripAnsi(chunk);
+      const clean = filterTuiNoise(stripped);
+      runtime.logger.info(`[session] stderr raw=${chunk.length}b stripped=${stripped.length}b clean=${clean.length}b`);
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
       topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {

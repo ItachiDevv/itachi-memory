@@ -167,11 +167,12 @@ export class SSHService extends Service {
       '-o', 'ConnectTimeout=10',
     ];
 
-    // Force PTY for Unix targets (-tt). For Windows, use single -t to
-    // request PTY without forcing — -tt causes immediate session exit on
-    // Windows OpenSSH/PowerShell, but no -t at all causes full buffering
-    // which prevents output streaming.
-    args.push(this.isWindowsTarget(targetName) ? '-t' : '-tt');
+    // Force PTY for Unix targets (-tt). Skip PTY entirely for Windows —
+    // -tt causes immediate exit, -t causes TUI mode which filterTuiNoise
+    // strips entirely. Without PTY, itachi outputs clean text.
+    if (!this.isWindowsTarget(targetName)) {
+      args.push('-tt');
+    }
 
     if (target.keyPath) {
       args.push('-i', target.keyPath);
