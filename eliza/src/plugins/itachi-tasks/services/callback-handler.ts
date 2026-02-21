@@ -50,16 +50,21 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
         });
 
         // ElizaOS launches Telegraf with allowedUpdates: ["message", "message_reaction"]
-        // which excludes callback_query. Restart polling to include it.
+        // which excludes callback_query. Patch the polling instance in-place
+        // instead of restarting (bot.stop + bot.launch causes redactToken crashes
+        // in Telegraf 4.16.3 that kill polling permanently).
         try {
-          await bot.stop('restart-for-callbacks');
-          await new Promise((r) => setTimeout(r, 500));
-          bot.launch({
-            allowedUpdates: ['message', 'message_reaction', 'callback_query'],
-          });
-          runtime.logger.info('[callback-handler] Restarted Telegraf polling with callback_query support');
-        } catch (restartErr: any) {
-          runtime.logger.warn(`[callback-handler] Could not restart polling: ${restartErr?.message}. Callbacks may not work.`);
+          const polling = (bot as any).polling;
+          if (polling && Array.isArray(polling.allowedUpdates)) {
+            if (!polling.allowedUpdates.includes('callback_query')) {
+              polling.allowedUpdates.push('callback_query');
+              runtime.logger.info('[callback-handler] Patched Telegraf polling to include callback_query');
+            }
+          } else {
+            runtime.logger.warn('[callback-handler] Could not find polling instance to patch allowedUpdates');
+          }
+        } catch (patchErr: any) {
+          runtime.logger.warn(`[callback-handler] Could not patch polling: ${patchErr?.message}. Callbacks may not work.`);
         }
 
         runtime.logger.info('[callback-handler] Registered Telegram callback_query handler');
