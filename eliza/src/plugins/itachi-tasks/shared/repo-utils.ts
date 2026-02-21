@@ -32,7 +32,7 @@ export function resolveSSHTarget(machineId: string): string {
 /** Default repo paths per SSH target */
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
   mac: '~/itachi/itachi-memory',
-  windows: '~/Documents/Crypto/itachi-memory',
+  windows: '~/Documents/Crypto/skills-plugins/itachi-memory',
   coolify: '/app',
 };
 
