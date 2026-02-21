@@ -104,6 +104,14 @@ export class SSHService extends Service {
     }
   }
 
+  /** Known Windows target names — skip Unix PATH export for these */
+  private static WINDOWS_TARGETS = new Set(['windows', 'win', 'pc', 'desktop']);
+
+  /** Check if a target name refers to a Windows machine */
+  isWindowsTarget(name: string): boolean {
+    return SSHService.WINDOWS_TARGETS.has(name.toLowerCase());
+  }
+
   /** Get all configured SSH targets */
   getTargets(): Map<string, SSHTarget> {
     return this.targets;
@@ -124,7 +132,7 @@ export class SSHService extends Service {
       return { stdout: '', stderr: `Unknown SSH target: ${targetName}`, code: 1, success: false };
     }
 
-    return this.execOnTarget(target, command, timeoutMs);
+    return this.execOnTarget(target, command, timeoutMs, this.isWindowsTarget(targetName));
   }
 
   /**
@@ -157,8 +165,11 @@ export class SSHService extends Service {
     }
 
     // Wrap command to ensure common bin dirs are in PATH (non-login SSH shells
-    // don't source .zshrc/.bash_profile, so /usr/local/bin etc. are missing)
-    const wrappedCommand = `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
+    // don't source .zshrc/.bash_profile, so /usr/local/bin etc. are missing).
+    // Skip for Windows targets — they use cmd/PowerShell where `export` doesn't exist.
+    const wrappedCommand = this.isWindowsTarget(targetName)
+      ? `powershell.exe -NoProfile -Command "${command.replace(/"/g, '\\"')}"`
+      : `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
     args.push(`${target.user}@${target.host}`, wrappedCommand);
 
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -210,7 +221,7 @@ export class SSHService extends Service {
   }
 
   /** Execute on a specific target config */
-  async execOnTarget(target: SSHTarget, command: string, timeoutMs: number = 30_000): Promise<SSHResult> {
+  async execOnTarget(target: SSHTarget, command: string, timeoutMs: number = 30_000, isWindows: boolean = false): Promise<SSHResult> {
     const args: string[] = [
       '-o', 'StrictHostKeyChecking=no',
       '-o', 'ConnectTimeout=10',
@@ -224,8 +235,10 @@ export class SSHService extends Service {
       args.push('-p', String(target.port));
     }
 
-    // Ensure common bin dirs are in PATH for non-login SSH shells
-    const wrappedCommand = `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
+    // Windows targets use PowerShell; Unix targets need PATH export for non-login shells
+    const wrappedCommand = isWindows
+      ? `powershell.exe -NoProfile -Command "${command.replace(/"/g, '\\"')}"`
+      : `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
     args.push(`${target.user}@${target.host}`, wrappedCommand);
 
     return new Promise<SSHResult>((resolve) => {
