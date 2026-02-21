@@ -194,6 +194,12 @@ export class SSHService extends Service {
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const sessionId = `${targetName}-${proc.pid || Date.now()}`;
 
+    // Windows uses `claude -p` (print mode) which waits for stdin EOF
+    // before processing. Close stdin immediately so it can proceed.
+    if (this.isWindowsTarget(targetName)) {
+      proc.stdin?.end();
+    }
+
     this.activeSessions.set(sessionId, proc);
 
     proc.stdout?.on('data', (data: Buffer) => {
