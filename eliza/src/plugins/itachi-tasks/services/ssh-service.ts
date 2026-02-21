@@ -167,12 +167,12 @@ export class SSHService extends Service {
       '-o', 'ConnectTimeout=10',
     ];
 
-    // Force PTY for Unix targets (-tt). Skip PTY entirely for Windows —
-    // -tt causes immediate exit, -t causes TUI mode which filterTuiNoise
-    // strips entirely. Without PTY, itachi outputs clean text.
-    if (!this.isWindowsTarget(targetName)) {
-      args.push('-tt');
-    }
+    // Force PTY for Unix (-tt) and request PTY for Windows (-t).
+    // -tt causes instant exit on Windows OpenSSH/PowerShell.
+    // -t is needed so the remote process gets line-buffered output;
+    // without any PTY, spawn pipes cause full block-buffering and
+    // no output arrives until process exit.
+    args.push(this.isWindowsTarget(targetName) ? '-t' : '-tt');
 
     if (target.keyPath) {
       args.push('-i', target.keyPath);
