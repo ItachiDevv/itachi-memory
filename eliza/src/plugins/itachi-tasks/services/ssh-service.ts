@@ -167,12 +167,14 @@ export class SSHService extends Service {
       '-o', 'ConnectTimeout=10',
     ];
 
-    // Force PTY for Unix (-tt) and request PTY for Windows (-t).
-    // -tt causes instant exit on Windows OpenSSH/PowerShell.
-    // -t is needed so the remote process gets line-buffered output;
-    // without any PTY, spawn pipes cause full block-buffering and
-    // no output arrives until process exit.
-    args.push(this.isWindowsTarget(targetName) ? '-t' : '-tt');
+    // Unix: force PTY (-tt) so CLI tools get line-buffered output.
+    // Windows: skip PTY entirely — we use `claude -p` (print mode) which
+    // outputs clean text to pipes without needing a TTY. Using -t/-tt on
+    // Windows OpenSSH/PowerShell causes either instant exit (-tt) or
+    // TUI-formatted output that's impossible to parse (-t).
+    if (!this.isWindowsTarget(targetName)) {
+      args.push('-tt');
+    }
 
     if (target.keyPath) {
       args.push('-i', target.keyPath);

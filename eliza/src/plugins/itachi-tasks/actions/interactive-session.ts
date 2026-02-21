@@ -173,12 +173,20 @@ export async function spawnSessionInTopic(
   topicId: number,
   project?: string,
 ): Promise<string | null> {
+  const isWindows = sshService.isWindowsTarget(target);
   const escapedPrompt = prompt.replace(/'/g, "'\\''");
-  // engineCommand may already include flags like --ds or --cds (from callback handler)
-  const hasFlag = /\s--c?ds\b/.test(engineCommand);
-  const sshCommand = hasFlag
-    ? `cd ${repoPath} && ${engineCommand} '${escapedPrompt}'`
-    : `cd ${repoPath} && ${engineCommand} --ds '${escapedPrompt}'`;
+  // Windows: use `claude -p` (print mode) for clean pipe-friendly output
+  // without TUI formatting. Unix: use the engine wrapper (itachi/itachic/itachig).
+  let sshCommand: string;
+  if (isWindows) {
+    sshCommand = `cd ${repoPath} && claude -p --dangerously-skip-permissions '${escapedPrompt}'`;
+  } else {
+    // engineCommand may already include flags like --ds or --cds (from callback handler)
+    const hasFlag = /\s--c?ds\b/.test(engineCommand);
+    sshCommand = hasFlag
+      ? `cd ${repoPath} && ${engineCommand} '${escapedPrompt}'`
+      : `cd ${repoPath} && ${engineCommand} --ds '${escapedPrompt}'`;
+  }
 
   await topicsService.sendToTopic(
     topicId,
@@ -194,7 +202,6 @@ export async function spawnSessionInTopic(
     (chunk: string) => {
       const stripped = stripAnsi(chunk);
       const clean = filterTuiNoise(stripped);
-      runtime.logger.info(`[session] stdout raw=${chunk.length}b stripped=${stripped.length}b clean=${clean.length}b`);
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
       topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
@@ -204,7 +211,6 @@ export async function spawnSessionInTopic(
     (chunk: string) => {
       const stripped = stripAnsi(chunk);
       const clean = filterTuiNoise(stripped);
-      runtime.logger.info(`[session] stderr raw=${chunk.length}b stripped=${stripped.length}b clean=${clean.length}b`);
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
       topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {
