@@ -20,6 +20,26 @@ function stripAnsi(text: string): string {
     .trim();
 }
 
+// ── TUI noise filter (same as interactive-session.ts) ────────────────
+function filterTuiNoise(text: string): string {
+  const lines = text.split('\n');
+  const kept: string[] = [];
+  for (const line of lines) {
+    const stripped = line.replace(/[╭╮╰╯│─┌┐└┘├┤┬┴┼━┃╋▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓▙▟▛▜▝▞▘▗▖]/g, '').trim();
+    if (!stripped) continue;
+    if (/^[✻✶✢✽·*●|>\s]+$/.test(stripped)) continue;
+    if (/^(?:✻|✶|\*|✢|·|✽|●)?\s*(?:Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
+    if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
+    if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
+    if ((stripped.match(/Crunching…/g) || []).length >= 2) continue;
+    if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
+    if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
+    if (/^>\s*$/.test(stripped)) continue;
+    kept.push(line);
+  }
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // Machine alias → SSH target imported from shared module
 import { resolveSSHTarget } from '../shared/repo-utils.js';
 
@@ -398,7 +418,7 @@ export class TaskExecutorService extends Service {
       sshCommand,
       // stdout
       (chunk: string) => {
-        const clean = stripAnsi(chunk);
+        const clean = filterTuiNoise(stripAnsi(chunk));
         if (!clean) return;
         sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
         if (topicId && topicsService) {
@@ -409,7 +429,7 @@ export class TaskExecutorService extends Service {
       },
       // stderr
       (chunk: string) => {
-        const clean = stripAnsi(chunk);
+        const clean = filterTuiNoise(stripAnsi(chunk));
         if (!clean) return;
         sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
         if (topicId && topicsService) {
@@ -537,7 +557,7 @@ export class TaskExecutorService extends Service {
       sshTarget,
       sshCommand,
       (chunk: string) => {
-        const clean = stripAnsi(chunk);
+        const clean = filterTuiNoise(stripAnsi(chunk));
         if (!clean) return;
         sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
         if (topicId && topicsService) {
@@ -545,7 +565,7 @@ export class TaskExecutorService extends Service {
         }
       },
       (chunk: string) => {
-        const clean = stripAnsi(chunk);
+        const clean = filterTuiNoise(stripAnsi(chunk));
         if (!clean) return;
         if (topicId && topicsService) {
           topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch(() => {});

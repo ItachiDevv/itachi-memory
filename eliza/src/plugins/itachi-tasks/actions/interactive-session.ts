@@ -41,6 +41,52 @@ function stripAnsi(text: string): string {
     .trim();
 }
 
+/**
+ * Filter out TUI chrome/noise from Claude Code and similar CLI tools.
+ * Keeps meaningful output (tool results, agent responses, errors) and
+ * drops spinners, box borders, status lines, and progress indicators.
+ */
+function filterTuiNoise(text: string): string {
+  const lines = text.split('\n');
+  const kept: string[] = [];
+
+  for (const line of lines) {
+    // Strip box-drawing and block characters
+    const stripped = line.replace(/[╭╮╰╯│─┌┐└┘├┤┬┴┼━┃╋▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓▙▟▛▜▝▞▘▗▖]/g, '').trim();
+
+    // Skip empty lines after stripping
+    if (!stripped) continue;
+
+    // Skip lines that are only spinner/progress chars
+    if (/^[✻✶✢✽·*●|>\s]+$/.test(stripped)) continue;
+
+    // Skip "Crunching..." and "(thinking)" and "(thought for ...)" noise
+    if (/^(?:✻|✶|\*|✢|·|✽|●)?\s*(?:Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
+
+    // Skip status line noise
+    if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
+
+    // Skip Claude Code chrome
+    if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
+
+    // Skip lines that are mostly repetitive spinner sequences (e.g. "✻Crunching…✶Crunching…*Crunching…")
+    if ((stripped.match(/Crunching…/g) || []).length >= 2) continue;
+
+    // Skip ctrl key hints
+    if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
+
+    // Skip lines that are purely token/timing stats (e.g. "47s · ↓193 tokens · thought for 1s")
+    if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
+
+    // Skip prompt lines (just "> " with nothing meaningful)
+    if (/^>\s*$/.test(stripped)) continue;
+
+    kept.push(line);
+  }
+
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // ── Engine wrapper resolution ────────────────────────────────────────
 const ENGINE_WRAPPERS: Record<string, string> = {
   claude: 'itachi',
@@ -146,7 +192,7 @@ export async function spawnSessionInTopic(
     target,
     sshCommand,
     (chunk: string) => {
-      const clean = stripAnsi(chunk);
+      const clean = filterTuiNoise(stripAnsi(chunk));
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
       topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
@@ -154,7 +200,7 @@ export async function spawnSessionInTopic(
       });
     },
     (chunk: string) => {
-      const clean = stripAnsi(chunk);
+      const clean = filterTuiNoise(stripAnsi(chunk));
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
       topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {

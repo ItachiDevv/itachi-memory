@@ -32,14 +32,14 @@ export function resolveSSHTarget(machineId: string): string {
 /** Default repo paths per SSH target */
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
   mac: '~/itachi/itachi-memory',
-  windows: '~/Documents/Crypto/skills-plugins/itachi-memory',
+  windows: '~/Documents/Crypto/itachi-memory',
   coolify: '/app',
 };
 
 /** Base directories where repos are typically cloned per machine */
 export const DEFAULT_REPO_BASES: Record<string, string> = {
   mac: '~/itachi',
-  windows: '~/Documents/Crypto/skills-plugins',
+  windows: '~/Documents/Crypto',
   coolify: '/tmp/repos',
 };
 
