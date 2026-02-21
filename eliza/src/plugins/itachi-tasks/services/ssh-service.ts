@@ -167,11 +167,11 @@ export class SSHService extends Service {
       '-o', 'ConnectTimeout=10',
     ];
 
-    // Only allocate PTY for Unix targets — Windows OpenSSH/PowerShell
-    // doesn't handle forced PTY and causes immediate session exit.
-    if (!this.isWindowsTarget(targetName)) {
-      args.push('-tt');
-    }
+    // Force PTY for Unix targets (-tt). For Windows, use single -t to
+    // request PTY without forcing — -tt causes immediate session exit on
+    // Windows OpenSSH/PowerShell, but no -t at all causes full buffering
+    // which prevents output streaming.
+    args.push(this.isWindowsTarget(targetName) ? '-t' : '-tt');
 
     if (target.keyPath) {
       args.push('-i', target.keyPath);
