@@ -165,8 +165,13 @@ export class SSHService extends Service {
     const args: string[] = [
       '-o', 'StrictHostKeyChecking=no',
       '-o', 'ConnectTimeout=10',
-      '-tt', // Force PTY allocation for interactive CLI
     ];
+
+    // Only allocate PTY for Unix targets — Windows OpenSSH/PowerShell
+    // doesn't handle forced PTY and causes immediate session exit.
+    if (!this.isWindowsTarget(targetName)) {
+      args.push('-tt');
+    }
 
     if (target.keyPath) {
       args.push('-i', target.keyPath);

@@ -22,17 +22,18 @@ export async function listRemoteDirectory(
   path: string,
 ): Promise<{ dirs: string[]; error?: string }> {
   try {
-    const result = await sshService.exec(
-      target,
-      `ls -1 -p ${path} 2>/dev/null | grep '/$' | head -30`,
-      10_000,
-    );
+    const isWindows = sshService.isWindowsTarget(target);
+    const cmd = isWindows
+      ? `Get-ChildItem -Directory -Path '${path}' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name`
+      : `ls -1 -p ${path} 2>/dev/null | grep '/$' | head -30`;
+
+    const result = await sshService.exec(target, cmd, 10_000);
     if (!result.success && !result.stdout) {
       return { dirs: [], error: result.stderr || 'Failed to list directory' };
     }
     const dirs = (result.stdout || '')
       .split('\n')
-      .map(d => d.replace(/\/$/, '').trim())
+      .map(d => isWindows ? d.trim() : d.replace(/\/$/, '').trim())
       .filter(Boolean);
     return { dirs };
   } catch (err) {
