@@ -112,6 +112,17 @@ export class SSHService extends Service {
     return SSHService.WINDOWS_TARGETS.has(name.toLowerCase());
   }
 
+  /**
+   * Adapt a Unix-style command for Windows PowerShell 5.1:
+   * - Replace `&&` with `;` (PS 5.1 doesn't support `&&`)
+   * - Replace bash single-quote escapes `'\''` with PowerShell `''`
+   */
+  private adaptForWindows(command: string): string {
+    return command
+      .replace(/\s*&&\s*/g, '; ')
+      .replace(/'\\'''/g, "''");
+  }
+
   /** Get all configured SSH targets */
   getTargets(): Map<string, SSHTarget> {
     return this.targets;
@@ -166,9 +177,9 @@ export class SSHService extends Service {
 
     // Wrap command to ensure common bin dirs are in PATH (non-login SSH shells
     // don't source .zshrc/.bash_profile, so /usr/local/bin etc. are missing).
-    // Skip for Windows targets — they use cmd/PowerShell where `export` doesn't exist.
+    // Windows targets: adapt syntax for PowerShell 5.1, then wrap with powershell.exe.
     const wrappedCommand = this.isWindowsTarget(targetName)
-      ? `powershell.exe -NoProfile -Command "${command.replace(/"/g, '\\"')}"`
+      ? `powershell.exe -NoProfile -Command "${this.adaptForWindows(command).replace(/"/g, '\\"')}"`
       : `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
     args.push(`${target.user}@${target.host}`, wrappedCommand);
 
@@ -235,9 +246,9 @@ export class SSHService extends Service {
       args.push('-p', String(target.port));
     }
 
-    // Windows targets use PowerShell; Unix targets need PATH export for non-login shells
+    // Windows targets: adapt syntax for PowerShell 5.1; Unix targets need PATH export
     const wrappedCommand = isWindows
-      ? `powershell.exe -NoProfile -Command "${command.replace(/"/g, '\\"')}"`
+      ? `powershell.exe -NoProfile -Command "${this.adaptForWindows(command).replace(/"/g, '\\"')}"`
       : `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
     args.push(`${target.user}@${target.host}`, wrappedCommand);
 
