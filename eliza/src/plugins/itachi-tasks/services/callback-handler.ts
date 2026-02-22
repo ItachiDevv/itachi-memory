@@ -114,10 +114,24 @@ function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
       runtime.logger.warn('[polling-monitor] Polling is dead — attempting recovery...');
 
       try {
+        // Force-clear stale polling state so bot.launch() won't hang.
+        // bot.launch() internally calls bot.stop(), which waits for the
+        // dead polling loop's promise — causing it to hang forever.
+        try {
+          const polling = (bot as any).polling;
+          if (polling) {
+            polling.started = false;
+            try { polling.abortController?.abort(); } catch {}
+          }
+          (bot as any).polling = null;
+          (bot as any).started = false;
+        } catch {}
+
         // Delete webhook to clear any stale state
         await bot.telegram.callApi('deleteWebhook', { drop_pending_updates: false });
 
-        // Re-launch polling with our desired allowedUpdates
+        // Re-launch polling with our desired allowedUpdates.
+        // Since we cleared started=false, bot.stop() returns immediately.
         await bot.launch({
           dropPendingUpdates: false,
           allowedUpdates: ['message', 'callback_query', 'message_reaction'],
