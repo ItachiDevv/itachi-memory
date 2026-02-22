@@ -469,7 +469,7 @@ export class TaskExecutorService extends Service {
         this.activeTasks.delete(task.id);
 
         // Post-completion pipeline
-        this.handleSessionComplete(task, sshTarget, workspace, code, topicId).catch((err) => {
+        this.handleSessionComplete(task, sshTarget, workspace, code, topicId, sessionTranscript).catch((err) => {
           this.runtime.logger.error(`[executor] Post-completion error: ${err instanceof Error ? err.message : String(err)}`);
         });
 
@@ -581,7 +581,7 @@ export class TaskExecutorService extends Service {
         if (topicId) activeSessions.delete(topicId);
         this.activeTasks.delete(task.id);
 
-        this.handleSessionComplete(task, sshTarget, workspace, code, topicId).catch(() => {});
+        this.handleSessionComplete(task, sshTarget, workspace, code, topicId, sessionTranscript).catch(() => {});
       },
       600_000,
     );
@@ -613,6 +613,7 @@ export class TaskExecutorService extends Service {
     workspace: string,
     exitCode: number,
     topicId: number,
+    transcript?: TranscriptEntry[],
   ): Promise<void> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
     const taskService = this.runtime.getService<TaskService>('itachi-tasks')!;
@@ -713,6 +714,15 @@ export class TaskExecutorService extends Service {
     if (prUrl) updatePayload.pr_url = prUrl;
     if (filesChanged.length > 0) updatePayload.files_changed = filesChanged;
     if (exitCode !== 0) updatePayload.error_message = `Session exited with code ${exitCode}`;
+
+    // Persist session transcript as result_summary
+    if (transcript && transcript.length > 0) {
+      const summary = transcript
+        .map(t => t.content)
+        .join('\n')
+        .substring(0, 4000); // DB column limit
+      updatePayload.result_summary = summary;
+    }
 
     await taskService.updateTask(task.id, updatePayload);
 
