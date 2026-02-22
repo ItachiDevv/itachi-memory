@@ -129,7 +129,7 @@ export async function resolveRepoPath(
 
       const clone = await sshService.exec(
         target,
-        `git clone ${matched.repo_url} ${candidatePath} 2>&1`,
+        `GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git clone ${matched.repo_url} ${candidatePath} 2>&1`,
         120_000,
       );
 
@@ -183,7 +183,7 @@ export async function resolveRepoPathByProject(
     if (repoUrl) {
       const candidatePath = `${base}/${project}`;
       logger.info(`[repo-utils] Cloning ${repoUrl} → ${candidatePath} on ${target}`);
-      const clone = await sshService.exec(target, `git clone ${repoUrl} ${candidatePath} 2>&1`, 120_000);
+      const clone = await sshService.exec(target, `GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git clone ${repoUrl} ${candidatePath} 2>&1`, 120_000);
       if (clone.success) return candidatePath;
       logger.warn(`[repo-utils] Clone failed: ${clone.stderr || clone.stdout}`);
     }
