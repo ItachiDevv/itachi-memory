@@ -86,80 +86,94 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
 }
 
 /**
- * Monitors Telegraf polling health and restarts it if dead.
+ * Monitors Telegraf polling health. If native polling dies (409 Conflict
+ * during container restarts), falls back to a manual getUpdates loop
+ * that routes updates through bot.handleUpdate().
  *
- * Problem: ElizaOS's bot.launch() is NOT awaited, and Telegraf's polling
- * loop can silently die from 409 Conflict errors (e.g. during container
- * restarts). When this happens, the bot appears healthy but never receives
- * messages.
- *
- * Solution: Every 30 seconds, probe getUpdates with a short timeout.
- * If it succeeds (no 409), polling is dead — restart it.
- * If it 409s, polling is alive and healthy.
+ * Does NOT call bot.launch() — that hangs because bot.stop() waits for
+ * the dead polling loop's promise forever. Instead, we run our own loop.
  */
 function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
-  let recovering = false;
-  const HEALTH_CHECK_MS = 30_000;
+  let manualPollingActive = false;
+
+  const startManualPolling = async () => {
+    if (manualPollingActive) return;
+    manualPollingActive = true;
+    runtime.logger.info('[polling-monitor] Starting manual polling loop...');
+
+    let offset = 0;
+    let consecutiveErrors = 0;
+
+    while (manualPollingActive) {
+      try {
+        const updates = await bot.telegram.callApi('getUpdates', {
+          offset,
+          limit: 100,
+          timeout: 30,
+          allowed_updates: ['message', 'callback_query', 'message_reaction'],
+        });
+
+        consecutiveErrors = 0;
+
+        if (Array.isArray(updates)) {
+          for (const update of updates) {
+            offset = update.update_id + 1;
+            try {
+              await bot.handleUpdate(update);
+            } catch (handleErr: any) {
+              runtime.logger.error(`[polling-monitor] Update error: ${handleErr?.message}`);
+            }
+          }
+        }
+      } catch (err: any) {
+        if (err?.message?.includes('409')) {
+          // Native polling came back — stop our manual loop
+          runtime.logger.info('[polling-monitor] Native polling active (409), stopping manual loop');
+          manualPollingActive = false;
+          return;
+        }
+
+        consecutiveErrors++;
+        if (consecutiveErrors > 10) {
+          runtime.logger.error('[polling-monitor] Too many consecutive errors, stopping manual loop');
+          manualPollingActive = false;
+          return;
+        }
+
+        // Wait before retrying on other errors
+        await new Promise(r => setTimeout(r, 5_000));
+      }
+    }
+  };
 
   const checkPolling = async () => {
-    if (recovering) return;
+    if (manualPollingActive) return; // Already recovering
+
     try {
-      // Try getUpdates with a very short timeout.
-      // If polling IS active, this will 409 (good — polling is alive).
-      // If polling is NOT active, this returns successfully (bad — polling is dead).
+      // Probe getUpdates with short timeout.
+      // If native polling IS active → 409 (good).
+      // If native polling is dead → success (bad — need manual loop).
       await bot.telegram.callApi('getUpdates', { offset: 0, limit: 1, timeout: 1 });
 
-      // If we get here without error, polling is NOT active — restart it
-      recovering = true;
-      runtime.logger.warn('[polling-monitor] Polling is dead — attempting recovery...');
-
-      try {
-        // Force-clear stale polling state so bot.launch() won't hang.
-        // bot.launch() internally calls bot.stop(), which waits for the
-        // dead polling loop's promise — causing it to hang forever.
-        try {
-          const polling = (bot as any).polling;
-          if (polling) {
-            polling.started = false;
-            try { polling.abortController?.abort(); } catch {}
-          }
-          (bot as any).polling = null;
-          (bot as any).started = false;
-        } catch {}
-
-        // Delete webhook to clear any stale state
-        await bot.telegram.callApi('deleteWebhook', { drop_pending_updates: false });
-
-        // Re-launch polling with our desired allowedUpdates.
-        // Since we cleared started=false, bot.stop() returns immediately.
-        await bot.launch({
-          dropPendingUpdates: false,
-          allowedUpdates: ['message', 'callback_query', 'message_reaction'],
-        });
-        runtime.logger.info('[polling-monitor] Polling recovered successfully');
-      } catch (launchErr: any) {
-        // If launch fails with 409, polling actually restarted from the launch call
-        if (launchErr?.message?.includes('409')) {
-          runtime.logger.info('[polling-monitor] Polling recovered (409 confirms active)');
-        } else {
-          runtime.logger.error(`[polling-monitor] Recovery failed: ${launchErr?.message}`);
-        }
-      }
-      recovering = false;
+      // Success = no active poller. Start manual loop.
+      runtime.logger.warn('[polling-monitor] Native polling is dead — switching to manual polling');
+      startManualPolling().catch((err: any) => {
+        runtime.logger.error(`[polling-monitor] Manual polling crashed: ${err?.message}`);
+        manualPollingActive = false;
+      });
     } catch (err: any) {
       if (err?.message?.includes('409')) {
-        // 409 Conflict = polling is alive and healthy, nothing to do
+        // Native polling is alive — all good
       } else {
         runtime.logger.warn(`[polling-monitor] Health check error: ${err?.message}`);
       }
     }
   };
 
-  // Wait 15 seconds after startup before first check
-  // (give bot.launch() time to establish polling)
+  // Wait 15 seconds after startup, then check every 30s
   setTimeout(() => {
     checkPolling();
-    setInterval(checkPolling, HEALTH_CHECK_MS);
+    setInterval(checkPolling, 30_000);
   }, 15_000);
 }
 
