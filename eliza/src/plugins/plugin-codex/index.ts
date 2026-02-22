@@ -17,6 +17,12 @@ import { randomUUID } from 'node:crypto';
 
 let codexEnabled = false;
 
+// Circuit breaker: auto-disable Codex after consecutive failures
+let consecutiveFailures = 0;
+const MAX_CONSECUTIVE_FAILURES = 3;
+const CIRCUIT_BREAKER_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+let circuitBreakerTrippedAt = 0;
+
 const getCmd = () => process.env.ITACHI_CODEX_CMD ?? 'codex';
 const getModel = () => process.env.ITACHI_CODEX_MODEL ?? '';
 const getTimeout = () => Number(process.env.ITACHI_CODEX_TIMEOUT_MS ?? 60000);
@@ -81,7 +87,18 @@ async function handleText(
   { prompt }: { prompt: string },
 ): Promise<string> {
   logger.log(`[Codex] ${modelType} → ${getModel() || '(default)'}`);
-  return callCodex(prompt);
+  try {
+    const result = await callCodex(prompt);
+    consecutiveFailures = 0; // Reset on success
+    return result;
+  } catch (err) {
+    consecutiveFailures++;
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      circuitBreakerTrippedAt = Date.now();
+      logger.error(`[Codex] Circuit breaker tripped after ${consecutiveFailures} failures — bypassing for ${CIRCUIT_BREAKER_COOLDOWN_MS / 60000}min`);
+    }
+    throw err;
+  }
 }
 
 export const itachiCodexPlugin: Plugin = {
@@ -128,6 +145,17 @@ export const itachiCodexPlugin: Plugin = {
   get models() {
     if (!codexEnabled) {
       return {};
+    }
+
+    // Circuit breaker: return empty models when tripped so lower-priority providers handle calls
+    if (circuitBreakerTrippedAt > 0) {
+      if (Date.now() - circuitBreakerTrippedAt < CIRCUIT_BREAKER_COOLDOWN_MS) {
+        return {};
+      }
+      // Cooldown expired — re-enable
+      circuitBreakerTrippedAt = 0;
+      consecutiveFailures = 0;
+      logger.info('[Codex] Circuit breaker cooldown expired — re-enabling');
     }
 
     return {
