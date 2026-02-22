@@ -30,6 +30,9 @@ const ENGINE_WRAPPERS: Record<string, string> = {
  *
  * IMPORTANT: ElizaOS launches Telegraf with allowedUpdates: ["message", "message_reaction"]
  * which excludes callback_query. We must restart polling to include it.
+ *
+ * Also starts a polling health monitor that detects and recovers from
+ * dead polling loops (caused by 409 Conflict during container restarts).
  */
 export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<void> {
   const maxRetries = 15;
@@ -67,6 +70,9 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
           runtime.logger.warn(`[callback-handler] Could not patch polling: ${patchErr?.message}. Callbacks may not work.`);
         }
 
+        // Start polling health monitor — recovers from 409 Conflict kills
+        startPollingHealthMonitor(runtime, bot);
+
         runtime.logger.info('[callback-handler] Registered Telegram callback_query handler');
         return;
       }
@@ -77,6 +83,70 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
   }
 
   runtime.logger.warn('[callback-handler] Could not find Telegram bot instance after retries');
+}
+
+/**
+ * Monitors Telegraf polling health and restarts it if dead.
+ *
+ * Problem: ElizaOS's bot.launch() is NOT awaited, and Telegraf's polling
+ * loop can silently die from 409 Conflict errors (e.g. during container
+ * restarts). When this happens, the bot appears healthy but never receives
+ * messages.
+ *
+ * Solution: Every 30 seconds, probe getUpdates with a short timeout.
+ * If it succeeds (no 409), polling is dead — restart it.
+ * If it 409s, polling is alive and healthy.
+ */
+function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
+  let recovering = false;
+  const HEALTH_CHECK_MS = 30_000;
+
+  const checkPolling = async () => {
+    if (recovering) return;
+    try {
+      // Try getUpdates with a very short timeout.
+      // If polling IS active, this will 409 (good — polling is alive).
+      // If polling is NOT active, this returns successfully (bad — polling is dead).
+      await bot.telegram.callApi('getUpdates', { offset: 0, limit: 1, timeout: 1 });
+
+      // If we get here without error, polling is NOT active — restart it
+      recovering = true;
+      runtime.logger.warn('[polling-monitor] Polling is dead — attempting recovery...');
+
+      try {
+        // Delete webhook to clear any stale state
+        await bot.telegram.callApi('deleteWebhook', { drop_pending_updates: false });
+
+        // Re-launch polling with our desired allowedUpdates
+        await bot.launch({
+          dropPendingUpdates: false,
+          allowedUpdates: ['message', 'callback_query', 'message_reaction'],
+        });
+        runtime.logger.info('[polling-monitor] Polling recovered successfully');
+      } catch (launchErr: any) {
+        // If launch fails with 409, polling actually restarted from the launch call
+        if (launchErr?.message?.includes('409')) {
+          runtime.logger.info('[polling-monitor] Polling recovered (409 confirms active)');
+        } else {
+          runtime.logger.error(`[polling-monitor] Recovery failed: ${launchErr?.message}`);
+        }
+      }
+      recovering = false;
+    } catch (err: any) {
+      if (err?.message?.includes('409')) {
+        // 409 Conflict = polling is alive and healthy, nothing to do
+      } else {
+        runtime.logger.warn(`[polling-monitor] Health check error: ${err?.message}`);
+      }
+    }
+  };
+
+  // Wait 15 seconds after startup before first check
+  // (give bot.launch() time to establish polling)
+  setTimeout(() => {
+    checkPolling();
+    setInterval(checkPolling, HEALTH_CHECK_MS);
+  }, 15_000);
 }
 
 async function handleCallback(runtime: IAgentRuntime, ctx: any): Promise<void> {
