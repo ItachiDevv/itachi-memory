@@ -177,9 +177,20 @@ export const createTaskAction: Action = {
         const machineRegistry = runtime.getService<MachineRegistryService>('machine-registry');
         const knownMachines = machineRegistry ? (await machineRegistry.getAllMachines()).map(m => m.display_name || m.machine_id) : [];
 
+        // Strategy -1: Self-reference detection — when the user talks about the bot
+        // itself, its own code, or asks for PRs in a self-referential context,
+        // default to 'itachi-memory' (the bot's own repo).
+        let parsed = detectSelfReference(
+          text,
+          Array.isArray(recentMessages) ? recentMessages : [],
+          repoNames
+        );
+
         // Strategy 0: Try to extract directly from the user's message if it mentions
         // a known project name. This is the fastest path — no LLM needed.
-        let parsed = extractTaskFromUserMessage(text, repoNames);
+        if (!parsed || parsed.length === 0) {
+          parsed = extractTaskFromUserMessage(text, repoNames);
+        }
 
         // Strategy 0.5: Broad confirmation extraction.
         // When user says "yes"/"do it"/etc., scan bot's recent messages for ANY
@@ -397,6 +408,82 @@ export const createTaskAction: Action = {
     }
   },
 };
+
+/**
+ * Strategy -1: Self-reference detection.
+ * When the user talks about the bot itself, its code, or asks for PRs
+ * in a context that's clearly about the bot's own development,
+ * default to 'itachi-memory'. The bot IS itachi-memory — it should know that.
+ */
+function detectSelfReference(
+  text: string,
+  recentMessages: any[],
+  knownProjects: string[],
+): Array<{ project: string; description: string }> | null {
+  const SELF_PROJECT = 'itachi-memory';
+  // Only apply if itachi-memory is a known project
+  if (!knownProjects.some(p => p.toLowerCase() === SELF_PROJECT)) return null;
+
+  const lower = text.toLowerCase();
+
+  // Direct self-reference in user message
+  const selfPatterns = [
+    /\b(?:your|the bot'?s?|itachi'?s?)\s+(?:code|repo|codebase|source|brain|memory|plugins?|skills?)\b/i,
+    /\b(?:your|itachi'?s?)\s+own\b/i,
+    /\b(?:self[- ]?improv|self[- ]?evolv|evolve yourself|improve yourself|upgrade yourself|fix yourself)\b/i,
+    /\byou (?:should|need to|can|could|must)\s+(?:fix|update|improve|change|modify|refactor|add|implement|create)\b/i,
+    /\bthis (?:is )?(?:your|the bot'?s?)\b/i,
+  ];
+
+  const isSelfRef = selfPatterns.some(p => p.test(text));
+
+  if (isSelfRef) {
+    let desc = text
+      .replace(/^(?:can you|could you|please|hey|yo)\s*/i, '')
+      .replace(/\?\s*$/, '')
+      .trim();
+    if (desc.length >= 10) {
+      console.log(`[create-task] Strategy -1: self-reference matched in user text`);
+      return [{ project: SELF_PROJECT, description: desc }];
+    }
+  }
+
+  // Check if it's a PR/commit/change request with no explicit project mentioned
+  const isChangeRequest = /\b(?:make|create|push|open|submit|do)\s+(?:a\s+)?(?:PR|pull\s*request|MR|merge\s*request|commit|change|fix)\b/i.test(text)
+    || /\b(?:make this|do this|push this|commit this|PR (?:this|for this|for me))\b/i.test(text);
+  const noProjectMentioned = !knownProjects.some(p => {
+    const pattern = new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    return pattern.test(text);
+  });
+
+  if (isChangeRequest && noProjectMentioned) {
+    // Check if recent conversation is about the bot or itachi-memory
+    const recentText = recentMessages
+      .slice(-8)
+      .map((m: any) => typeof m.content === 'string' ? m.content : (m.content?.text || m.text || ''))
+      .join(' ')
+      .toLowerCase();
+
+    const contextIsSelf = /\bitachi[- ]?memory\b/.test(recentText)
+      || /\byour (?:code|repo|codebase|plugins?)\b/.test(recentText)
+      || /\bthe bot(?:'?s)?\b/.test(recentText)
+      || /\byou(?:'re| are) (?:born|built|made|created)\b/.test(recentText)
+      || /\bthis (?:is )?(?:you|your)\b/.test(recentText);
+
+    if (contextIsSelf) {
+      let desc = text
+        .replace(/^(?:can you|could you|please|hey|yo)\s*/i, '')
+        .replace(/\?\s*$/, '')
+        .trim();
+      if (desc.length >= 5) {
+        console.log(`[create-task] Strategy -1: change request in self-referential context`);
+        return [{ project: SELF_PROJECT, description: desc }];
+      }
+    }
+  }
+
+  return null;
+}
 
 /**
  * Strategy 0: Extract task directly from the user's own message.
@@ -660,6 +747,8 @@ Rules:
 - If multiple tasks are implied, return multiple objects
 - If the conversation has enough context to determine a task, ALWAYS extract it — do not return [] just because the current message is short
 - If the user is asking a QUESTION (about PRs, status, builds, branches, "what", "show me", "how many", "any open", "check") rather than requesting WORK to be done, return [] — questions are not tasks
+- IMPORTANT: You ARE "itachi-memory" — that is your own codebase. If the user talks about "your code", "your repo", "your plugins", "the bot", "yourself", "fix yourself", etc., the project is "itachi-memory"
+- If the user asks for a PR, commit, or change and the conversation context is about THIS bot's own development, use project "itachi-memory"
 - Only return [] if there is genuinely no task information anywhere in the conversation`,
       temperature: 0.1,
     });
