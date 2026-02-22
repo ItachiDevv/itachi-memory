@@ -41,7 +41,7 @@ function filterTuiNoise(text: string): string {
 }
 
 // Machine alias → SSH target imported from shared module
-import { resolveSSHTarget } from '../shared/repo-utils.js';
+import { resolveSSHTarget, getMachineIdsForTarget } from '../shared/repo-utils.js';
 
 // ── Engine wrappers ──────────────────────────────────────────────────
 const ENGINE_WRAPPERS: Record<string, string> = {
@@ -161,23 +161,27 @@ export class TaskExecutorService extends Service {
   }
 
   private async claimForMachine(taskService: TaskService, machineId: string): Promise<ItachiTask | null> {
-    // Use Supabase RPC directly with machine_id filter
     const supabase = taskService.getSupabase();
-    const rpcParams: Record<string, unknown> = {
-      p_orchestrator_id: this.executorId,
-      p_machine_id: machineId,
-    };
+    // Try all registry IDs that map to this SSH target (e.g., 'mac' → ['mac', 'itachi-m1', 'macbook'])
+    const sshTarget = resolveSSHTarget(machineId);
+    const allIds = getMachineIdsForTarget(sshTarget);
 
-    const { data, error } = await supabase.rpc('claim_next_task', rpcParams);
-    if (error) {
-      this.runtime.logger.error(`[executor] claim_next_task error: ${error.message}`);
-      return null;
+    for (const id of allIds) {
+      const { data, error } = await supabase.rpc('claim_next_task', {
+        p_orchestrator_id: this.executorId,
+        p_machine_id: id,
+      });
+      if (error) {
+        this.runtime.logger.error(`[executor] claim_next_task error (${id}): ${error.message}`);
+        continue;
+      }
+      if (data && Array.isArray(data) && data.length > 0) {
+        const task = data[0] as ItachiTask;
+        this.runtime.logger.info(`[executor] Claimed task ${task.id.substring(0, 8)} (${task.project}) for ${machineId} (matched via ${id})`);
+        return task;
+      }
     }
-    if (!data || !Array.isArray(data) || data.length === 0) return null;
-
-    const task = data[0] as ItachiTask;
-    this.runtime.logger.info(`[executor] Claimed task ${task.id.substring(0, 8)} (${task.project}) for ${machineId}`);
-    return task;
+    return null;
   }
 
   // ── Task Execution ───────────────────────────────────────────────────

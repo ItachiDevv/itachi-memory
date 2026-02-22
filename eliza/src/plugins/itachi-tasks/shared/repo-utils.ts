@@ -29,6 +29,19 @@ export function resolveSSHTarget(machineId: string): string {
   return MACHINE_TO_SSH_TARGET[machineId] || MACHINE_TO_SSH_TARGET[machineId.toLowerCase()] || machineId;
 }
 
+/**
+ * Get all machine IDs (registry + aliases) that map to a given SSH target.
+ * Used by executor to claim tasks assigned to any alias of its managed machines.
+ */
+export function getMachineIdsForTarget(sshTarget: string): string[] {
+  const ids = new Set<string>();
+  ids.add(sshTarget);
+  for (const [key, value] of Object.entries(MACHINE_TO_SSH_TARGET)) {
+    if (value === sshTarget) ids.add(key);
+  }
+  return [...ids];
+}
+
 /** Default repo paths per SSH target */
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
   mac: '~/itachi/itachi-memory',
