@@ -221,11 +221,17 @@ async function handleBrowsingInput(
   text: string,
   threadId: number,
 ): Promise<void> {
+  runtime.logger.info(`[handleBrowsing] start: threadId=${threadId} target=${session.target} currentPath=${session.currentPath} lastDirCount=${session.lastDirListing.length} text="${text.substring(0, 40)}"`);
+
   const sshService = runtime.getService<SSHService>('ssh');
   const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
-  if (!sshService || !topicsService) return;
+  if (!sshService || !topicsService) {
+    runtime.logger.error(`[handleBrowsing] missing services: sshService=${!!sshService} topicsService=${!!topicsService}`);
+    return;
+  }
 
   const parsed = parseBrowsingInput(text, session);
+  runtime.logger.info(`[handleBrowsing] parsed: action=${parsed.action}${'message' in parsed ? ` msg="${parsed.message}"` : ''}${'path' in parsed ? ` path="${parsed.path}"` : ''}`);
 
   if (parsed.action === 'error') {
     await topicsService.sendToTopic(threadId, parsed.message);
@@ -233,7 +239,9 @@ async function handleBrowsingInput(
   }
 
   if (parsed.action === 'navigate') {
+    runtime.logger.info(`[handleBrowsing] calling listRemoteDirectory: target=${session.target} path=${parsed.path}`);
     const { dirs, error } = await listRemoteDirectory(sshService, session.target, parsed.path);
+    runtime.logger.info(`[handleBrowsing] listRemoteDirectory done: dirs=${dirs.length} error=${error || 'none'}`);
     if (error) {
       await topicsService.sendToTopic(threadId, `Error: ${error}\nStill at: ${session.currentPath}`);
       return;
@@ -246,6 +254,7 @@ async function handleBrowsingInput(
   }
 
   if (parsed.action === 'start') {
+    runtime.logger.info(`[handleBrowsing] starting session in topic ${threadId} at ${session.currentPath}`);
     browsingSessionMap.delete(threadId);
     await spawnSessionInTopic(
       runtime, sshService, topicsService,
