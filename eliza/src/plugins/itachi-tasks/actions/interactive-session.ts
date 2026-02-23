@@ -119,12 +119,16 @@ function filterTuiNoise(text: string): string {
     if (/^[✻✶✢✽✳⏺❯·*●\s]*[Cc]runched\s+for\s+\d+s/.test(stripped)) continue;
 
     // Skip git/VCS status bar tokens from Claude Code TUI (appear after CUP→newline split):
-    // e.g. "-Commit[master]", "+Staged[1]", "-Unstaged[2]", "-Commit["
-    if (/^[-+][A-Z][a-z]+\[/.test(stripped)) continue;
+    // e.g. "-Commit[master]", "+Staged[1]", "-Phase", "-Unstaged[2]"
+    // Pattern: starts with +/- then a capitalized word, optionally followed by [...] or end
+    if (/^[-+][A-Z][a-z]+(?:\[|$)/.test(stripped)) continue;
 
     // Skip short standalone punctuation/bracket fragments (leftover TUI status noise)
     // e.g. "[master]", "[+0 ~1]", "[!]" — never appear in real output
     if (/^\[[\w\s+~!?-]*\]\s*$/.test(stripped) && stripped.length < 30) continue;
+
+    // Skip short git diff-style stat lines: "+0 -1", "~2 !1", etc.
+    if (/^[+\-~!?]\d+(\s+[+\-~!?]\d+)*\s*$/.test(stripped) && stripped.length < 20) continue;
 
     // Skip Claude Code session uptime lines — the (NNNd NNh NNm) pattern appears ONLY in
     // the TUI status bar and never in real code output. This catches the full startup prompt
