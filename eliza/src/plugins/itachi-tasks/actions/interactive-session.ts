@@ -35,12 +35,18 @@ function stripAnsi(text: string): string {
     .replace(/\x1b\[[0-9;]*[Hf]/g, '\n')
     // CSI sequences: ESC[ ... (letter) — covers colors, cursor moves, erase, DEC private modes, etc.
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-    // OSC sequences: ESC] ... ST (BEL or ESC\)
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    // OSC sequences: ESC] ... ST (BEL or ESC\) — make terminator optional so unterminated
+    // sequences (e.g. split across PTY chunks: \x1b]0;title without \x07) are also stripped.
+    // Previously, unterminated OSC would have \x1b removed by the control-char pass below,
+    // leaving "]0;title" to leak through as a message.
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '')
     // Other ESC sequences (2-char): ESC + single char
     .replace(/\x1b[^[\]()][^\x1b]?/g, '')
     // Stray control chars (except newline, tab, carriage return)
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+    // Unicode replacement chars: \uFFFD appears when PTY sends invalid/null bytes that
+    // Node.js Buffer.toString() can't decode. These are pure noise from PTY initialization.
+    .replace(/\uFFFD/g, '')
     // Collapse excessive blank lines
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -403,6 +409,13 @@ export const interactiveSessionAction: Action = {
     _options?: unknown,
     callback?: HandlerCallback,
   ): Promise<ActionResult> => {
+    // Prevent double-execution: TELEGRAM_COMMANDS may have already called this handler
+    // directly (setting _sessionSpawned) to handle /session <machine> commands.
+    // Without this guard, both TELEGRAM_COMMANDS and INTERACTIVE_SESSION handlers run,
+    // creating two identical Telegram topics per /session command.
+    if ((message.content as Record<string, unknown>)._sessionSpawned) {
+      return { success: true };
+    }
     try {
       const sshService = runtime.getService<SSHService>('ssh');
       if (!sshService) {
