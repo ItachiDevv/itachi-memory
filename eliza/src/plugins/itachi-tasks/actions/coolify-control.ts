@@ -3,7 +3,8 @@ import { SSHService } from '../services/ssh-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { TaskService } from '../services/task-service.js';
 import { DEFAULT_REPO_BASES } from '../shared/repo-utils.js';
-import { stripBotMention } from '../utils/telegram.js';
+import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
+import { activeSessions } from '../shared/active-sessions.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -220,6 +221,10 @@ export const coolifyControlAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+    // Skip messages in active session topics — the topic-input-relay handles those
+    const threadId = await getTopicThreadId(runtime, message);
+    if (threadId !== null && activeSessions.has(threadId)) return false;
+
     const text = stripBotMention(message.content?.text || '');
     // Always match explicit slash commands (including /ops and /exec aliases)
     if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test|ops|exec)\b/.test(text)) return true;
@@ -241,6 +246,13 @@ export const coolifyControlAction: Action = {
     callback?: HandlerCallback
   ): Promise<ActionResult> => {
     try {
+      // Double-guard: don't execute SSH commands for session topic messages
+      const threadId = await getTopicThreadId(runtime, message);
+      if (threadId !== null && activeSessions.has(threadId)) {
+        runtime.logger.info(`[coolify-control] Skipping handler — message is in active session topic ${threadId}`);
+        return { success: true, data: { skippedSessionTopic: true } };
+      }
+
       const sshService = runtime.getService<SSHService>('ssh');
       if (!sshService) {
         if (callback) await callback({ text: 'SSH service not available. Set COOLIFY_SSH_HOST in env.' });

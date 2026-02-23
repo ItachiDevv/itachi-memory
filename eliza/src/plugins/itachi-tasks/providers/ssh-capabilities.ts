@@ -1,5 +1,7 @@
 import type { Provider, IAgentRuntime, Memory, State, ProviderResult } from '@elizaos/core';
 import { SSHService } from '../services/ssh-service.js';
+import { activeSessions } from '../shared/active-sessions.js';
+import { getTopicThreadId } from '../utils/telegram.js';
 
 /**
  * Tells the LLM about its SSH/server control capabilities so it can
@@ -14,9 +16,20 @@ export const sshCapabilitiesProvider: Provider = {
 
   get: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     _state?: State
   ): Promise<ProviderResult> => {
+    // If message is in an active session topic, suppress SSH capabilities and
+    // instruct the LLM not to respond — the topic-input-relay handles it.
+    const threadId = await getTopicThreadId(runtime, message);
+    if (threadId !== null && activeSessions.has(threadId)) {
+      return {
+        text: '## ACTIVE SESSION TOPIC\n\nThis message is from an active interactive session topic (threadId=' + threadId + '). The user\'s input has already been forwarded directly to the live terminal session via the topic-input-relay. DO NOT generate a response. DO NOT use COOLIFY_CONTROL. DO NOT REPLY. Simply output nothing — the session output will stream back automatically.',
+        values: { sessionTopicActive: 'true', sessionTopicThreadId: String(threadId) },
+        data: {},
+      };
+    }
+
     const sshService = runtime.getService<SSHService>('ssh');
     if (!sshService) {
       return { text: '', values: {}, data: {} };
