@@ -73,7 +73,10 @@ function filterTuiNoise(text: string): string {
     if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
 
     // Skip thinking/thought lines: optional icon + (thinking|thought for N|Ns)
-    if (/^(?:[✻✶✢✽✳⏺·*●]\s*)*\(?(?:thinking|thought for\s|\d+s\))/i.test(stripped)) continue;
+    // Also catches partial fragments like "ought for2s)" that result from ANSI stripping
+    if (/^(?:[✻✶✢✽✳⏺·*●]\s*)*\(?(?:thinking|thought for|ought for|hought for|\d+s\))/i.test(stripped)) continue;
+    // Short lines that are purely timing fragments: "2s)" "for 2s)" etc.
+    if (/^(?:for\s*)?\d+s\)\s*$/.test(stripped)) continue;
 
     // Skip spinner-only lines: optional icons/spaces then CapWord…
     if (/^(?:[✻✶✢✽✳⏺⎿·*●\s]*)([A-Z][a-z]+)\u2026/.test(stripped)) continue;
