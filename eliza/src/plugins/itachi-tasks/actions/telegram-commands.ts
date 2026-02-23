@@ -7,7 +7,8 @@ import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { syncGitHubRepos } from '../services/github-sync.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getStartingDir } from '../shared/start-dir.js';
-import { listRemoteDirectory } from '../utils/directory-browser.js';
+import { listRemoteDirectory, browsingSessionMap } from '../utils/directory-browser.js';
+import { activeSessions } from '../shared/active-sessions.js';
 import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
   flowKey, conversationFlows, type ConversationFlow,
@@ -63,6 +64,15 @@ export const telegramCommandsAction: Action = {
       const flow = chatId ? getFlow(chatId) : undefined;
       runtime.logger.info(`[telegram-commands] validate: text="${text.substring(0, 30)}" chatId=${chatId} flowStep=${flow?.step || 'none'} flowsCount=${conversationFlows.size}`);
       if (flow && flow.step === 'await_description') return true;
+      // Claim non-command messages in active browsing or session topics to prevent
+      // LLM from generating its own chatter. The evaluator (TOPIC_INPUT_RELAY) already
+      // handles these inputs; we claim here so the action pipeline returns early without
+      // invoking the LLM response callback.
+      const threadId = await getTopicThreadId(runtime, message);
+      if (threadId !== null && (browsingSessionMap.has(threadId) || activeSessions.has(threadId))) {
+        runtime.logger.info(`[telegram-commands] validate: claiming topic input (threadId=${threadId}) to suppress LLM chatter`);
+        return true;
+      }
       return false;
     }
 
@@ -109,6 +119,12 @@ export const telegramCommandsAction: Action = {
         return { success: true, data: { handledByEvaluator: true } };
       }
       if (!text.startsWith('/')) {
+        // If evaluator already handled this (browsing nav / active session pipe),
+        // return early without invoking callback — suppresses LLM chatter response.
+        if ((message.content as Record<string, unknown>)._topicRelayQueued) {
+          runtime.logger.info(`[telegram-commands] suppressing LLM for _topicRelayQueued non-command message`);
+          return { success: true };
+        }
         const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
         const flowChatId = topicsService?.chatId;
         if (flowChatId) {
