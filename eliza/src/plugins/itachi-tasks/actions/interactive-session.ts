@@ -28,6 +28,11 @@ const MACHINE_ALIASES: Record<string, string> = {
  */
 function stripAnsi(text: string): string {
   return text
+    // CUP/HVP (cursor position): \x1b[row;colH or \x1b[row;colf → newline.
+    // TUI tools position text via cursor movement; without this, stripped output
+    // concatenates adjacent positioned fragments (word-smashing). Replacing with \n
+    // splits them onto separate lines so filterTuiNoise can discard status-bar content.
+    .replace(/\x1b\[[0-9;]*[Hf]/g, '\n')
     // CSI sequences: ESC[ ... (letter) — covers colors, cursor moves, erase, DEC private modes, etc.
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
     // OSC sequences: ESC] ... ST (BEL or ESC\)
@@ -99,6 +104,13 @@ function filterTuiNoise(text: string): string {
     // Skip terminal prompt lines: ~/path ❯ ... or lone ❯
     // Use loose match (.*?) because ANSI stripping may leave invisible chars before ❯
     if (/^~.*?❯|^❯\s*$/.test(stripped)) continue;
+
+    // Skip standalone repo-path lines (TUI status bar after \r normalization):
+    // e.g. "~/itachi/itachi-memory ~~~" or "~/path/to/repo" alone on a line
+    if (/^~\/[\w/.@-]+\s*[~✻✶*>\s]*$/.test(stripped)) continue;
+
+    // Skip "Crunched for Ns" — Claude Code completion status (past-tense spinner variant)
+    if (/^[✻✶✢✽✳⏺❯·*●\s]*[Cc]runched\s+for\s+\d+s/.test(stripped)) continue;
 
     // Skip Claude Code session uptime lines — the (NNNd NNh NNm) pattern appears ONLY in
     // the TUI status bar and never in real code output. This catches the full startup prompt
@@ -258,11 +270,29 @@ export async function spawnSessionInTopic(
   const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const sessionTranscript: TranscriptEntry[] = [];
 
+  /**
+   * Normalize \r (carriage return) in a PTY chunk before ANSI stripping.
+   * TUI tools use \r to overwrite the current line (e.g., spinner updates, prompt).
+   * Without normalization, "A\rB" stays as a single string causing prompt leaks.
+   * Strategy: split on \r\n (CRLF, normal line ends), then split each line on bare \r
+   * and keep only the last segment (final overwrite state).
+   */
+  function normalizePtyChunk(chunk: string): string {
+    return chunk
+      .split('\r\n')
+      .map(line => {
+        const segs = line.split('\r');
+        return segs[segs.length - 1];
+      })
+      .join('\n');
+  }
+
   const handle = sshService.spawnInteractiveSession(
     target,
     sshCommand,
     (chunk: string) => {
-      const stripped = stripAnsi(chunk);
+      const normalized = normalizePtyChunk(chunk);
+      const stripped = stripAnsi(normalized);
       const clean = filterTuiNoise(stripped);
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
@@ -271,7 +301,8 @@ export async function spawnSessionInTopic(
       });
     },
     (chunk: string) => {
-      const stripped = stripAnsi(chunk);
+      const normalized = normalizePtyChunk(chunk);
+      const stripped = stripAnsi(normalized);
       const clean = filterTuiNoise(stripped);
       if (!clean) return;
       sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
