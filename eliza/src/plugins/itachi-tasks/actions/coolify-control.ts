@@ -5,6 +5,7 @@ import { TaskService } from '../services/task-service.js';
 import { DEFAULT_REPO_BASES } from '../shared/repo-utils.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { activeSessions } from '../shared/active-sessions.js';
+import { browsingSessionMap } from '../utils/directory-browser.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -221,9 +222,9 @@ export const coolifyControlAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    // Skip messages in active session topics — the topic-input-relay handles those
+    // Skip messages in active session/browsing topics — the topic-input-relay handles those
     const threadId = await getTopicThreadId(runtime, message);
-    if (threadId !== null && activeSessions.has(threadId)) return false;
+    if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
 
     const text = stripBotMention(message.content?.text || '');
     // Always match explicit slash commands (including /ops and /exec aliases)
@@ -248,8 +249,8 @@ export const coolifyControlAction: Action = {
     try {
       // Double-guard: don't execute SSH commands for session topic messages
       const threadId = await getTopicThreadId(runtime, message);
-      if (threadId !== null && activeSessions.has(threadId)) {
-        runtime.logger.info(`[coolify-control] Skipping handler — message is in active session topic ${threadId}`);
+      if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) {
+        runtime.logger.info(`[coolify-control] Skipping handler — message is in active/browsing session topic ${threadId}`);
         return { success: true, data: { skippedSessionTopic: true } };
       }
 

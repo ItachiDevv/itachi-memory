@@ -290,7 +290,7 @@ export const interactiveSessionAction: Action = {
     // Don't spawn new sessions in an already-active session topic
     if (message.content?.source === 'telegram') {
       const threadId = await getTopicThreadId(runtime, message);
-      if (threadId !== null && activeSessions.has(threadId)) return false;
+      if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
     }
     const text = stripBotMention(message.content?.text || '');
     // Explicit commands

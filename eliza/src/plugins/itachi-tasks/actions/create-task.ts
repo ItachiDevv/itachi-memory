@@ -6,6 +6,7 @@ import type { MemoryService } from '../../itachi-memory/services/memory-service.
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getFlow } from '../shared/conversation-flows.js';
 import { activeSessions } from '../shared/active-sessions.js';
+import { browsingSessionMap } from '../utils/directory-browser.js';
 
 export const createTaskAction: Action = {
   name: 'CREATE_TASK',
@@ -69,8 +70,8 @@ export const createTaskAction: Action = {
       try {
         const threadId = await getTopicThreadId(runtime, message);
         if (threadId) {
-          // Session topics: topic-input-relay handles these
-          if (activeSessions.has(threadId)) return false;
+          // Session/browsing topics: topic-input-relay handles these
+          if (activeSessions.has(threadId) || browsingSessionMap.has(threadId)) return false;
           const taskService = runtime.getService<TaskService>('itachi-tasks');
           if (taskService) {
             const activeTasks = await taskService.getActiveTasks();

@@ -2,6 +2,7 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { activeSessions } from '../shared/active-sessions.js';
+import { browsingSessionMap } from '../utils/directory-browser.js';
 
 export const remoteExecAction: Action = {
   name: 'REMOTE_EXEC',
@@ -31,7 +32,7 @@ export const remoteExecAction: Action = {
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     if (message.content?.source === 'telegram') {
       const threadId = await getTopicThreadId(runtime, message);
-      if (threadId !== null && activeSessions.has(threadId)) return false;
+      if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
     }
     const text = stripBotMention(message.content?.text || '');
     // Explicit slash commands

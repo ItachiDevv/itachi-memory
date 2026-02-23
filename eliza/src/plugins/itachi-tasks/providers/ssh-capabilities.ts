@@ -1,6 +1,7 @@
 import type { Provider, IAgentRuntime, Memory, State, ProviderResult } from '@elizaos/core';
 import { SSHService } from '../services/ssh-service.js';
 import { activeSessions } from '../shared/active-sessions.js';
+import { browsingSessionMap } from '../utils/directory-browser.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 
 /**
@@ -19,12 +20,15 @@ export const sshCapabilitiesProvider: Provider = {
     message: Memory,
     _state?: State
   ): Promise<ProviderResult> => {
-    // If message is in an active session topic, suppress SSH capabilities and
-    // instruct the LLM not to respond — the topic-input-relay handles it.
+    // If message is in an active session topic OR browsing session topic,
+    // suppress SSH capabilities and instruct the LLM not to respond.
     const threadId = await getTopicThreadId(runtime, message);
-    if (threadId !== null && activeSessions.has(threadId)) {
+    if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) {
+      const reason = activeSessions.has(threadId)
+        ? 'an active interactive session topic — input forwarded to live terminal'
+        : 'a directory browsing session topic — input handled by browsing navigator';
       return {
-        text: '## ACTIVE SESSION TOPIC\n\nThis message is from an active interactive session topic (threadId=' + threadId + '). The user\'s input has already been forwarded directly to the live terminal session via the topic-input-relay. DO NOT generate a response. DO NOT use COOLIFY_CONTROL. DO NOT REPLY. Simply output nothing — the session output will stream back automatically.',
+        text: `## SESSION TOPIC — DO NOT RESPOND\n\nThis message is from ${reason} (threadId=${threadId}). DO NOT generate a response. DO NOT use any action. DO NOT REPLY. The input is handled automatically.`,
         values: { sessionTopicActive: 'true', sessionTopicThreadId: String(threadId) },
         data: {},
       };
