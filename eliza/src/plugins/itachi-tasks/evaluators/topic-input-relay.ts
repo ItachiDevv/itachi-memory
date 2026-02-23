@@ -114,14 +114,19 @@ export const topicInputRelayEvaluator: Evaluator = {
     cleanupStaleFlows();
     cleanupStaleBrowsingSessions();
 
-    // Check for directory browsing session BEFORE active session check
+    // Check for directory browsing session BEFORE active session check.
+    // Guard: validate() already fired handleBrowsingInput as fire-and-forget;
+    // skip here to avoid double-execution (sending the listing twice).
+    const content = message.content as Record<string, unknown>;
     const browsing = browsingSessionMap.get(threadId);
     if (browsing) {
-      try {
-        await handleBrowsingInput(runtime, browsing, text, threadId);
-        (message.content as Record<string, unknown>)._topicRelayQueued = true;
-      } catch (err) {
-        runtime.logger.error(`[topic-relay] Browsing error: ${err instanceof Error ? err.message : String(err)}`);
+      if (!content._topicRelayQueued) {
+        content._topicRelayQueued = true;
+        try {
+          await handleBrowsingInput(runtime, browsing, text, threadId);
+        } catch (err) {
+          runtime.logger.error(`[topic-relay] Browsing error: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
       return;
     }
