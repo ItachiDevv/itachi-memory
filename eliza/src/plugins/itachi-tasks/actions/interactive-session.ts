@@ -46,9 +46,17 @@ function stripAnsi(text: string): string {
  * Keeps meaningful output (tool results, agent responses, errors) and
  * drops spinners, box borders, status lines, and progress indicators.
  */
-// All spinner/wait word variants used by Claude Code in its TUI status area
-const SPINNER_WORDS = 'Churning|Crunching|Nucleating|Cultivating|Bloviating|Waiting|Thinking';
-const SPINNER_RE = new RegExp(`(?:${SPINNER_WORDS})…`, 'i');
+/**
+ * Filter out TUI chrome/noise from Claude Code and similar CLI tools.
+ *
+ * Uses a generic approach: Claude Code spinners are always a single
+ * CapitalizedWord followed by the Unicode ellipsis character (U+2026).
+ * This avoids maintaining an exhaustive word list that would need updating
+ * every time Claude Code adds a new spinner variant.
+ */
+// Matches any Claude Code spinner: optional TUI icons then CapWord…
+// The Unicode ellipsis U+2026 is used exclusively by Claude Code spinners.
+const SPINNER_GENERIC_RE = /(?:^|[\s❯✢✻✶✽✳·⏺\uFFFD])([A-Z][a-z]+)\u2026/;
 
 function filterTuiNoise(text: string): string {
   const lines = text.split('\n');
@@ -64,9 +72,18 @@ function filterTuiNoise(text: string): string {
     // Skip lines that are only spinner/progress chars (includes ✳ ⏺)
     if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
 
-    // Skip spinner-only lines: optional icon + spinner word
+    // Skip thinking/thought lines: optional icon + (thinking|thought for N|Ns)
     if (/^(?:[✻✶✢✽✳⏺·*●]\s*)*\(?(?:thinking|thought for\s|\d+s\))/i.test(stripped)) continue;
-    if (new RegExp(`^(?:[✻✶✢✽✳⏺·*●\\s]*)(?:${SPINNER_WORDS})…`, 'i').test(stripped)) continue;
+
+    // Skip spinner-only lines: optional icons/spaces then CapWord…
+    if (/^(?:[✻✶✢✽✳⏺⎿·*●\s]*)([A-Z][a-z]+)\u2026/.test(stripped)) continue;
+
+    // Skip tool-call / tool-output indicator lines (⏺ = tool call, ⎿ = indented output)
+    if (/^[⏺⎿]/.test(stripped)) continue;
+
+    // Skip terminal prompt lines: ~/path ❯ ... or lone ❯
+    // Handles spaces in path (after ANSI strip) e.g. "~/itachi/itachi-memory ❯ 0❯ ..."
+    if (/^~[\w/\s.-]*\s*❯|^❯\s*$/.test(stripped)) continue;
 
     // Skip status line noise (both spaced and compressed forms after ANSI strip)
     if (/bypass permissions|bypasspermission|shift\+tab to cycle|shift\+tabtocycle|esc to interrupt|esctointerrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
@@ -74,20 +91,16 @@ function filterTuiNoise(text: string): string {
     // Skip bypass permissions icon (⏵⏵ is Claude Code's permission mode indicator)
     if (stripped.includes('⏵')) continue;
 
-    // Skip terminal prompt lines: ~/path❯ or ❯ alone
-    if (/^~[/\w-]*❯|^❯\s*$/.test(stripped)) continue;
-
     // Skip Claude Code startup chrome (version, recent activity, model info)
     if (/Tips for getting started|Tipsforgettingstarted|Welcome back|Welcomeback|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
     if (/ClaudeCode\s*v?\d|Claude Code v\d|Recentactivity|Recent activity|Norecentactivity|No recent activity/i.test(stripped)) continue;
     if (/Sonnet\s*\d.*ClaudeAPI|ClaudeAPI.*Sonnet|claude-sonnet|claude-haiku|claude-opus/i.test(stripped)) continue;
 
-    // Skip lines that contain multiple spinner occurrences (pure TUI status)
-    if ((stripped.match(SPINNER_RE) || []).length >= 2) continue;
+    // Skip lines containing 2+ spinners (pure TUI status bar: e.g. "path❯ prompt · Spinning…❯MoreSpinning…")
+    if ((stripped.match(/[A-Z][a-z]+\u2026/g) || []).length >= 2) continue;
 
     // Skip ctrl key hints (both spaced and compressed forms)
     if (/^ctrl\+[a-z] to /i.test(stripped) || /ctrl\+[a-z]to[a-z]/i.test(stripped)) continue;
-    // Skip "(ctrl+o to expand)" collapse hints — both spaced and compressed
     if (/ctrl\+o to expand|ctrl\+oto\s*expand|ctrl\+otoexpand|\(ctrl\+o\)/i.test(stripped)) continue;
 
     // Skip lines that are purely token/timing stats (e.g. "47s · ↓193 tokens · thought for 1s")
@@ -96,9 +109,9 @@ function filterTuiNoise(text: string): string {
     // Skip prompt lines (just "> " with nothing meaningful)
     if (/^>\s*$/.test(stripped)) continue;
 
-    // Strip trailing TUI status from end of lines (spinner + prompt chars that leaked onto content)
-    stripped = stripped.replace(/[\s❯✢✻✶✽✳✢·]+(?:${SPINNER_WORDS})…[\s❯]*$/i, '').trim();
-    stripped = stripped.replace(new RegExp(`[\\s❯✢✻✶✽✳·]+(?:${SPINNER_WORDS})…[\\s❯]*$`, 'i'), '').trim();
+    // Strip trailing TUI status from end of content lines (spinner + prompt chars leaked onto content)
+    // Uses generic CapWord… pattern to catch any spinner variant
+    stripped = stripped.replace(/[\s❯✢✻✶✽✳·⏺]+[A-Z][a-z]+\u2026[\s❯]*/g, '').trim();
     stripped = stripped.replace(/\s*❯\s*$/, '').trim();
 
     if (!stripped) continue;
