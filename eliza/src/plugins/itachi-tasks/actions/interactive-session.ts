@@ -72,17 +72,27 @@ function filterTuiNoise(text: string): string {
     // Skip lines that are only spinner/progress chars (includes ✳ ⏺)
     if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
 
-    // Skip thinking/thought lines: optional icon + (thinking|thought for N|Ns)
+    // Skip thinking/thought lines: optional icon (including ❯) + (thinking|thought for N|Ns)
     // Also catches partial fragments like "ought for2s)" that result from ANSI stripping
-    if (/^(?:[✻✶✢✽✳⏺·*●]\s*)*\(?(?:thinking|thought for|ought for|hought for|\d+s\))/i.test(stripped)) continue;
+    if (/^(?:[✻✶✢✽✳⏺❯·*●]\s*)*\(?(?:thinking|thought for|ought for|hought for|\d+s\))/i.test(stripped)) continue;
     // Short lines that are purely timing fragments: "2s)" "for 2s)" etc.
     if (/^(?:for\s*)?\d+s\)\s*$/.test(stripped)) continue;
 
-    // Skip spinner-only lines: optional icons/spaces then CapWord…
-    if (/^(?:[✻✶✢✽✳⏺⎿·*●\s]*)([A-Z][a-z]+)\u2026/.test(stripped)) continue;
+    // Skip spinner-only lines: optional icons/spaces (including ❯) then CapWord…
+    if (/^(?:[✻✶✢✽✳⏺❯⎿·*●\s]*)([A-Z][a-z]+)\u2026/.test(stripped)) continue;
 
     // Skip tool-call / tool-output indicator lines (⏺ = tool call, ⎿ = indented output)
     if (/^[⏺⎿]/.test(stripped)) continue;
+
+    // Skip lines containing ⎿ anywhere (tool indent marker used in tool result previews)
+    if (stripped.includes('\u23BF') || stripped.includes('⎿')) continue;
+
+    // Skip Claude Code tool display lines: "Read N file…", "Write N file…", etc.
+    // These show Claude's tool usage in the TUI but are not real output
+    if (/^(?:Read|Write|Edit|List|Search|Run|Bash|Glob|Grep|Todo|Web)\s+\d*\s*\w*\s*\u2026/i.test(stripped)) continue;
+
+    // Skip common single tool-status words that appear alone after ANSI strip
+    if (/^(?:Wait|Run(?:ning)?|Read(?:ing)?|Writ(?:ing|e)|List(?:ing)?|Search(?:ing)?)\s*$/.test(stripped)) continue;
 
     // Skip terminal prompt lines: ~/path ❯ ... or lone ❯
     // Handles spaces in path (after ANSI strip) e.g. "~/itachi/itachi-memory ❯ 0❯ ..."
@@ -113,7 +123,7 @@ function filterTuiNoise(text: string): string {
 
     // Skip ctrl key hints (both spaced and compressed forms)
     if (/^ctrl\+[a-z] to /i.test(stripped) || /ctrl\+[a-z]to[a-z]/i.test(stripped)) continue;
-    if (/ctrl\+o to expand|ctrl\+oto\s*expand|ctrl\+otoexpand|\(ctrl\+o\)/i.test(stripped)) continue;
+    if (/ctrl\+o\s*to\s*expand|ctrl\+oto\s*expand|ctrl\+otoexpand|\(ctrl\+o\)/i.test(stripped)) continue;
 
     // Skip lines that are purely token/timing stats (e.g. "47s · ↓193 tokens · thought for 1s")
     if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
