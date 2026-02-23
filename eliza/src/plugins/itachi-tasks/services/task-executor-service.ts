@@ -27,15 +27,18 @@ function filterTuiNoise(text: string): string {
   for (const line of lines) {
     const stripped = line.replace(/[╭╮╰╯│─┌┐└┘├┤┬┴┼━┃╋▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓▙▟▛▜▝▞▘▗▖]/g, '').trim();
     if (!stripped) continue;
-    if (/^[✻✶✢✽·*●|>\s]+$/.test(stripped)) continue;
-    if (/^(?:✻|✶|\*|✢|·|✽|●)?\s*(?:Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
+    // Skip lines that are only spinner/progress chars (includes ✳ ⏺)
+    if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
+    // Skip "Churning…", "Crunching…", thinking noise
+    if (/^(?:✻|✶|\*|✢|·|✽|●|✳|⏺)?\s*(?:Churning…|Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
     if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
     if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
-    if ((stripped.match(/Crunching…/g) || []).length >= 2) continue;
+    if ((stripped.match(/(?:Churning…|Crunching…)/g) || []).length >= 2) continue;
     if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
     if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
     if (/^>\s*$/.test(stripped)) continue;
-    kept.push(line);
+    // Push stripped (not raw) line so box chars and whitespace are gone
+    kept.push(stripped);
   }
   return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }

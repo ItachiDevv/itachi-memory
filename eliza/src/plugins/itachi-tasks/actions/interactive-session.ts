@@ -51,17 +51,17 @@ function filterTuiNoise(text: string): string {
   const kept: string[] = [];
 
   for (const line of lines) {
-    // Strip box-drawing and block characters
+    // Strip box-drawing and block characters, then trim whitespace
     const stripped = line.replace(/[╭╮╰╯│─┌┐└┘├┤┬┴┼━┃╋▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓▙▟▛▜▝▞▘▗▖]/g, '').trim();
 
     // Skip empty lines after stripping
     if (!stripped) continue;
 
-    // Skip lines that are only spinner/progress chars
-    if (/^[✻✶✢✽·*●|>\s]+$/.test(stripped)) continue;
+    // Skip lines that are only spinner/progress chars (includes ✳ ⏺)
+    if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
 
-    // Skip "Crunching..." and "(thinking)" and "(thought for ...)" noise
-    if (/^(?:✻|✶|\*|✢|·|✽|●)?\s*(?:Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
+    // Skip "Churning…", "Crunching…", "(thinking)" and "(thought for ...)" noise
+    if (/^(?:✻|✶|\*|✢|·|✽|●|✳|⏺)?\s*(?:Churning…|Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
 
     // Skip status line noise
     if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
@@ -69,8 +69,8 @@ function filterTuiNoise(text: string): string {
     // Skip Claude Code chrome
     if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
 
-    // Skip lines that are mostly repetitive spinner sequences (e.g. "✻Crunching…✶Crunching…*Crunching…")
-    if ((stripped.match(/Crunching…/g) || []).length >= 2) continue;
+    // Skip lines that are mostly repetitive spinner/status sequences
+    if ((stripped.match(/(?:Churning…|Crunching…)/g) || []).length >= 2) continue;
 
     // Skip ctrl key hints
     if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
@@ -81,9 +81,11 @@ function filterTuiNoise(text: string): string {
     // Skip prompt lines (just "> " with nothing meaningful)
     if (/^>\s*$/.test(stripped)) continue;
 
-    kept.push(line);
+    // Push the stripped line (not the raw line) so box chars and leading/trailing whitespace are gone
+    kept.push(stripped);
   }
 
+  // Collapse 3+ consecutive blank lines into one
   return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
