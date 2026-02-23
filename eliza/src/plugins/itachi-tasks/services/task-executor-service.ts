@@ -407,10 +407,16 @@ export class TaskExecutorService extends Service {
     // Write prompt to remote temp file via base64 (avoids shell escaping issues)
     const remotePath = await this.writeRemotePrompt(sshTarget, task.id, prompt);
 
-    // Build SSH command: cd to workspace, pipe prompt to itachi --dp
-    // --dp = print mode + dangerously-skip-permissions: reads prompt from stdin,
-    // outputs clean text (no TUI), and exits automatically when done.
-    const sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
+    // Build SSH command: cd to workspace, pipe prompt to claude -p
+    // Print mode reads prompt from stdin, outputs clean text, exits when done.
+    const isWindows = sshService.isWindowsTarget(sshTarget);
+    let sshCommand: string;
+    if (isWindows) {
+      // PowerShell: set env var with $env:, use Get-Content, pipe to claude directly
+      sshCommand = `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | claude --dangerously-skip-permissions -p`;
+    } else {
+      sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
+    }
 
     if (topicId && topicsService) {
       await topicsService.sendToTopic(topicId, `Starting session on ${sshTarget}...\nWorkspace: ${workspace}\nEngine: ${engineCmd}`);
@@ -508,17 +514,29 @@ export class TaskExecutorService extends Service {
   private async writeRemotePrompt(sshTarget: string, taskId: string, prompt: string): Promise<string> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
     const shortId = taskId.substring(0, 8);
-    const remotePath = `/tmp/itachi-prompts/${shortId}.txt`;
+    const isWindows = sshService.isWindowsTarget(sshTarget);
 
-    // Base64 encode and decode on remote to avoid shell escaping issues
     const b64 = Buffer.from(prompt).toString('base64');
-    await sshService.exec(
-      sshTarget,
-      `mkdir -p /tmp/itachi-prompts && echo '${b64}' | base64 -d > ${remotePath}`,
-      10_000,
-    );
 
-    return remotePath;
+    if (isWindows) {
+      // PowerShell: use $env:TEMP and [System.Convert] for base64 decode
+      const remotePath = `$env:TEMP\\itachi-prompts\\${shortId}.txt`;
+      await sshService.exec(
+        sshTarget,
+        `New-Item -ItemType Directory -Force -Path $env:TEMP\\itachi-prompts | Out-Null; [System.IO.File]::WriteAllText("$env:TEMP\\itachi-prompts\\${shortId}.txt", [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}')))`,
+        10_000,
+      );
+      // Return the literal path that PowerShell will expand at runtime
+      return `$env:TEMP\\itachi-prompts\\${shortId}.txt`;
+    } else {
+      const remotePath = `/tmp/itachi-prompts/${shortId}.txt`;
+      await sshService.exec(
+        sshTarget,
+        `mkdir -p /tmp/itachi-prompts && echo '${b64}' | base64 -d > ${remotePath}`,
+        10_000,
+      );
+      return remotePath;
+    }
   }
 
   /**
@@ -548,9 +566,12 @@ export class TaskExecutorService extends Service {
     // Write input to remote file
     const remotePath = await this.writeRemotePrompt(sshTarget, `${shortId}-resume`, input);
 
-    // Resume with itachi --cds (continue dangerously skip)
+    // Resume with continue + dangerously skip + print mode
     const engineCmd = await this.resolveEngineCommand(sshTarget);
-    const sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
+    const isWindows = sshService.isWindowsTarget(sshTarget);
+    const sshCommand = isWindows
+      ? `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | claude --continue --dangerously-skip-permissions -p`
+      : `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
 
     if (topicId && topicsService) {
       await topicsService.sendToTopic(topicId, `Resuming session...\nInput: ${input.substring(0, 100)}`);
