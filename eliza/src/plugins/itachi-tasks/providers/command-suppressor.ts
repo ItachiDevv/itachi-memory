@@ -89,9 +89,10 @@ Select ONLY the TELEGRAM_COMMANDS action with empty text. The flow handler does 
           if (browsingSessionMap.has(threadId)) {
             return {
               text: `## CRITICAL: Directory Browsing Session Active — DO NOT REPLY
-The user is navigating directories in a browsing session. The evaluator will handle this input.
-DO NOT generate any <text>. Leave <text> COMPLETELY EMPTY. Select the IGNORE action.
-Any text you generate will be confusing noise alongside the directory listing.`,
+The user is navigating directories in a browsing session. The evaluator handles this input.
+DO NOT select the REPLY action. DO NOT generate any <text>. Leave <text> COMPLETELY EMPTY.
+Select the TELEGRAM_COMMANDS action with empty text. The directory browser handles everything.
+Any text you generate will cause a confusing DUPLICATE response. Output NOTHING.`,
               values: { suppressResponse: 'true', activeBrowsing: 'true' },
               data: { threadId },
             };
@@ -100,8 +101,9 @@ Any text you generate will be confusing noise alongside the directory listing.`,
             return {
               text: `## CRITICAL: Interactive SSH Session Active — DO NOT REPLY
 The user is interacting with a live SSH session. Their input is piped to the remote process.
-DO NOT generate any <text>. Leave <text> COMPLETELY EMPTY. Select the IGNORE action.
-Any text you generate will be confusing noise alongside the session output.`,
+DO NOT select the REPLY action. DO NOT generate any <text>. Leave <text> COMPLETELY EMPTY.
+Select the TELEGRAM_COMMANDS action with empty text. The session handler does everything.
+Any text you generate will cause a confusing DUPLICATE response. Output NOTHING.`,
               values: { suppressResponse: 'true', activeSession: 'true' },
               data: { threadId },
             };

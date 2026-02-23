@@ -73,10 +73,12 @@ function filterTuiNoise(text: string): string {
     if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
 
     // Skip thinking/thought lines: optional icon (including ❯) + (thinking|thought for N|Ns)
-    // Also catches partial fragments like "ought for2s)" that result from ANSI stripping
-    if (/^(?:[✻✶✢✽✳⏺❯·*●]\s*)*\(?(?:thinking|thought for|ought for|hought for|\d+s\))/i.test(stripped)) continue;
+    // Also catches partial fragments like "ought for2s)", "inking)", "nking)" from ANSI splitting
+    if (/^(?:[✻✶✢✽✳⏺❯·*●]\s*)*\(?(?:thinking|thought for|ought for|hought for|hinking|inking|nking|king\b|\d+s\))/i.test(stripped)) continue;
     // Short lines that are purely timing fragments: "2s)" "for 2s)" etc.
     if (/^(?:for\s*)?\d+s\)\s*$/.test(stripped)) continue;
+    // Tail fragment of "(thinking)": anything ending with ...king) or ...ing) alone
+    if (/^[a-z]{1,6}king\)\s*$|^[a-z]{1,4}ing\)\s*$/.test(stripped)) continue;
 
     // Skip spinner-only lines: optional icons/spaces (including ❯) then CapWord…
     if (/^(?:[✻✶✢✽✳⏺❯⎿·*●\s]*)([A-Z][a-z]+)\u2026/.test(stripped)) continue;
@@ -95,8 +97,8 @@ function filterTuiNoise(text: string): string {
     if (/^(?:Wait|Run(?:ning)?|Read(?:ing)?|Writ(?:ing|e)|List(?:ing)?|Search(?:ing)?)\s*$/.test(stripped)) continue;
 
     // Skip terminal prompt lines: ~/path ❯ ... or lone ❯
-    // Handles spaces in path (after ANSI strip) e.g. "~/itachi/itachi-memory ❯ 0❯ ..."
-    if (/^~[\w/\s.-]*\s*❯|^❯\s*$/.test(stripped)) continue;
+    // Use loose match (.*?) because ANSI stripping may leave invisible chars before ❯
+    if (/^~.*?❯|^❯\s*$/.test(stripped)) continue;
 
     // Skip Claude Code session uptime lines — the (NNNd NNh NNm) pattern appears ONLY in
     // the TUI status bar and never in real code output. This catches the full startup prompt
