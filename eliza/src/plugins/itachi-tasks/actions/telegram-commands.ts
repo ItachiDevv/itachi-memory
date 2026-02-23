@@ -119,8 +119,18 @@ export const telegramCommandsAction: Action = {
         return { success: true, data: { handledByEvaluator: true } };
       }
       if (!text.startsWith('/')) {
-        // If evaluator already handled this (browsing nav / active session pipe),
-        // return early without invoking callback — suppresses LLM chatter response.
+        // Suppress LLM chatter for non-command messages in browsing/session topics.
+        // Check this directly here because the evaluator (which sets _topicRelayQueued)
+        // may not have run yet when handler() executes, causing {success: false} fallback
+        // that triggers ElizaOS to send the LLM-generated text anyway.
+        if (!(message.content as Record<string, unknown>)._topicRelayQueued) {
+          const suppressThreadId = await getTopicThreadId(runtime, message);
+          if (suppressThreadId !== null && (browsingSessionMap.has(suppressThreadId) || activeSessions.has(suppressThreadId))) {
+            runtime.logger.info(`[telegram-commands] suppressing LLM for topic input (threadId=${suppressThreadId})`);
+            return { success: true };
+          }
+        }
+        // Also check flag set by evaluator (belt-and-suspenders)
         if ((message.content as Record<string, unknown>)._topicRelayQueued) {
           runtime.logger.info(`[telegram-commands] suppressing LLM for _topicRelayQueued non-command message`);
           return { success: true };
