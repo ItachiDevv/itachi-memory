@@ -51,9 +51,13 @@ export const topicInputRelayEvaluator: Evaluator = {
 
     // Check if this message is in a Telegram forum topic by looking up the room
     const threadId = await getTopicThreadId(runtime, message);
+    const text = ((message.content?.text as string) || '').substring(0, 30);
     if (threadId !== null) {
-      const text = ((message.content?.text as string) || '').substring(0, 30);
       runtime.logger.info(`[topic-relay] validate: threadId=${threadId} text="${text}" browsingSessions=${browsingSessionMap.size} activeSessions=${activeSessions.size}`);
+    } else {
+      // Debug: log when threadId is null to diagnose relay failures
+      const room = await runtime.getRoom(message.roomId);
+      runtime.logger.info(`[topic-relay] validate: threadId=null text="${text}" roomId=${message.roomId} channelId=${room?.channelId || 'none'} hasMeta=${!!room?.metadata}`);
     }
     return threadId !== null;
   },
