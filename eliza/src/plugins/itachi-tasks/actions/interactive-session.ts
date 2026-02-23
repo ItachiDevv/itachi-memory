@@ -63,17 +63,20 @@ function filterTuiNoise(text: string): string {
     // Skip "Churning…", "Crunching…", "(thinking)" and "(thought for ...)" noise
     if (/^(?:✻|✶|\*|✢|·|✽|●|✳|⏺)?\s*(?:Churning…|Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
 
-    // Skip status line noise
-    if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
+    // Skip status line noise (both spaced and compressed forms after ANSI strip)
+    if (/bypass permissions|bypasspermission|shift\+tab to cycle|shift\+tabtocycle|esc to interrupt|esctointerrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
+
+    // Skip bypass permissions icon (⏵⏵ is Claude Code's permission mode indicator)
+    if (stripped.includes('⏵')) continue;
 
     // Skip Claude Code chrome
-    if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
+    if (/Tips for getting started|Tipsforgettingstarted|Welcome back|Welcomeback|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
 
     // Skip lines that are mostly repetitive spinner/status sequences
     if ((stripped.match(/(?:Churning…|Crunching…)/g) || []).length >= 2) continue;
 
-    // Skip ctrl key hints
-    if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
+    // Skip ctrl key hints (both spaced and compressed forms)
+    if (/^ctrl\+[a-z] to /i.test(stripped) || /ctrl\+[a-z]to[a-z]/i.test(stripped)) continue;
 
     // Skip lines that are purely token/timing stats (e.g. "47s · ↓193 tokens · thought for 1s")
     if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
