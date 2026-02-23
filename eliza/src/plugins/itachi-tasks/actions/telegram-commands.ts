@@ -132,12 +132,14 @@ export const telegramCommandsAction: Action = {
       }
 
       // /session <machine> [prompt] → delegate to INTERACTIVE_SESSION action handler.
-      // Set _sessionSpawned flag BEFORE calling so INTERACTIVE_SESSION handler
-      // (which also runs due to ElizaOS multi-action dispatch) skips itself,
-      // preventing duplicate topic creation.
+      // Set _sessionSpawned flag AFTER the handler returns so the INTERACTIVE_SESSION
+      // handler (which also runs due to ElizaOS multi-action dispatch) skips itself,
+      // preventing duplicate topic creation. Must be set AFTER so the delegation call
+      // itself doesn't see the flag and bail out immediately.
       if (text.startsWith('/session ')) {
+        const result = await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
         (message.content as Record<string, unknown>)._sessionSpawned = true;
-        return await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
+        return result;
       }
 
       // /delete [done|failed|all] — cleanup task topics (renamed from /close)
