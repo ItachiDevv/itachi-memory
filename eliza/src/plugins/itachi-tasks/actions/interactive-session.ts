@@ -3,7 +3,7 @@ import { SSHService, type InteractiveSession } from '../services/ssh-service.js'
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { TaskService } from '../services/task-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
-import { stripBotMention } from '../utils/telegram.js';
+import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import {
   browsingSessionMap,
@@ -285,6 +285,11 @@ export const interactiveSessionAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+    // Don't spawn new sessions in an already-active session topic
+    if (message.content?.source === 'telegram') {
+      const threadId = await getTopicThreadId(runtime, message);
+      if (threadId !== null && activeSessions.has(threadId)) return false;
+    }
     const text = stripBotMention(message.content?.text || '');
     // Explicit commands
     if (/^\/(session|chat)\s+/i.test(text)) return true;

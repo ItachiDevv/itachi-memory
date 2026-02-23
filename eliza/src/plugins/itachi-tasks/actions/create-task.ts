@@ -5,6 +5,7 @@ import { MachineRegistryService } from '../services/machine-registry.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getFlow } from '../shared/conversation-flows.js';
+import { activeSessions } from '../shared/active-sessions.js';
 
 export const createTaskAction: Action = {
   name: 'CREATE_TASK',
@@ -63,11 +64,13 @@ export const createTaskAction: Action = {
     // Reject any slash command that isn't /task — they belong to other actions
     if (/^\/\S/.test(text) && !text.startsWith('/task')) return false;
 
-    // If message is in a Telegram topic linked to a task, defer to topic-reply
+    // If message is in a Telegram topic linked to an active session or task, skip
     if (message.content?.source === 'telegram') {
       try {
         const threadId = await getTopicThreadId(runtime, message);
         if (threadId) {
+          // Session topics: topic-input-relay handles these
+          if (activeSessions.has(threadId)) return false;
           const taskService = runtime.getService<TaskService>('itachi-tasks');
           if (taskService) {
             const activeTasks = await taskService.getActiveTasks();

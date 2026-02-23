@@ -4,6 +4,7 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { TaskExecutorService } from '../services/task-executor-service.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
+import { activeSessions } from '../shared/active-sessions.js';
 
 /**
  * Detects when a user replies in a Telegram forum topic associated with an Itachi task.
@@ -47,6 +48,9 @@ export const topicReplyAction: Action = {
     // Only trigger for messages in a forum topic
     const threadId = await getTopicThreadId(runtime, message);
     if (!threadId) return false;
+
+    // Session topics are handled exclusively by topic-input-relay
+    if (activeSessions.has(threadId)) return false;
 
     // Skip messages that are explicit commands handled by other actions
     const text = (message.content?.text as string)?.trim() || '';
