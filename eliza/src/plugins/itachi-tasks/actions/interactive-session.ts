@@ -175,17 +175,18 @@ export async function spawnSessionInTopic(
 ): Promise<string | null> {
   const isWindows = sshService.isWindowsTarget(target);
   const escapedPrompt = prompt.replace(/'/g, "'\\''");
-  // Windows: use `claude -p` (print mode) for clean pipe-friendly output
-  // without TUI formatting. Unix: use the engine wrapper (itachi/itachic/itachig).
+  // Always use print mode (-p) for automated sessions — it outputs clean text
+  // (no TUI formatting), reads prompts from args/stdin, and exits when done.
   let sshCommand: string;
   if (isWindows) {
     sshCommand = `cd ${repoPath} && claude -p --dangerously-skip-permissions '${escapedPrompt}'`;
   } else {
     // engineCommand may already include flags like --ds or --cds (from callback handler)
+    // Add -p for print mode so the session exits cleanly after processing.
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     sshCommand = hasFlag
-      ? `cd ${repoPath} && ${engineCommand} '${escapedPrompt}'`
-      : `cd ${repoPath} && ${engineCommand} --ds '${escapedPrompt}'`;
+      ? `cd ${repoPath} && ${engineCommand} -p '${escapedPrompt}'`
+      : `cd ${repoPath} && ${engineCommand} --dp '${escapedPrompt}'`;
   }
 
   await topicsService.sendToTopic(

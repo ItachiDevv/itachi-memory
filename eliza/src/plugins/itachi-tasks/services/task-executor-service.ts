@@ -407,8 +407,10 @@ export class TaskExecutorService extends Service {
     // Write prompt to remote temp file via base64 (avoids shell escaping issues)
     const remotePath = await this.writeRemotePrompt(sshTarget, task.id, prompt);
 
-    // Build SSH command: cd to workspace, pipe prompt to itachi --ds
-    const sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --ds`;
+    // Build SSH command: cd to workspace, pipe prompt to itachi --dp
+    // --dp = print mode + dangerously-skip-permissions: reads prompt from stdin,
+    // outputs clean text (no TUI), and exits automatically when done.
+    const sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
 
     if (topicId && topicsService) {
       await topicsService.sendToTopic(topicId, `Starting session on ${sshTarget}...\nWorkspace: ${workspace}\nEngine: ${engineCmd}`);
