@@ -1,3 +1,4 @@
+// autonomous pipeline working
 import type { Character } from '@elizaos/core';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
