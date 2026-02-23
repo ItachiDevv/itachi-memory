@@ -111,7 +111,10 @@ export const topicInputRelayEvaluator: Evaluator = {
       // Check if this topic belongs to an active interactive session first
       const session = activeSessions.get(threadId);
       if (session) {
-        session.handle.write(text + '\n');
+        // Use \r (carriage return) to simulate pressing Enter in Claude TUI's raw mode.
+        // The TUI reads raw keystrokes via the PTY — \n just adds a newline to the
+        // input buffer, while \r triggers the "submit" action.
+        session.handle.write(text + '\r');
         // Also record in transcript for post-session analysis
         session.transcript.push({ type: 'user_input', content: text, timestamp: Date.now() });
         (message.content as Record<string, unknown>)._topicRelayQueued = true;
