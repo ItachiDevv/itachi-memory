@@ -88,6 +88,15 @@ function filterTuiNoise(text: string): string {
     // Handles spaces in path (after ANSI strip) e.g. "~/itachi/itachi-memory ❯ 0❯ ..."
     if (/^~[\w/\s.-]*\s*❯|^❯\s*$/.test(stripped)) continue;
 
+    // Skip Claude Code session uptime lines — the (NNNd NNh NNm) pattern appears ONLY in
+    // the TUI status bar and never in real code output. This catches the full startup prompt
+    // line even when invisible chars prevent the path regex from matching.
+    if (/\(\d+d\s+\d+h/.test(stripped)) continue;
+
+    // Broader prompt line detection as fallback (catches invisible-char edge cases):
+    // any line that looks like "~/path ❯ text ❯ text" is always TUI chrome
+    if (/~\/\S+\s*[\u276f>]\s*\d+\s*[\u276f>]/.test(stripped)) continue;
+
     // Skip status line noise (both spaced and compressed forms after ANSI strip)
     if (/bypass permissions|bypasspermission|shift\+tab to cycle|shift\+tabtocycle|esc to interrupt|esctointerrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
 
