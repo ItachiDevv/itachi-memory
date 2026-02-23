@@ -103,8 +103,14 @@ function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
 
     let offset = 0;
     let consecutiveErrors = 0;
+    let loopIterations = 0;
+
+    // Wait for stale 409s from old container to clear (Telegram long-poll timeout ~30s)
+    runtime.logger.info('[polling-monitor] Waiting 35s for stale polling to clear...');
+    await new Promise(r => setTimeout(r, 35_000));
 
     while (manualPollingActive) {
+      loopIterations++;
       try {
         const updates = await bot.telegram.callApi('getUpdates', {
           offset,
@@ -127,7 +133,13 @@ function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
         }
       } catch (err: any) {
         if (err?.message?.includes('409')) {
-          // Native polling came back — stop our manual loop
+          if (loopIterations <= 3) {
+            // Early 409s are stale conflicts from old container — retry after delay
+            runtime.logger.warn(`[polling-monitor] Stale 409 on iteration ${loopIterations}, retrying in 10s...`);
+            await new Promise(r => setTimeout(r, 10_000));
+            continue;
+          }
+          // Later 409s mean native polling actually recovered
           runtime.logger.info('[polling-monitor] Native polling active (409), stopping manual loop');
           manualPollingActive = false;
           return;
