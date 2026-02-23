@@ -59,7 +59,22 @@ export const topicInputRelayEvaluator: Evaluator = {
       const room = await runtime.getRoom(message.roomId);
       runtime.logger.info(`[topic-relay] validate: threadId=null text="${text}" roomId=${message.roomId} channelId=${room?.channelId || 'none'} hasMeta=${!!room?.metadata}`);
     }
-    return threadId !== null;
+    if (threadId === null) return false;
+
+    // Process browsing sessions directly in validate() since evaluator handlers
+    // don't reliably run in ElizaOS when the LLM chooses IGNORE.
+    const content = message.content as Record<string, unknown>;
+    const fullText = ((message.content?.text as string) || '').trim();
+    if (!content._topicRelayQueued && fullText && !fullText.startsWith('/')) {
+      const browsing = browsingSessionMap.get(threadId);
+      if (browsing) {
+        content._topicRelayQueued = true;
+        handleBrowsingInput(runtime, browsing, fullText, threadId)
+          .catch(err => runtime.logger.error(`[topic-relay] Browsing error in validate: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    }
+
+    return true;
   },
 
   handler: async (runtime: IAgentRuntime, message: Memory): Promise<void> => {
