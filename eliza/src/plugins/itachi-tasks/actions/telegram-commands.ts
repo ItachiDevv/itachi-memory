@@ -12,6 +12,7 @@ import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
   flowKey, conversationFlows, type ConversationFlow,
 } from '../shared/conversation-flows.js';
+import { interactiveSessionAction } from './interactive-session.js';
 
 /**
  * Handles /recall, /repos, and /machines Telegram commands.
@@ -20,7 +21,7 @@ import {
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete, /close, /close_done, /close_failed, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, and interactive /task and /session flows',
+  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete, /close, /close_done, /close_failed, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, interactive /task flows, /session (no args, shows machine picker), and /session <machine> (direct session on named target)',
   similes: ['help', 'show commands', 'recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'delete done topics', 'delete failed topics', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'unteach', 'forget rule', 'spawn agent', 'list agents', 'message agent', 'engine priority', 'show engines', 'set engines'],
   examples: [
     [
@@ -69,8 +70,8 @@ export const telegramCommandsAction: Action = {
     const taskMatch = text.match(/^\/task\s+(\S+)$/);
     if (taskMatch && !taskMatch[1].includes(' ')) return true;
 
-    // /session (no args) → interactive flow
-    if (text === '/session') return true;
+    // /session (no args or with machine arg) → interactive flow
+    if (text === '/session' || text.startsWith('/session ')) return true;
 
     // /delete command (replaces /close for topic cleanup)
     if (text === '/delete' || text.startsWith('/delete ')) return true;
@@ -128,6 +129,11 @@ export const telegramCommandsAction: Action = {
       // /session (no args) → interactive flow
       if (text === '/session') {
         return await handleSessionFlow(runtime, message, callback);
+      }
+
+      // /session <machine> [prompt] → delegate to INTERACTIVE_SESSION action handler
+      if (text.startsWith('/session ')) {
+        return await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
       }
 
       // /delete [done|failed|all] — cleanup task topics (renamed from /close)
