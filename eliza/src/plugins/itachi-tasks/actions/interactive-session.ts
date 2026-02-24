@@ -309,11 +309,13 @@ export async function spawnSessionInTopic(
     target,
     sshCommand,
     (chunk: string) => {
+      // Debug: log truly raw bytes BEFORE any processing
+      runtime.logger.info(`[session] RAW ${chunk.length}b`);
       const normalized = normalizePtyChunk(chunk);
       const stripped = stripAnsi(normalized);
-      // Debug: log raw data before filtering to diagnose empty output issues
+      // Debug: log after ANSI strip
       if (stripped.trim()) {
-        runtime.logger.info(`[session] raw ${stripped.length}b: "${stripped.substring(0, 120).replace(/\n/g, '\\n')}"`);
+        runtime.logger.info(`[session] stripped ${stripped.length}b: "${stripped.substring(0, 120).replace(/\n/g, '\\n')}"`);
       }
       const clean = filterTuiNoise(stripped);
       if (!clean) return;
