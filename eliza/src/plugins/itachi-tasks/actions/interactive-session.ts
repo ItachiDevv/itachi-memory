@@ -430,9 +430,10 @@ export async function spawnSessionInTopic(
     // Stream-JSON mode: structured NDJSON output, no TUI noise.
     // Uses --output-format stream-json for clean programmatic output.
     // The --input-format stream-json allows sending follow-up messages as JSON on stdin.
+    // --verbose is required when the wrapper uses --print mode (itachi wrapper).
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --output-format stream-json --input-format stream-json '${escapedPrompt}'`;
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --verbose --output-format stream-json --input-format stream-json '${escapedPrompt}'`;
   } else {
     // Legacy TUI mode (fallback)
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
