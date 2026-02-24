@@ -161,7 +161,7 @@ export class SSHService extends Service {
     onStderr: (chunk: string) => void,
     onExit: (code: number) => void,
     timeoutMs: number = 600_000,
-    options?: { usePty?: boolean },
+    options?: { usePty?: boolean; closeStdin?: boolean },
   ): InteractiveSession | null {
     const target = this.targets.get(targetName.toLowerCase());
     if (!target) return null;
@@ -196,9 +196,10 @@ export class SSHService extends Service {
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const sessionId = `${targetName}-${proc.pid || Date.now()}`;
 
-    // Windows uses `claude -p` (print mode) which waits for stdin EOF
-    // before processing. Close stdin immediately so it can proceed.
-    if (this.isWindowsTarget(targetName)) {
+    // `claude -p` (print mode) waits for stdin EOF before processing.
+    // Close stdin immediately so it can proceed.
+    // Applies to: Windows (always -p), stream-json mode (uses -p for pipe output).
+    if (this.isWindowsTarget(targetName) || options?.closeStdin) {
       proc.stdin?.end();
     }
 

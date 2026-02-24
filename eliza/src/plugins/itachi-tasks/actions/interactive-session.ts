@@ -526,7 +526,7 @@ export async function spawnSessionInTopic(
   };
 
   // ── Spawn the SSH session ──────────────────────────────────────
-  // Stream-json: no PTY needed (clean pipes). TUI: needs PTY for line buffering.
+  // Stream-json: no PTY, close stdin (claude -p waits for EOF). TUI: needs PTY.
   const handle = sshService.spawnInteractiveSession(
     target,
     sshCommand,
@@ -534,7 +534,7 @@ export async function spawnSessionInTopic(
     onStderr,
     onExit,
     600_000,
-    { usePty: mode === 'tui' },
+    { usePty: mode === 'tui', closeStdin: mode === 'stream-json' },
   );
 
   if (!handle) {
