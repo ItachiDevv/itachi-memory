@@ -110,7 +110,7 @@ export async function resolveRepoPath(
     const isWindows = sshService.isWindowsTarget(target);
     const escapedName = matched.name.replace(/'/g, "''");
     const findCmd = isWindows
-      ? `if (Test-Path '${base}/${escapedName}') { Write-Output '${base}/${escapedName}' } else { Write-Output 'MISSING' }`
+      ? `if (Test-Path '${base}/${escapedName}') { Write-Output (Resolve-Path '${base}/${escapedName}').Path } else { Write-Output 'MISSING' }`
       : `found=$(find ${base} -maxdepth 1 -iname '${matched.name.replace(/'/g, "'\\''")}' -type d 2>/dev/null | head -1) && [ -n "$found" ] && echo "$found" || echo MISSING`;
     const check = await sshService.exec(target, findCmd, 5_000);
     const output = (check.stdout || '').trim();
@@ -170,7 +170,7 @@ export async function resolveRepoPathByProject(
     const isWindows = sshService.isWindowsTarget(target);
     const escapedProject = project.replace(/'/g, "''");
     const findCmd = isWindows
-      ? `if (Test-Path '${base}/${escapedProject}') { Write-Output '${base}/${escapedProject}' } else { Write-Output 'MISSING' }`
+      ? `if (Test-Path '${base}/${escapedProject}') { Write-Output (Resolve-Path '${base}/${escapedProject}').Path } else { Write-Output 'MISSING' }`
       : `found=$(find ${base} -maxdepth 1 -iname '${project.replace(/'/g, "'\\''")}' -type d 2>/dev/null | head -1) && [ -n "$found" ] && echo "$found" || echo MISSING`;
     const check = await sshService.exec(target, findCmd, 5_000);
     const output = (check.stdout || '').trim();

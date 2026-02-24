@@ -289,7 +289,11 @@ export class TaskExecutorService extends Service {
       // Try default fallback
       const base = getStartingDir(sshTarget);
       const fallback = `${base}/${task.project}`;
-      const check = await sshService.exec(sshTarget, `test -d ${fallback} && echo EXISTS || echo MISSING`, 5_000);
+      const isWindowsFallback = sshService.isWindowsTarget(sshTarget);
+      const checkCmd = isWindowsFallback
+        ? `if (Test-Path '${fallback}') { Write-Output 'EXISTS' } else { Write-Output 'MISSING' }`
+        : `test -d ${fallback} && echo EXISTS || echo MISSING`;
+      const check = await sshService.exec(sshTarget, checkCmd, 5_000);
       if (check.stdout?.trim() !== 'EXISTS') {
         return null;
       }
