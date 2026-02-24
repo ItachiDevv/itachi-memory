@@ -275,13 +275,39 @@ export const telegramCommandsAction: Action = {
       }
 
       // /close [done|failed|all] — hidden alias for /delete in main chat (backward compat)
-      // NOTE: bare /close inside a topic is handled by topic-input-relay evaluator (closes the topic)
+      // Bare /close inside a topic closes that topic (+ kills active session).
       if (text === '/close' || text.startsWith('/close ')) {
-        // Skip bare /close inside a topic — evaluator handles it as "close this topic"
+        // Bare /close inside a topic → close topic & kill session
         if (text === '/close') {
           const threadId = await getTopicThreadId(runtime, message);
           if (threadId) {
-            return { success: true, data: { handledByEvaluator: true, topicClose: true } };
+            const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+            if (topicsService) {
+              // Kill active SSH session if any
+              const session = activeSessions.get(threadId);
+              if (session) {
+                try { session.handle.kill(); } catch { /* best-effort */ }
+                activeSessions.delete(threadId);
+                runtime.logger.info(`[telegram-commands] /close killed session ${session.sessionId} in topic ${threadId}`);
+              }
+              // Clean up browsing session if any
+              browsingSessionMap.delete(threadId);
+
+              // Resolve task status for topic name
+              const taskService = runtime.getService<TaskService>('itachi-tasks');
+              let statusName: string | undefined;
+              if (taskService) {
+                const recentTasks = await taskService.listTasks({ limit: 50 });
+                const task = recentTasks.find((t: any) => t.telegram_topic_id === threadId);
+                if (task) {
+                  const emoji = task.status === 'completed' ? '\u2705' : task.status === 'failed' ? '\u274c' : '\u23f9\ufe0f';
+                  statusName = `${emoji} ${generateTaskTitle(task.description)} | ${task.project}`;
+                }
+              }
+              await topicsService.sendToTopic(threadId, 'Closing topic...');
+              await topicsService.closeTopic(threadId, statusName);
+            }
+            return { success: true, data: { topicClosed: true } };
           }
         }
         const sub = text.substring('/close'.length).trim().replace(/^[-_]/, '');
