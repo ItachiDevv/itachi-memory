@@ -13,7 +13,7 @@ import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
   flowKey, conversationFlows, type ConversationFlow,
 } from '../shared/conversation-flows.js';
-import { interactiveSessionAction } from './interactive-session.js';
+import { interactiveSessionAction, wrapStreamJsonInput } from './interactive-session.js';
 
 /**
  * Handles /recall, /repos, and /machines Telegram commands.
@@ -65,13 +65,31 @@ export const telegramCommandsAction: Action = {
       runtime.logger.info(`[telegram-commands] validate: text="${text.substring(0, 30)}" chatId=${chatId} flowStep=${flow?.step || 'none'} flowsCount=${conversationFlows.size}`);
       if (flow && flow.step === 'await_description') return true;
       // Claim non-command messages in active browsing or session topics to prevent
-      // LLM from generating its own chatter. The evaluator (TOPIC_INPUT_RELAY) already
-      // handles these inputs; we claim here so the action pipeline returns early without
-      // invoking the LLM response callback.
+      // LLM from generating its own chatter. CRITICAL: Also pipe session input HERE
+      // because the TOPIC_INPUT_RELAY evaluator runs AFTER the action pipeline,
+      // which can take minutes (LLM calls, providers). By then the session may time out.
       const threadId = await getTopicThreadId(runtime, message);
-      if (threadId !== null && (browsingSessionMap.has(threadId) || activeSessions.has(threadId))) {
-        runtime.logger.info(`[telegram-commands] validate: claiming topic input (threadId=${threadId}) to suppress LLM chatter`);
-        return true;
+      if (threadId !== null) {
+        const session = activeSessions.get(threadId);
+        if (session) {
+          // Pipe input immediately — don't wait for evaluator
+          const content = message.content as Record<string, unknown>;
+          if (!content._topicRelayQueued) {
+            content._topicRelayQueued = true;
+            if (session.mode === 'stream-json') {
+              session.handle.write(wrapStreamJsonInput(text));
+            } else {
+              session.handle.write(text + '\r');
+            }
+            session.transcript.push({ type: 'user_input', content: text, timestamp: Date.now() });
+            runtime.logger.info(`[telegram-commands] validate: piped input to session ${session.sessionId} (${session.mode}): "${text.substring(0, 40)}"`);
+          }
+          return true;
+        }
+        if (browsingSessionMap.has(threadId)) {
+          runtime.logger.info(`[telegram-commands] validate: claiming browsing topic input (threadId=${threadId})`);
+          return true;
+        }
       }
       return false;
     }
