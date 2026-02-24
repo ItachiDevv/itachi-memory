@@ -3,10 +3,10 @@ import { SSHService } from './ssh-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import { TaskService } from './task-service.js';
 import { MachineRegistryService } from './machine-registry.js';
-import { listRemoteDirectory } from '../utils/directory-browser.js';
+import { listRemoteDirectory, browsingSessionMap } from '../utils/directory-browser.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { resolveSSHTarget } from '../shared/repo-utils.js';
-import { spawnSessionInTopic } from '../actions/interactive-session.js';
+import { spawnSessionInTopic, activeSessions } from '../actions/interactive-session.js';
 import {
   conversationFlows,
   flowKey,
@@ -73,6 +73,11 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
         // Start polling health monitor — recovers from 409 Conflict kills
         startPollingHealthMonitor(runtime, bot);
 
+        // Monkey-patch bot.telegram.sendMessage to suppress LLM chatter in
+        // browsing/session topics. Our own code uses apiCall() (direct HTTP),
+        // while ElizaOS LLM responses go through bot.telegram.sendMessage().
+        patchSendMessageForChatterSuppression(runtime, bot);
+
         runtime.logger.info('[callback-handler] Registered Telegram callback_query handler');
         return;
       }
@@ -83,6 +88,31 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
   }
 
   runtime.logger.warn('[callback-handler] Could not find Telegram bot instance after retries');
+}
+
+/**
+ * Monkey-patch bot.telegram.sendMessage to suppress LLM chatter in
+ * browsing/session topics. ElizaOS core sometimes makes multiple LLM calls
+ * for a single message, and one of them may generate text that leaks through
+ * despite the action handler's suppression. Our own code (sendToTopic) uses
+ * direct HTTP (apiCall), so this patch only affects ElizaOS's Telegraf path.
+ */
+function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any): void {
+  try {
+    const originalSendMessage = bot.telegram.sendMessage.bind(bot.telegram);
+    bot.telegram.sendMessage = async (chatId: any, text: string, extra?: any) => {
+      const threadId = extra?.message_thread_id;
+      if (threadId && (browsingSessionMap.has(threadId) || activeSessions.has(threadId))) {
+        runtime.logger.info(`[chatter-suppression] Blocked LLM chatter to topic ${threadId}: "${String(text).substring(0, 60)}"`);
+        // Return a fake successful result so ElizaOS doesn't retry
+        return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+      }
+      return originalSendMessage(chatId, text, extra);
+    };
+    runtime.logger.info('[callback-handler] Patched sendMessage for chatter suppression in browsing/session topics');
+  } catch (err: any) {
+    runtime.logger.warn(`[callback-handler] Could not patch sendMessage: ${err?.message}`);
+  }
 }
 
 /**
