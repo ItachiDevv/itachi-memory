@@ -2,7 +2,7 @@ import type { InteractiveSession } from '../services/ssh-service.js';
 import type { TranscriptEntry } from '../utils/transcript-analyzer.js';
 
 /** Session output mode */
-export type SessionMode = 'stream-json' | 'tui' | 'print';
+export type SessionMode = 'stream-json' | 'tui';
 
 export interface ActiveSession {
   sessionId: string;

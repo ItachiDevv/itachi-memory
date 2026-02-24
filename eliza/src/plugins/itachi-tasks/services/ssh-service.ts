@@ -196,10 +196,9 @@ export class SSHService extends Service {
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const sessionId = `${targetName}-${proc.pid || Date.now()}`;
 
-    // `claude -p` (print mode) waits for stdin EOF before processing.
-    // Close stdin immediately so it can proceed.
-    // Applies to: Windows (always -p), stream-json mode (uses -p for pipe output).
-    if (this.isWindowsTarget(targetName) || options?.closeStdin) {
+    // Close stdin only when explicitly requested (e.g. task executor using -p mode).
+    // Interactive sessions keep stdin open for multi-turn input.
+    if (options?.closeStdin) {
       proc.stdin?.end();
     }
 

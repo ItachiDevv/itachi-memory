@@ -413,30 +413,23 @@ export async function spawnSessionInTopic(
   topicId: number,
   project?: string,
 ): Promise<string | null> {
-  const isWindows = sshService.isWindowsTarget(target);
   const escapedPrompt = prompt.replace(/'/g, "'\\''");
 
-  // Determine session mode: stream-json (default), tui (legacy), print (Windows)
+  // Determine session mode: stream-json (default for all platforms), tui (legacy)
   const envMode = process.env.ITACHI_SESSION_MODE?.toLowerCase();
-  const mode: SessionMode = isWindows ? 'print'
-    : envMode === 'tui' ? 'tui'
-    : 'stream-json';
+  const mode: SessionMode = envMode === 'tui' ? 'tui' : 'stream-json';
 
   let sshCommand: string;
-  if (mode === 'print') {
-    // Windows: use `claude -p` (print mode) for clean pipe-friendly output
-    sshCommand = `cd ${repoPath} && claude -p --dangerously-skip-permissions '${escapedPrompt}'`;
-  } else if (mode === 'stream-json') {
-    // Stream-JSON mode: structured NDJSON output, no TUI noise.
-    // Uses -p (print mode) so Claude CLI doesn't start a TUI (which needs a terminal).
-    // --output-format stream-json gives clean NDJSON on stdout.
-    // --verbose is required when combining -p with --output-format=stream-json.
-    // NOTE: Do NOT use --input-format stream-json here. With closeStdin (required for -p),
-    // stdin is closed immediately, and --input-format stream-json makes Claude Code exit
-    // after only outputting system hook messages (it waits for JSON input that never comes).
+  if (mode === 'stream-json') {
+    // Stream-JSON mode: structured NDJSON I/O, multi-turn via stdin.
+    // NO -p flag — session stays alive, reading follow-up prompts from stdin.
+    // --input-format stream-json: accepts JSON messages on stdin (wrapStreamJsonInput).
+    // --output-format stream-json: clean NDJSON on stdout (no TUI noise).
+    // --verbose is required for stream-json output.
+    // Initial prompt is sent via stdin AFTER spawn, not as a CLI argument.
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json '${escapedPrompt}'`;
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --verbose --output-format stream-json --input-format stream-json`;
   } else {
     // Legacy TUI mode (fallback)
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
@@ -528,7 +521,7 @@ export async function spawnSessionInTopic(
   };
 
   // ── Spawn the SSH session ──────────────────────────────────────
-  // Stream-json: no PTY, close stdin (claude -p waits for EOF). TUI: needs PTY.
+  // Stream-json: no PTY, stdin stays OPEN for multi-turn. TUI: needs PTY.
   const handle = sshService.spawnInteractiveSession(
     target,
     sshCommand,
@@ -536,7 +529,7 @@ export async function spawnSessionInTopic(
     onStderr,
     onExit,
     600_000,
-    { usePty: mode === 'tui', closeStdin: mode === 'stream-json' },
+    { usePty: mode === 'tui', closeStdin: false },
   );
 
   if (!handle) {
@@ -544,9 +537,9 @@ export async function spawnSessionInTopic(
     return null;
   }
 
-  // Windows print mode: close stdin immediately (claude -p waits for EOF)
-  if (mode === 'print') {
-    // stdin closing is handled in ssh-service for Windows targets
+  // Send initial prompt via stdin (stream-json input format)
+  if (mode === 'stream-json') {
+    handle.write(wrapStreamJsonInput(prompt));
   }
 
   activeSessions.set(topicId, {
