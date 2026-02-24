@@ -232,6 +232,9 @@ async function handleBrowsingInput(
   text: string,
   threadId: number,
 ): Promise<void> {
+  // Refresh TTL on every interaction so the session doesn't expire mid-browse
+  session.createdAt = Date.now();
+
   runtime.logger.info(`[handleBrowsing] start: threadId=${threadId} target=${session.target} currentPath=${session.currentPath} lastDirCount=${session.lastDirListing.length} text="${text.substring(0, 40)}"`);
 
   const sshService = runtime.getService<SSHService>('ssh');
