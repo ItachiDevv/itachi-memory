@@ -311,6 +311,10 @@ export async function spawnSessionInTopic(
     (chunk: string) => {
       const normalized = normalizePtyChunk(chunk);
       const stripped = stripAnsi(normalized);
+      // Debug: log raw data before filtering to diagnose empty output issues
+      if (stripped.trim()) {
+        runtime.logger.info(`[session] raw ${stripped.length}b: "${stripped.substring(0, 120).replace(/\n/g, '\\n')}"`);
+      }
       const clean = filterTuiNoise(stripped);
       if (!clean) return;
       runtime.logger.info(`[session] stdout ${clean.length}b: "${clean.substring(0, 80)}"`);
