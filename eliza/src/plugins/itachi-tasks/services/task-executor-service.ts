@@ -415,8 +415,8 @@ export class TaskExecutorService extends Service {
     const isWindows = sshService.isWindowsTarget(sshTarget);
     let sshCommand: string;
     if (isWindows) {
-      // PowerShell: set env var with $env:, use Get-Content, pipe to claude directly
-      sshCommand = `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | claude --dangerously-skip-permissions -p`;
+      // PowerShell: set env var with $env:, use Get-Content, pipe to itachi wrapper (--dp = dangerously-skip + print)
+      sshCommand = `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | ${engineCmd} --dp`;
     } else {
       sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
     }
@@ -523,15 +523,20 @@ export class TaskExecutorService extends Service {
     const b64 = Buffer.from(prompt).toString('base64');
 
     if (isWindows) {
-      // PowerShell: use $env:TEMP and [System.Convert] for base64 decode
-      const remotePath = `$env:TEMP\\itachi-prompts\\${shortId}.txt`;
+      // Resolve $env:TEMP to absolute path first (single quotes prevent expansion downstream)
+      const tempResult = await sshService.exec(sshTarget, `Write-Output $env:TEMP`, 5_000);
+      const tempDir = tempResult.stdout?.trim();
+      if (!tempDir || tempDir.includes('$env')) {
+        throw new Error(`Failed to resolve $env:TEMP on ${sshTarget}: got "${tempDir}"`);
+      }
+      const dir = `${tempDir}\\itachi-prompts`;
+      const absPath = `${dir}\\${shortId}.txt`;
       await sshService.exec(
         sshTarget,
-        `New-Item -ItemType Directory -Force -Path $env:TEMP\\itachi-prompts | Out-Null; [System.IO.File]::WriteAllText("$env:TEMP\\itachi-prompts\\${shortId}.txt", [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}')))`,
+        `New-Item -ItemType Directory -Force -Path '${dir}' | Out-Null; [System.IO.File]::WriteAllText('${absPath}', [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64}')))`,
         10_000,
       );
-      // Return the literal path that PowerShell will expand at runtime
-      return `$env:TEMP\\itachi-prompts\\${shortId}.txt`;
+      return absPath;  // e.g. C:\Users\newma\AppData\Local\Temp\itachi-prompts\abc.txt
     } else {
       const remotePath = `/tmp/itachi-prompts/${shortId}.txt`;
       await sshService.exec(
@@ -574,7 +579,7 @@ export class TaskExecutorService extends Service {
     const engineCmd = await this.resolveEngineCommand(sshTarget);
     const isWindows = sshService.isWindowsTarget(sshTarget);
     const sshCommand = isWindows
-      ? `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | claude --continue --dangerously-skip-permissions -p`
+      ? `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | ${engineCmd} --cdp`
       : `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
 
     if (topicId && topicsService) {
