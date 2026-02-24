@@ -131,12 +131,16 @@ function formatToolCallSummary(name: string, input: Record<string, any>): string
 
 /**
  * Wrap user text as a stream-json input message for Claude Code's stdin.
- * Claude Code's --input-format stream-json expects JSON objects on stdin.
+ * Format: {"type":"user","message":{"role":"user","content":[{"type":"text","text":"..."}]}}
+ * Content must be an array of content blocks, not a plain string.
  */
 export function wrapStreamJsonInput(text: string): string {
   const msg = {
     type: 'user',
-    message: { role: 'user', content: text },
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text }],
+    },
   };
   return JSON.stringify(msg) + '\n';
 }
@@ -422,14 +426,15 @@ export async function spawnSessionInTopic(
   let sshCommand: string;
   if (mode === 'stream-json') {
     // Stream-JSON mode: structured NDJSON I/O, multi-turn via stdin.
-    // NO -p flag — session stays alive, reading follow-up prompts from stdin.
-    // --input-format stream-json: accepts JSON messages on stdin (wrapStreamJsonInput).
+    // -p + --input-format stream-json = multi-turn pipe session.
+    // Claude Code keeps reading JSON messages from stdin until EOF.
     // --output-format stream-json: clean NDJSON on stdout (no TUI noise).
-    // --verbose is required for stream-json output.
+    // --verbose is required when combining -p with --output-format stream-json.
     // Initial prompt is sent via stdin AFTER spawn, not as a CLI argument.
+    // CRITICAL: Do NOT close stdin — that would end the session after one turn.
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --verbose --output-format stream-json --input-format stream-json`;
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json`;
   } else {
     // Legacy TUI mode (fallback)
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
