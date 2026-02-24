@@ -20,6 +20,27 @@ function stripAnsi(text: string): string {
         .trim();
 }
 
+/**
+ * Strip itachi wrapper hook output from session result text.
+ * The wrapper's session-start hook (ps1/sh) outputs briefing, sync messages,
+ * and memory context to stdout BEFORE Claude starts. If the wrapper's stdout
+ * isn't redirected to stderr, these leak into the captured session result.
+ */
+function stripHookOutput(text: string): string {
+    return text
+        // Remove [sync] lines from wrapper hook
+        .replace(/^\[sync\].*$/gm, '')
+        // Remove session briefing block
+        .replace(/=== Session Briefing for [\s\S]*?=== End Briefing ===/g, '')
+        // Remove memory context block
+        .replace(/=== Recent Memory Context for [\s\S]*?=== End Memory Context ===/g, '')
+        // Remove SessionStart:compact hook messages
+        .replace(/^SessionStart:compact hook.*$/gm, '')
+        // Clean up excessive blank lines left behind
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
 /** Directory for temp prompt files (avoids shell quoting issues) */
 const PROMPT_DIR = path.join(os.tmpdir(), 'itachi-prompts');
 fs.mkdirSync(PROMPT_DIR, { recursive: true });
@@ -399,8 +420,8 @@ export function spawnClaudeSession(task: Task, workspacePath: string, classifica
                 return;
             }
 
-            // Keep full text — no truncation, let downstream decide how to display
-            const trimmedResult = resultText.trim();
+            // Strip wrapper hook output (briefing, sync messages) from result
+            const trimmedResult = stripHookOutput(resultText);
             const retriable = exitCode !== 0 && isRetriableError(trimmedResult, stderrBuf, exitCode);
 
             resolve({
@@ -495,7 +516,7 @@ export function resumeClaudeSession(
             const exitCode = code ?? 1;
             const durationMs = Date.now() - startTime;
             console.log(`[session] Resume exited with code ${exitCode} for task ${shortId} (${Math.round(durationMs / 1000)}s)`);
-            const trimmed = resultText.trim();
+            const trimmed = stripHookOutput(resultText);
             resolve({
                 sessionId: null,
                 resultText: trimmed || '(no output)',
@@ -738,7 +759,7 @@ export function spawnGeminiSession(task: Task, workspacePath: string, classifica
             const durationMs = Date.now() - startTime;
             console.log(`[session] Gemini exited with code ${exitCode} for task ${shortId} (${Math.round(durationMs / 1000)}s)`);
 
-            const trimmedResult = resultText.trim();
+            const trimmedResult = stripHookOutput(resultText);
             const retriable = exitCode !== 0 && isRetriableError(trimmedResult, stderrBuf, exitCode);
 
             resolve({
