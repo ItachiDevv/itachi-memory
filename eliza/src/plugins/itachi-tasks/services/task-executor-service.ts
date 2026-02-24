@@ -429,8 +429,19 @@ export class TaskExecutorService extends Service {
     const isWindows = sshService.isWindowsTarget(sshTarget);
     let sshCommand: string;
     if (isWindows) {
-      // PowerShell: set env var with $env:, use Get-Content, pipe to itachi wrapper (--dp = dangerously-skip + print)
-      sshCommand = `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | ${engineCmd} --dp`;
+      // Windows: pipe to .cmd batch files doesn't forward stdin to child processes.
+      // Load itachi env vars directly in PowerShell, then pipe to claude.
+      sshCommand = [
+        `cd '${workspace}'`,
+        `$env:ITACHI_TASK_ID='${task.id}'`,
+        `$env:ITACHI_ENABLED='1'`,
+        // Load OAuth token
+        `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
+        // Load API keys
+        `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
+        // Pipe prompt to claude directly (bypass itachi.cmd)
+        `Get-Content '${remotePath}' | claude --dangerously-skip-permissions -p`,
+      ].join('; ');
     } else {
       sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
     }
@@ -593,7 +604,14 @@ export class TaskExecutorService extends Service {
     const engineCmd = await this.resolveEngineCommand(sshTarget);
     const isWindows = sshService.isWindowsTarget(sshTarget);
     const sshCommand = isWindows
-      ? `cd '${workspace}'; $env:ITACHI_TASK_ID='${task.id}'; Get-Content '${remotePath}' | ${engineCmd} --cdp`
+      ? [
+          `cd '${workspace}'`,
+          `$env:ITACHI_TASK_ID='${task.id}'`,
+          `$env:ITACHI_ENABLED='1'`,
+          `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
+          `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
+          `Get-Content '${remotePath}' | claude --continue --dangerously-skip-permissions -p`,
+        ].join('; ')
       : `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
 
     if (topicId && topicsService) {
