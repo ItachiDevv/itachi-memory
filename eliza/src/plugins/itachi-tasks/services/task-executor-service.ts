@@ -507,6 +507,7 @@ export class TaskExecutorService extends Service {
         startedAt: Date.now(),
         transcript: sessionTranscript,
         project: task.project,
+        mode: 'tui',
         taskId: task.id,
         workspace,
       });
@@ -627,6 +628,7 @@ export class TaskExecutorService extends Service {
         startedAt: Date.now(),
         transcript: sessionTranscript,
         project: task.project,
+        mode: 'tui',
         taskId: task.id,
         workspace,
       });

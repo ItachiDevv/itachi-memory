@@ -6,7 +6,7 @@ import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { activeSessions } from '../shared/active-sessions.js';
-import { spawnSessionInTopic } from '../actions/interactive-session.js';
+import { spawnSessionInTopic, wrapStreamJsonInput } from '../actions/interactive-session.js';
 import { cleanupStaleFlows } from '../shared/conversation-flows.js';
 import {
   browsingSessionMap,
@@ -141,14 +141,19 @@ export const topicInputRelayEvaluator: Evaluator = {
           runtime.logger.info(`[topic-relay] Skipping pipe (already queued by validate): "${text.substring(0, 40)}"`);
           return;
         }
-        // Use \r (carriage return) to simulate pressing Enter in Claude TUI's raw mode.
-        // The TUI reads raw keystrokes via the PTY — \n just adds a newline to the
-        // input buffer, while \r triggers the "submit" action.
-        session.handle.write(text + '\r');
+
+        // Format input based on session mode
+        if (session.mode === 'stream-json') {
+          // Stream-JSON mode: wrap user text in a JSON message for Claude's stdin
+          session.handle.write(wrapStreamJsonInput(text));
+        } else {
+          // TUI mode: Use \r (carriage return) to simulate pressing Enter in raw mode.
+          session.handle.write(text + '\r');
+        }
         // Also record in transcript for post-session analysis
         session.transcript.push({ type: 'user_input', content: text, timestamp: Date.now() });
         content._topicRelayQueued = true;
-        runtime.logger.info(`[topic-relay] Piped input to session ${session.sessionId}: "${text.substring(0, 40)}"`);
+        runtime.logger.info(`[topic-relay] Piped input (${session.mode}) to session ${session.sessionId}: "${text.substring(0, 40)}"`);
         return;
       }
 

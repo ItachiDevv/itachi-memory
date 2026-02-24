@@ -1,6 +1,9 @@
 import type { InteractiveSession } from '../services/ssh-service.js';
 import type { TranscriptEntry } from '../utils/transcript-analyzer.js';
 
+/** Session output mode */
+export type SessionMode = 'stream-json' | 'tui' | 'print';
+
 export interface ActiveSession {
   sessionId: string;
   topicId: number;
@@ -9,6 +12,8 @@ export interface ActiveSession {
   startedAt: number;
   transcript: TranscriptEntry[];
   project: string;
+  /** Output mode for this session */
+  mode: SessionMode;
   /** Set when this session was spawned by TaskExecutorService */
   taskId?: string;
   /** Workspace path on remote machine (for executor sessions) */

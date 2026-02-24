@@ -10,8 +10,154 @@ import {
   listRemoteDirectory,
   formatDirectoryListing,
 } from '../utils/directory-browser.js';
-import { activeSessions, type ActiveSession } from '../shared/active-sessions.js';
+import { activeSessions, type ActiveSession, type SessionMode } from '../shared/active-sessions.js';
 import { DEFAULT_REPO_PATHS, DEFAULT_REPO_BASES, resolveRepoPath } from '../shared/repo-utils.js';
+
+// ── Stream-JSON output parsing ────────────────────────────────────────
+/**
+ * Parse a single line of Claude Code's stream-json output into a human-readable
+ * string suitable for Telegram. Returns null for lines that should be skipped
+ * (system messages, empty content, malformed JSON).
+ *
+ * Claude Code stream-json format (newline-delimited JSON):
+ * - {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"..."}]}}
+ * - {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"...","name":"Read","input":{...}}]}}
+ * - {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"...","content":"..."}]}}
+ * - {"type":"result","subtype":"success","session_id":"...","total_cost_usd":0.05,"duration_ms":1234}
+ * - {"type":"system","message":"..."}
+ */
+export function parseStreamJsonLine(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  let obj: any;
+  try {
+    obj = JSON.parse(trimmed);
+  } catch {
+    // Not JSON — might be raw text output (e.g. from wrapper scripts)
+    // Pass through non-empty non-JSON lines as-is
+    if (trimmed.length > 0 && !trimmed.startsWith('{')) return trimmed;
+    return null;
+  }
+
+  if (!obj || typeof obj !== 'object') return null;
+
+  const type = obj.type;
+
+  // Assistant messages (text + tool calls)
+  if (type === 'assistant' && obj.message?.content) {
+    const parts: string[] = [];
+    for (const block of obj.message.content) {
+      if (block.type === 'text' && block.text) {
+        parts.push(block.text);
+      } else if (block.type === 'tool_use') {
+        const name = block.name || 'Tool';
+        const input = block.input || {};
+        // Show a concise summary of the tool call
+        const summary = formatToolCallSummary(name, input);
+        parts.push(`[${name}] ${summary}`);
+      }
+    }
+    return parts.join('\n') || null;
+  }
+
+  // User messages (tool results)
+  if (type === 'user' && obj.message?.content) {
+    const parts: string[] = [];
+    for (const block of obj.message.content) {
+      if (block.type === 'tool_result') {
+        const content = typeof block.content === 'string'
+          ? block.content
+          : Array.isArray(block.content)
+            ? block.content.map((c: any) => c.text || '').join('\n')
+            : '';
+        if (content) {
+          // Truncate long tool results for Telegram readability
+          const truncated = content.length > 500
+            ? content.substring(0, 500) + `\n... (${content.length} chars total)`
+            : content;
+          parts.push(truncated);
+        }
+      }
+    }
+    return parts.join('\n') || null;
+  }
+
+  // Result message (session complete)
+  if (type === 'result') {
+    const cost = obj.total_cost_usd ? `$${obj.total_cost_usd.toFixed(4)}` : '';
+    const duration = obj.duration_ms ? `${Math.round(obj.duration_ms / 1000)}s` : '';
+    const subtype = obj.subtype || 'done';
+    return `[Session ${subtype}]${cost ? ` Cost: ${cost}` : ''}${duration ? ` Duration: ${duration}` : ''}`;
+  }
+
+  // System messages — log but don't show
+  if (type === 'system') return null;
+
+  // Unknown type — pass through if it has meaningful content
+  if (obj.text) return obj.text;
+  if (obj.message && typeof obj.message === 'string') return obj.message;
+
+  return null;
+}
+
+/**
+ * Format a concise summary of a tool call's input.
+ */
+function formatToolCallSummary(name: string, input: Record<string, any>): string {
+  switch (name) {
+    case 'Read':
+      return input.file_path || '';
+    case 'Write':
+      return input.file_path || '';
+    case 'Edit':
+      return input.file_path || '';
+    case 'Bash':
+      return (input.command || '').substring(0, 100);
+    case 'Glob':
+      return input.pattern || '';
+    case 'Grep':
+      return `${input.pattern || ''} ${input.path || ''}`.trim();
+    case 'WebFetch':
+      return input.url || '';
+    default:
+      // Show first string value from input
+      for (const val of Object.values(input)) {
+        if (typeof val === 'string' && val.length > 0) return val.substring(0, 80);
+      }
+      return '';
+  }
+}
+
+/**
+ * Wrap user text as a stream-json input message for Claude Code's stdin.
+ * Claude Code's --input-format stream-json expects JSON objects on stdin.
+ */
+export function wrapStreamJsonInput(text: string): string {
+  const msg = {
+    type: 'user',
+    message: { role: 'user', content: text },
+  };
+  return JSON.stringify(msg) + '\n';
+}
+
+/**
+ * Create a buffered NDJSON line parser. Handles chunks that split across
+ * JSON line boundaries (common with pipe/SSH output).
+ */
+export function createNdjsonParser(onLine: (parsed: string) => void): (chunk: string) => void {
+  let buffer = '';
+  return (chunk: string) => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    // Keep the last element (might be incomplete)
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const parsed = parseStreamJsonLine(line);
+      if (parsed) onLine(parsed);
+    }
+  };
+}
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -252,6 +398,9 @@ function sessionTitle(prompt: string, maxLen: number = 40): string {
 /**
  * Spawn a CLI session in an existing Telegram topic.
  * Returns the sessionId on success, or null on failure.
+ *
+ * Uses --output-format stream-json for clean NDJSON output (no TUI noise).
+ * Falls back to TUI mode only if explicitly requested via env var.
  */
 export async function spawnSessionInTopic(
   runtime: IAgentRuntime,
@@ -266,14 +415,26 @@ export async function spawnSessionInTopic(
 ): Promise<string | null> {
   const isWindows = sshService.isWindowsTarget(target);
   const escapedPrompt = prompt.replace(/'/g, "'\\''");
-  // Windows: use `claude -p` (print mode) for clean pipe-friendly output
-  // without TUI formatting. Unix: use TUI mode for interactive /session flow
-  // where users send follow-up messages via topic-input-relay.
+
+  // Determine session mode: stream-json (default), tui (legacy), print (Windows)
+  const envMode = process.env.ITACHI_SESSION_MODE?.toLowerCase();
+  const mode: SessionMode = isWindows ? 'print'
+    : envMode === 'tui' ? 'tui'
+    : 'stream-json';
+
   let sshCommand: string;
-  if (isWindows) {
+  if (mode === 'print') {
+    // Windows: use `claude -p` (print mode) for clean pipe-friendly output
     sshCommand = `cd ${repoPath} && claude -p --dangerously-skip-permissions '${escapedPrompt}'`;
+  } else if (mode === 'stream-json') {
+    // Stream-JSON mode: structured NDJSON output, no TUI noise.
+    // Uses --output-format stream-json for clean programmatic output.
+    // The --input-format stream-json allows sending follow-up messages as JSON on stdin.
+    const hasFlag = /\s--c?ds\b/.test(engineCommand);
+    const dsFlag = hasFlag ? '' : ' --ds';
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --output-format stream-json --input-format stream-json '${escapedPrompt}'`;
   } else {
-    // engineCommand may already include flags like --ds or --cds (from callback handler)
+    // Legacy TUI mode (fallback)
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     sshCommand = hasFlag
       ? `cd ${repoPath} && ${engineCommand} '${escapedPrompt}'`
@@ -282,38 +443,35 @@ export async function spawnSessionInTopic(
 
   await topicsService.sendToTopic(
     topicId,
-    `Interactive session on ${target}\nProject: ${project || 'unknown'}\nPrompt: ${prompt}\nCommand: ${sshCommand}\n\nStarting...`,
+    `Interactive session on ${target}\nProject: ${project || 'unknown'}\nPrompt: ${prompt}\nMode: ${mode}\n\nStarting...`,
   );
 
   const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const sessionTranscript: TranscriptEntry[] = [];
 
-  /**
-   * Normalize \r (carriage return) in a PTY chunk before ANSI stripping.
-   * TUI tools use \r to overwrite the current line (e.g., spinner updates, prompt).
-   * Without normalization, "A\rB" stays as a single string causing prompt leaks.
-   * Strategy: split on \r\n (CRLF, normal line ends), then split each line on bare \r
-   * and keep only the last segment (final overwrite state).
-   */
-  function normalizePtyChunk(chunk: string): string {
-    return chunk
-      .split('\r\n')
-      .map(line => {
-        const segs = line.split('\r');
-        return segs[segs.length - 1];
-      })
-      .join('\n');
-  }
+  // ── Stdout handler depends on session mode ──────────────────────
+  let onStdout: (chunk: string) => void;
 
-  const handle = sshService.spawnInteractiveSession(
-    target,
-    sshCommand,
-    (chunk: string) => {
-      // Debug: log truly raw bytes BEFORE any processing
+  if (mode === 'stream-json') {
+    // NDJSON parser: each line is a JSON object from Claude Code
+    const parser = createNdjsonParser((parsed: string) => {
+      runtime.logger.info(`[session] json-out ${parsed.length}b: "${parsed.substring(0, 120).replace(/\n/g, '\\n')}"`);
+      sessionTranscript.push({ type: 'text', content: parsed, timestamp: Date.now() });
+      topicsService.receiveChunk(sessionId, topicId, parsed).catch((err) => {
+        runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    });
+
+    onStdout = (chunk: string) => {
+      runtime.logger.info(`[session] RAW ${chunk.length}b`);
+      parser(chunk);
+    };
+  } else {
+    // TUI/print mode: normalize → strip ANSI → filter TUI noise
+    onStdout = (chunk: string) => {
       runtime.logger.info(`[session] RAW ${chunk.length}b`);
       const normalized = normalizePtyChunk(chunk);
       const stripped = stripAnsi(normalized);
-      // Debug: log after ANSI strip
       if (stripped.trim()) {
         runtime.logger.info(`[session] stripped ${stripped.length}b: "${stripped.substring(0, 120).replace(/\n/g, '\\n')}"`);
       }
@@ -324,46 +482,67 @@ export async function spawnSessionInTopic(
       topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
         runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
       });
-    },
-    (chunk: string) => {
-      const normalized = normalizePtyChunk(chunk);
-      const stripped = stripAnsi(normalized);
-      const clean = filterTuiNoise(stripped);
-      if (!clean) return;
-      sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
-      topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {
-        runtime.logger.error(`[session] stderr stream error: ${err instanceof Error ? err.message : String(err)}`);
+    };
+  }
+
+  // ── Stderr handler (always filter TUI noise since stderr is never JSON) ──
+  const onStderr = (chunk: string) => {
+    runtime.logger.info(`[session] STDERR ${chunk.length}b: "${chunk.substring(0, 120).replace(/\n/g, '\\n')}"`);
+    const normalized = normalizePtyChunk(chunk);
+    const stripped = stripAnsi(normalized);
+    const clean = filterTuiNoise(stripped);
+    if (!clean) return;
+    sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
+    topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {
+      runtime.logger.error(`[session] stderr stream error: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  };
+
+  // ── Exit handler ───────────────────────────────────────────────
+  const onExit = (code: number) => {
+    topicsService.finalFlush(sessionId).then(() => {
+      topicsService.sendToTopic(topicId, `\n--- Session ended (exit code: ${code}) ---`);
+    }).catch(() => {});
+
+    const session = activeSessions.get(topicId);
+    if (session && session.transcript.length > 0) {
+      analyzeAndStoreTranscript(runtime, session.transcript, {
+        source: 'session',
+        project: session.project,
+        sessionId: session.sessionId,
+        target: session.target,
+        description: prompt,
+        outcome: code === 0 ? 'completed' : `exited with code ${code}`,
+        durationMs: Date.now() - session.startedAt,
+      }).catch(err => {
+        runtime.logger.error(`[session] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-    },
-    (code: number) => {
-      topicsService.finalFlush(sessionId).then(() => {
-        topicsService.sendToTopic(topicId, `\n--- Session ended (exit code: ${code}) ---`);
-      }).catch(() => {});
+    }
 
-      const session = activeSessions.get(topicId);
-      if (session && session.transcript.length > 0) {
-        analyzeAndStoreTranscript(runtime, session.transcript, {
-          source: 'session',
-          project: session.project,
-          sessionId: session.sessionId,
-          target: session.target,
-          description: prompt,
-          outcome: code === 0 ? 'completed' : `exited with code ${code}`,
-          durationMs: Date.now() - session.startedAt,
-        }).catch(err => {
-          runtime.logger.error(`[session] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      }
+    activeSessions.delete(topicId);
+    runtime.logger.info(`[session] ${sessionId} exited with code ${code}`);
+  };
 
-      activeSessions.delete(topicId);
-      runtime.logger.info(`[session] ${sessionId} exited with code ${code}`);
-    },
+  // ── Spawn the SSH session ──────────────────────────────────────
+  // Stream-json: no PTY needed (clean pipes). TUI: needs PTY for line buffering.
+  const handle = sshService.spawnInteractiveSession(
+    target,
+    sshCommand,
+    onStdout,
+    onStderr,
+    onExit,
     600_000,
+    { usePty: mode === 'tui' },
   );
 
   if (!handle) {
     await topicsService.sendToTopic(topicId, 'Failed to start SSH session. Check SSH target configuration.');
     return null;
+  }
+
+  // Windows print mode: close stdin immediately (claude -p waits for EOF)
+  if (mode === 'print') {
+    // stdin closing is handled in ssh-service for Windows targets
   }
 
   activeSessions.set(topicId, {
@@ -374,9 +553,24 @@ export async function spawnSessionInTopic(
     startedAt: Date.now(),
     transcript: sessionTranscript,
     project: project || 'unknown',
+    mode,
   });
 
   return sessionId;
+}
+
+/**
+ * Normalize \r (carriage return) in a PTY chunk before ANSI stripping.
+ * TUI tools use \r to overwrite the current line (e.g., spinner updates, prompt).
+ */
+function normalizePtyChunk(chunk: string): string {
+  return chunk
+    .split('\r\n')
+    .map(line => {
+      const segs = line.split('\r');
+      return segs[segs.length - 1];
+    })
+    .join('\n');
 }
 
 export const interactiveSessionAction: Action = {

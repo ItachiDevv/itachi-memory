@@ -150,6 +150,9 @@ export class SSHService extends Service {
    * Spawn a long-running interactive SSH session.
    * Returns a handle with write() (stdin), kill(), and pid.
    * Callbacks fire on stdout/stderr chunks and on process exit.
+   *
+   * @param options.usePty - Force PTY allocation via -tt. Default: false for
+   *   stream-json mode (clean pipes), true only for legacy TUI mode.
    */
   spawnInteractiveSession(
     targetName: string,
@@ -158,6 +161,7 @@ export class SSHService extends Service {
     onStderr: (chunk: string) => void,
     onExit: (code: number) => void,
     timeoutMs: number = 600_000,
+    options?: { usePty?: boolean },
   ): InteractiveSession | null {
     const target = this.targets.get(targetName.toLowerCase());
     if (!target) return null;
@@ -167,12 +171,10 @@ export class SSHService extends Service {
       '-o', 'ConnectTimeout=10',
     ];
 
-    // Unix: force PTY (-tt) so CLI tools get line-buffered output.
-    // Windows: skip PTY entirely — we use `claude -p` (print mode) which
-    // outputs clean text to pipes without needing a TTY. Using -t/-tt on
-    // Windows OpenSSH/PowerShell causes either instant exit (-tt) or
-    // TUI-formatted output that's impossible to parse (-t).
-    if (!this.isWindowsTarget(targetName)) {
+    // Only add -tt (force PTY) when explicitly requested.
+    // Stream-json mode uses clean pipes — no PTY needed.
+    // Windows: never use PTY (claude -p print mode works via pipes).
+    if (options?.usePty && !this.isWindowsTarget(targetName)) {
       args.push('-tt');
     }
 

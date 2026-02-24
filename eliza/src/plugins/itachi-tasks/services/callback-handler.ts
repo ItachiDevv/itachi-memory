@@ -116,31 +116,55 @@ function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any)
 }
 
 /**
+ * Exponential backoff with jitter for retry delays.
+ * Based on OpenClaw's approach: initialMs: 2000, maxMs: 30_000, factor: 1.8, jitter: 0.25
+ */
+function backoffDelay(attempt: number, opts = { initialMs: 2000, maxMs: 30_000, factor: 1.8, jitter: 0.25 }): number {
+  const base = Math.min(opts.initialMs * Math.pow(opts.factor, attempt), opts.maxMs);
+  const jitterRange = base * opts.jitter;
+  return base + (Math.random() * 2 - 1) * jitterRange;
+}
+
+/**
  * Monitors Telegraf polling health. If native polling dies (409 Conflict
  * during container restarts), falls back to a manual getUpdates loop
  * that routes updates through bot.handleUpdate().
  *
+ * Uses exponential backoff with jitter for 409 recovery (based on OpenClaw's approach).
  * Does NOT call bot.launch() — that hangs because bot.stop() waits for
  * the dead polling loop's promise forever. Instead, we run our own loop.
  */
 function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
   let manualPollingActive = false;
+  /** Persisted offset across manual polling restarts to avoid re-processing */
+  let persistedOffset = 0;
 
   const startManualPolling = async () => {
     if (manualPollingActive) return;
     manualPollingActive = true;
     runtime.logger.info('[polling-monitor] Starting manual polling loop...');
 
-    let offset = 0;
+    let offset = persistedOffset;
     let consecutiveErrors = 0;
-    let loopIterations = 0;
+    let consecutive409s = 0;
+    const MAX_TOTAL_WAIT_MS = 5 * 60 * 1000; // 5 minutes total before giving up
+    const startTime = Date.now();
 
-    // Wait for stale 409s from old container to clear (Telegram long-poll timeout ~30s)
-    runtime.logger.info('[polling-monitor] Waiting 35s for stale polling to clear...');
-    await new Promise(r => setTimeout(r, 35_000));
+    // Initial backoff: wait for stale polling from old container to clear.
+    // Start with a short wait (2s) and increase exponentially on 409s,
+    // instead of a fixed 35s that blocks recovery.
+    const initialWaitMs = backoffDelay(0);
+    runtime.logger.info(`[polling-monitor] Initial wait: ${Math.round(initialWaitMs)}ms`);
+    await new Promise(r => setTimeout(r, initialWaitMs));
 
     while (manualPollingActive) {
-      loopIterations++;
+      // Total timeout safety net
+      if (Date.now() - startTime > MAX_TOTAL_WAIT_MS) {
+        runtime.logger.error('[polling-monitor] Exceeded 5-minute total timeout, stopping manual loop');
+        manualPollingActive = false;
+        return;
+      }
+
       try {
         const updates = await bot.telegram.callApi('getUpdates', {
           offset,
@@ -149,41 +173,54 @@ function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
           allowed_updates: ['message', 'callback_query', 'message_reaction'],
         });
 
+        // Success! Reset error counters
         consecutiveErrors = 0;
+        consecutive409s = 0;
 
-        if (Array.isArray(updates)) {
+        if (Array.isArray(updates) && updates.length > 0) {
+          runtime.logger.info(`[polling-monitor] Received ${updates.length} updates`);
           for (const update of updates) {
             offset = update.update_id + 1;
+            persistedOffset = offset; // Persist for future restarts
             try {
               await bot.handleUpdate(update);
             } catch (handleErr: any) {
-              runtime.logger.error(`[polling-monitor] Update error: ${handleErr?.message}`);
+              runtime.logger.error(`[polling-monitor] Update handler error: ${handleErr?.message}`);
             }
           }
         }
       } catch (err: any) {
         if (err?.message?.includes('409')) {
-          if (loopIterations <= 3) {
-            // Early 409s are stale conflicts from old container — retry after delay
-            runtime.logger.warn(`[polling-monitor] Stale 409 on iteration ${loopIterations}, retrying in 10s...`);
-            await new Promise(r => setTimeout(r, 10_000));
-            continue;
+          consecutive409s++;
+
+          // 409 means another poller is active. Could be:
+          // a) Old container still running (stale) — keep retrying with backoff
+          // b) Native polling in THIS container recovered — we should stop
+          //
+          // Use exponential backoff to wait out stale conflicts.
+          // After many consecutive 409s (>10), assume native polling recovered.
+          if (consecutive409s > 10) {
+            runtime.logger.info('[polling-monitor] 10+ consecutive 409s — native polling likely recovered, stopping manual loop');
+            manualPollingActive = false;
+            return;
           }
-          // Later 409s mean native polling actually recovered
-          runtime.logger.info('[polling-monitor] Native polling active (409), stopping manual loop');
-          manualPollingActive = false;
-          return;
+
+          const delay = backoffDelay(consecutive409s);
+          runtime.logger.warn(`[polling-monitor] 409 conflict #${consecutive409s}, retrying in ${Math.round(delay)}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
         }
 
         consecutiveErrors++;
-        if (consecutiveErrors > 10) {
-          runtime.logger.error('[polling-monitor] Too many consecutive errors, stopping manual loop');
+        if (consecutiveErrors > 15) {
+          runtime.logger.error(`[polling-monitor] ${consecutiveErrors} consecutive errors, stopping manual loop`);
           manualPollingActive = false;
           return;
         }
 
-        // Wait before retrying on other errors
-        await new Promise(r => setTimeout(r, 5_000));
+        const delay = backoffDelay(consecutiveErrors);
+        runtime.logger.warn(`[polling-monitor] Error #${consecutiveErrors}: ${err?.message}, retrying in ${Math.round(delay)}ms`);
+        await new Promise(r => setTimeout(r, delay));
       }
     }
   };
