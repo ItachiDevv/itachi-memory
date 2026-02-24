@@ -119,9 +119,9 @@ function filterTuiNoise(text: string): string {
     if (/^[✻✶✢✽✳⏺❯·*●\s]*[Cc]runched\s+for\s+\d+s/.test(stripped)) continue;
 
     // Skip git/VCS status bar tokens from Claude Code TUI (appear after CUP→newline split):
-    // e.g. "-Commit[master]", "+Staged[1]", "-Phase", "-Unstaged[2]"
-    // Pattern: starts with +/- then a capitalized word, optionally followed by [...] or end
-    if (/^[-+][A-Z][a-z]+(?:\[|$)/.test(stripped)) continue;
+    // e.g. "-Commit[master]", "+Staged[1]", "-Phase", "-Unstaged[2]", "-Phase3:npmpublish,"
+    // Pattern: starts with +/- then a capitalized word, optionally followed by non-lowercase char or end
+    if (/^[-+][A-Z][a-z]+(?:[^a-z]|$)/.test(stripped)) continue;
 
     // Skip short standalone punctuation/bracket fragments (leftover TUI status noise)
     // e.g. "[master]", "[+0 ~1]", "[!]" — never appear in real output
@@ -309,22 +309,17 @@ export async function spawnSessionInTopic(
     target,
     sshCommand,
     (chunk: string) => {
-      runtime.logger.info(`[session] stdout raw ${chunk.length}b, first60: "${chunk.substring(0, 60).replace(/[\x00-\x1f]/g, '?')}"`);
       const normalized = normalizePtyChunk(chunk);
       const stripped = stripAnsi(normalized);
       const clean = filterTuiNoise(stripped);
-      if (!clean) {
-        runtime.logger.info(`[session] stdout filtered (all TUI noise)`);
-        return;
-      }
-      runtime.logger.info(`[session] stdout clean ${clean.length}b: "${clean.substring(0, 80)}"`);
+      if (!clean) return;
+      runtime.logger.info(`[session] stdout ${clean.length}b: "${clean.substring(0, 80)}"`);
       sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
       topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
         runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
       });
     },
     (chunk: string) => {
-      runtime.logger.info(`[session] stderr raw ${chunk.length}b`);
       const normalized = normalizePtyChunk(chunk);
       const stripped = stripAnsi(normalized);
       const clean = filterTuiNoise(stripped);
