@@ -107,6 +107,7 @@ export const telegramCommandsAction: Action = {
     callback?: HandlerCallback
   ): Promise<ActionResult> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
+    runtime.logger.info(`[telegram-commands] handler: text="${text.substring(0, 50)}" hasCallback=${!!callback}`);
 
     try {
       // Clean up stale flows

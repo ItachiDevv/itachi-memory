@@ -626,11 +626,14 @@ export const interactiveSessionAction: Action = {
     _options?: unknown,
     callback?: HandlerCallback,
   ): Promise<ActionResult> => {
+    const _text = stripBotMention(message.content?.text || '');
+    runtime.logger.info(`[interactive-session] handler: text="${_text.substring(0, 50)}" _sessionSpawned=${!!(message.content as Record<string, unknown>)?._sessionSpawned}`);
     // Prevent double-execution: TELEGRAM_COMMANDS may have already called this handler
     // directly (setting _sessionSpawned) to handle /session <machine> commands.
     // Without this guard, both TELEGRAM_COMMANDS and INTERACTIVE_SESSION handlers run,
     // creating two identical Telegram topics per /session command.
     if ((message.content as Record<string, unknown>)._sessionSpawned) {
+      runtime.logger.info(`[interactive-session] skipping — already handled by TELEGRAM_COMMANDS`);
       return { success: true };
     }
     try {
