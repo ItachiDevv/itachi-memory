@@ -649,6 +649,7 @@ export const interactiveSessionAction: Action = {
 
       const text = stripBotMention(message.content?.text || '');
       const extracted = extractTarget(text, sshService);
+      runtime.logger.info(`[interactive-session] extractTarget: ${extracted ? `target=${extracted.target}` : 'null'} targets=[${[...sshService.getTargets().keys()].join(',')}]`);
 
       if (!extracted) {
         const available = [...sshService.getTargets().keys()].join(', ');
@@ -664,13 +665,16 @@ export const interactiveSessionAction: Action = {
 
       // Create Telegram topic for this session (before repo resolution so we can send status)
       const topicName = `Session: ${title} | ${target}`;
+      runtime.logger.info(`[interactive-session] creating topic: "${topicName}" chatId=${(topicsService as any).groupChatId}`);
       // Use the raw API to create topic (not createTopicForTask which requires an ItachiTask)
       const topicResult = await (topicsService as any).apiCall('createForumTopic', {
         chat_id: (topicsService as any).groupChatId,
         name: topicName.substring(0, 128),
       });
+      runtime.logger.info(`[interactive-session] topic result: ok=${topicResult?.ok} threadId=${topicResult?.result?.message_thread_id} desc=${topicResult?.description || 'none'}`);
 
       if (!topicResult?.ok || !topicResult.result?.message_thread_id) {
+        runtime.logger.error(`[interactive-session] Failed to create topic: ${JSON.stringify(topicResult)}`);
         if (callback) await callback({ text: `Failed to create Telegram topic: ${topicResult?.description || 'unknown error'}` });
         return { success: false, error: 'Failed to create topic' };
       }
