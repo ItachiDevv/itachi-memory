@@ -302,13 +302,27 @@ export class TaskExecutorService extends Service {
   private async createWorktree(sshTarget: string, repoPath: string, task: ItachiTask): Promise<string> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
     const slug = task.id.substring(0, 8);
-    const branch = task.branch || 'master';
+    let branch = task.branch || 'master';
 
     // Create worktree directory adjacent to the repo
     const workspacePath = `${repoPath}/../workspaces/${task.project}-${slug}`;
 
     // Fetch latest
     await sshService.exec(sshTarget, `cd ${repoPath} && git fetch --all --prune 2>&1`, 30_000);
+
+    // Detect default branch if task.branch is 'main' but repo uses 'master' (or vice versa)
+    if (branch === 'main' || branch === 'master') {
+      const isWindows = sshService.isWindowsTarget(sshTarget);
+      const checkCmd = isWindows
+        ? `cd '${repoPath}'; if (git rev-parse --verify origin/${branch} 2>$null) { Write-Output 'OK' } else { Write-Output 'MISSING' }`
+        : `cd ${repoPath} && git rev-parse --verify origin/${branch} 2>/dev/null && echo OK || echo MISSING`;
+      const branchCheck = await sshService.exec(sshTarget, checkCmd, 5_000);
+      if (branchCheck.stdout?.trim().endsWith('MISSING')) {
+        const alt = branch === 'main' ? 'master' : 'main';
+        this.runtime.logger.info(`[executor] Branch "${branch}" not found, trying "${alt}"`);
+        branch = alt;
+      }
+    }
 
     // Create worktree
     const result = await sshService.exec(
