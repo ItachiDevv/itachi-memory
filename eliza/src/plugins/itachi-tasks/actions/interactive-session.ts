@@ -428,12 +428,13 @@ export async function spawnSessionInTopic(
     sshCommand = `cd ${repoPath} && claude -p --dangerously-skip-permissions '${escapedPrompt}'`;
   } else if (mode === 'stream-json') {
     // Stream-JSON mode: structured NDJSON output, no TUI noise.
-    // Uses --output-format stream-json for clean programmatic output.
-    // The --input-format stream-json allows sending follow-up messages as JSON on stdin.
-    // --verbose is required when the wrapper uses --print mode (itachi wrapper).
+    // Uses -p (print mode) so Claude CLI doesn't start a TUI (which needs a terminal).
+    // --output-format stream-json gives clean NDJSON on stdout.
+    // --input-format stream-json allows sending follow-up messages as JSON on stdin.
+    // --verbose is required when combining -p with --output-format=stream-json.
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --verbose --output-format stream-json --input-format stream-json '${escapedPrompt}'`;
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json '${escapedPrompt}'`;
   } else {
     // Legacy TUI mode (fallback)
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
@@ -464,7 +465,7 @@ export async function spawnSessionInTopic(
     });
 
     onStdout = (chunk: string) => {
-      runtime.logger.info(`[session] RAW ${chunk.length}b`);
+      runtime.logger.info(`[session] RAW ${chunk.length}b: "${chunk.substring(0, 200).replace(/\n/g, '\\n')}"`);
       parser(chunk);
     };
   } else {
