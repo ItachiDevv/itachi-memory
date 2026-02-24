@@ -213,9 +213,16 @@ export class SSHService extends Service {
       onStderr(data.toString());
     });
 
+    // Use 'close' instead of 'exit' — 'close' fires only after all stdio
+    // streams are fully consumed, preventing truncated output when the remote
+    // process exits quickly (e.g. auth failure producing only a few NDJSON lines).
+    let exitCode: number | null = null;
     proc.on('exit', (code) => {
+      exitCode = code;
+    });
+    proc.on('close', () => {
       this.activeSessions.delete(sessionId);
-      onExit(code ?? 1);
+      onExit(exitCode ?? 1);
     });
 
     proc.on('error', (err) => {

@@ -147,7 +147,7 @@ function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
     let offset = persistedOffset;
     let consecutiveErrors = 0;
     let consecutive409s = 0;
-    const MAX_TOTAL_WAIT_MS = 5 * 60 * 1000; // 5 minutes total before giving up
+    const MAX_TOTAL_WAIT_MS = 30 * 60 * 1000; // 30 minutes total before giving up
     const startTime = Date.now();
 
     // Initial backoff: wait for stale polling from old container to clear.
@@ -160,7 +160,7 @@ function startPollingHealthMonitor(runtime: IAgentRuntime, bot: any): void {
     while (manualPollingActive) {
       // Total timeout safety net
       if (Date.now() - startTime > MAX_TOTAL_WAIT_MS) {
-        runtime.logger.error('[polling-monitor] Exceeded 5-minute total timeout, stopping manual loop');
+        runtime.logger.error('[polling-monitor] Exceeded 30-minute total timeout, stopping manual loop');
         manualPollingActive = false;
         return;
       }
