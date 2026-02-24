@@ -430,11 +430,13 @@ export async function spawnSessionInTopic(
     // Stream-JSON mode: structured NDJSON output, no TUI noise.
     // Uses -p (print mode) so Claude CLI doesn't start a TUI (which needs a terminal).
     // --output-format stream-json gives clean NDJSON on stdout.
-    // --input-format stream-json allows sending follow-up messages as JSON on stdin.
     // --verbose is required when combining -p with --output-format=stream-json.
+    // NOTE: Do NOT use --input-format stream-json here. With closeStdin (required for -p),
+    // stdin is closed immediately, and --input-format stream-json makes Claude Code exit
+    // after only outputting system hook messages (it waits for JSON input that never comes).
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json '${escapedPrompt}'`;
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json '${escapedPrompt}'`;
   } else {
     // Legacy TUI mode (fallback)
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
