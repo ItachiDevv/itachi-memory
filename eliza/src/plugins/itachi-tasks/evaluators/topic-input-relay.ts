@@ -61,10 +61,18 @@ export const topicInputRelayEvaluator: Evaluator = {
     }
     if (threadId === null) return false;
 
-    // Process browsing sessions directly in validate() since evaluator handlers
+    // Handle /close directly in validate() since evaluator handlers
     // don't reliably run in ElizaOS when the LLM chooses IGNORE.
     const content = message.content as Record<string, unknown>;
     const fullText = ((message.content?.text as string) || '').trim();
+    if (!content._topicRelayQueued && fullText === '/close') {
+      content._topicRelayQueued = true;
+      handleCloseInValidate(runtime, threadId)
+        .catch(err => runtime.logger.error(`[topic-relay] /close error in validate: ${err instanceof Error ? err.message : String(err)}`));
+      return true;
+    }
+
+    // Process browsing sessions directly in validate() for the same reason.
     if (!content._topicRelayQueued && fullText && !fullText.startsWith('/')) {
       const browsing = browsingSessionMap.get(threadId);
       if (browsing) {
@@ -85,10 +93,20 @@ export const topicInputRelayEvaluator: Evaluator = {
     const threadId = await getTopicThreadId(runtime, message);
     if (!threadId) return;
 
-    // Handle /close typed inside a topic — manually close the topic
+    // Handle /close typed inside a topic — kill session + close topic
     if (text === '/close') {
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
       if (topicsService) {
+        // Kill active SSH session if one exists for this topic
+        const session = activeSessions.get(threadId);
+        if (session) {
+          try { session.handle.kill(); } catch { /* best-effort */ }
+          activeSessions.delete(threadId);
+          runtime.logger.info(`[topic-relay] /close killed session ${session.sessionId} in topic ${threadId}`);
+        }
+        // Clean up browsing session if present
+        browsingSessionMap.delete(threadId);
+
         // Resolve topic task to build a status name
         const taskService = runtime.getService<TaskService>('itachi-tasks');
         let statusName: string | undefined;
@@ -281,5 +299,42 @@ async function handleBrowsingInput(
       session.prompt, session.engineCommand, threadId,
     );
   }
+}
+
+/**
+ * Handle /close command directly in validate() as a safety net.
+ * This fires even when the LLM chooses IGNORE and evaluator handlers are skipped.
+ */
+async function handleCloseInValidate(
+  runtime: IAgentRuntime,
+  threadId: number,
+): Promise<void> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!topicsService) return;
+
+  // Kill active SSH session if one exists for this topic
+  const session = activeSessions.get(threadId);
+  if (session) {
+    try { session.handle.kill(); } catch { /* best-effort */ }
+    activeSessions.delete(threadId);
+    runtime.logger.info(`[topic-relay] /close (validate) killed session ${session.sessionId} in topic ${threadId}`);
+  }
+  // Clean up browsing session if present
+  browsingSessionMap.delete(threadId);
+
+  // Resolve topic task to build a status name
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  let statusName: string | undefined;
+  if (taskService) {
+    const recentTasks = await taskService.listTasks({ limit: 50 });
+    const task = recentTasks.find((t: any) => t.telegram_topic_id === threadId);
+    if (task) {
+      const emoji = task.status === 'completed' ? '\u2705' : task.status === 'failed' ? '\u274c' : '\u23f9\ufe0f';
+      statusName = `${emoji} ${generateTaskTitle(task.description)} | ${task.project}`;
+    }
+  }
+  await topicsService.sendToTopic(threadId, 'Closing topic...');
+  await topicsService.closeTopic(threadId, statusName);
+  runtime.logger.info(`[topic-relay] /close (validate) closed topic ${threadId}`);
 }
 

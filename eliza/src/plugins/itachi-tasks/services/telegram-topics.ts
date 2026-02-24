@@ -157,12 +157,23 @@ export class TelegramTopicsService extends Service {
 
     for (const chunk of chunks) {
       try {
-        const result = await this.apiCall('sendMessage', {
+        let result = await this.apiCall('sendMessage', {
           chat_id: this.groupChatId,
           message_thread_id: topicId,
           text: chunk,
           parse_mode: 'HTML',
         });
+
+        // Fallback: if HTML parsing fails (e.g. TypeScript generics like <string,>),
+        // retry without parse_mode so Telegram treats it as plain text
+        if (!result.ok && result.description?.includes("can't parse entities")) {
+          this.runtime.logger.warn(`sendToTopic HTML parse failed, retrying as plain text`);
+          result = await this.apiCall('sendMessage', {
+            chat_id: this.groupChatId,
+            message_thread_id: topicId,
+            text: chunk,
+          });
+        }
 
         if (!result.ok) {
           this.runtime.logger.error(`sendToTopic failed: ${result.description}`);
