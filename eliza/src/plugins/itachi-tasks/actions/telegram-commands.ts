@@ -428,15 +428,34 @@ async function handleRepos(
 
 async function handleMachines(
   runtime: IAgentRuntime,
-  _callback?: HandlerCallback
+  callback?: HandlerCallback
 ): Promise<ActionResult> {
-  // NOTE: No callback — machineStatusProvider already feeds data to LLM.
-  // Calling callback would produce a duplicate message.
   const registry = runtime.getService<MachineRegistryService>('machine-registry');
   if (!registry) {
+    if (callback) await callback({ text: 'Machine registry service not available.' });
     return { success: false, error: 'Machine registry service not available' };
   }
   const machines = await registry.getAllMachines();
+  if (machines.length === 0) {
+    if (callback) await callback({ text: 'No machines registered.' });
+    return { success: true, data: { machines: [] } };
+  }
+
+  const lines = machines.map((m, i) => {
+    const name = m.display_name || m.machine_id;
+    const status = m.status || 'unknown';
+    const engines = (m.engine_priority || []).join(' → ') || '(none)';
+    const tasks = m.active_tasks ?? 0;
+    const maxTasks = m.max_concurrent_tasks ?? '?';
+    const projects = (m.projects || []).join(', ') || '(none)';
+    const platform = m.platform || 'unknown';
+    return `${i + 1}. **${name}** (${m.machine_id}) — ${status}\n   Platform: ${platform} | Tasks: ${tasks}/${maxTasks} | Engines: ${engines}\n   Projects: ${projects}`;
+  });
+
+  const online = machines.filter(m => m.status === 'online').length;
+  if (callback) await callback({
+    text: `Orchestrator machines:\n\n${lines.join('\n\n')}\n\n${online}/${machines.length} online.`,
+  });
   return { success: true, data: { machines } };
 }
 
