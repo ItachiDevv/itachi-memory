@@ -84,19 +84,35 @@ try {
         if (diff) body.files_changed = diff.split('\n').filter(Boolean);
     } catch(e) {}
 
-    // Try to read sessions-index.json
+    // Read summary from latest .jsonl transcript (sessions-index.json no longer exists in Claude Code v2)
     try {
-        const indexPath = path.join(os.homedir(), '.claude', 'sessions-index.json');
-        if (fs.existsSync(indexPath)) {
-            const sessions = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
-            if (Array.isArray(sessions) && sessions.length > 0) {
-                const latest = sessions.sort((a, b) => (b.modified || '').localeCompare(a.modified || ''))[0];
-                if (latest) {
-                    if (latest.summary) body.summary = latest.summary;
-                    if (latest.created && latest.modified) {
-                        body.started_at = latest.created;
-                        body.duration_ms = new Date(latest.modified).getTime() - new Date(latest.created).getTime();
-                    }
+        function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+$/g, ''); }
+        const projectDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(process.cwd()));
+        if (fs.existsSync(projectDir)) {
+            const files = fs.readdirSync(projectDir)
+                .filter(f => f.endsWith('.jsonl'))
+                .map(f => ({ name: f, mt: fs.statSync(path.join(projectDir, f)).mtimeMs }))
+                .sort((a, b) => b.mt - a.mt);
+            if (files.length > 0) {
+                const content = fs.readFileSync(path.join(projectDir, files[0].name), 'utf8');
+                const lines = content.split('\n').filter(Boolean);
+                let firstTs = null, lastTs = null;
+                for (const line of lines) {
+                    try {
+                        const e = JSON.parse(line);
+                        if (e.timestamp) { if (!firstTs) firstTs = e.timestamp; lastTs = e.timestamp; }
+                        if (!body.summary && e.type === 'assistant' && e.message && e.message.content) {
+                            const texts = (Array.isArray(e.message.content)
+                                ? e.message.content.filter(c => c.type === 'text').map(c => c.text)
+                                : [typeof e.message.content === 'string' ? e.message.content : '']
+                            ).join(' ').trim();
+                            if (texts.length > 20) body.summary = texts.substring(0, 200).replace(/\n/g, ' ').trim();
+                        }
+                    } catch {}
+                }
+                if (firstTs && lastTs) {
+                    body.started_at = firstTs;
+                    body.duration_ms = new Date(lastTs).getTime() - new Date(firstTs).getTime();
                 }
             }
         }
@@ -122,29 +138,44 @@ FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | tr '\n' ',' | sed 's/,$/
 SESSION_SUMMARY=""
 DURATION_MS="0"
 
-# Try to read sessions-index.json for metadata
-SESSIONS_INDEX="$HOME/.claude/sessions-index.json"
-if [ -f "$SESSIONS_INDEX" ]; then
-    META=$(node -e "
+# Extract summary from latest .jsonl transcript
+META=$(node -e "
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\\\/]/g, '--').replace(/^-+|-+$/g, ''); }
 try {
-    const fs = require('fs');
-    const sessions = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-    if (Array.isArray(sessions) && sessions.length > 0) {
-        const latest = sessions.sort((a, b) => (b.modified || '').localeCompare(a.modified || ''))[0];
-        const summary = latest.summary || '';
-        let duration = 0;
-        if (latest.created && latest.modified) {
-            duration = new Date(latest.modified).getTime() - new Date(latest.created).getTime();
-        }
-        console.log(JSON.stringify({ summary, duration }));
+    const projectDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(process.cwd()));
+    if (!fs.existsSync(projectDir)) process.exit(0);
+    const files = fs.readdirSync(projectDir).filter(f => f.endsWith('.jsonl'))
+        .map(f => ({ name: f, mt: fs.statSync(path.join(projectDir, f)).mtimeMs }))
+        .sort((a, b) => b.mt - a.mt);
+    if (files.length === 0) process.exit(0);
+    const content = fs.readFileSync(path.join(projectDir, files[0].name), 'utf8');
+    const lines = content.split('\n').filter(Boolean);
+    let summary = '', firstTs = null, lastTs = null;
+    for (const line of lines) {
+        try {
+            const e = JSON.parse(line);
+            if (e.timestamp) { if (!firstTs) firstTs = e.timestamp; lastTs = e.timestamp; }
+            if (!summary && e.type === 'assistant' && e.message && e.message.content) {
+                const texts = (Array.isArray(e.message.content)
+                    ? e.message.content.filter(c => c.type === 'text').map(c => c.text)
+                    : [typeof e.message.content === 'string' ? e.message.content : '']
+                ).join(' ').trim();
+                if (texts.length > 20) summary = texts.substring(0, 200).replace(/\n/g, ' ').trim();
+            }
+        } catch {}
     }
+    let duration = 0;
+    if (firstTs && lastTs) duration = new Date(lastTs).getTime() - new Date(firstTs).getTime();
+    console.log(JSON.stringify({ summary, duration }));
 } catch(e) {}
-" "$SESSIONS_INDEX" 2>/dev/null)
+" 2>/dev/null)
 
-    if [ -n "$META" ]; then
-        SESSION_SUMMARY=$(node -e "try{console.log(JSON.parse(process.argv[1]).summary||'')}catch(e){}" "$META" 2>/dev/null)
-        DURATION_MS=$(node -e "try{console.log(JSON.parse(process.argv[1]).duration||0)}catch(e){console.log(0)}" "$META" 2>/dev/null)
-    fi
+if [ -n "$META" ]; then
+    SESSION_SUMMARY=$(node -e "try{console.log(JSON.parse(process.argv[1]).summary||'')}catch(e){}" "$META" 2>/dev/null)
+    DURATION_MS=$(node -e "try{console.log(JSON.parse(process.argv[1]).duration||0)}catch(e){console.log(0)}" "$META" 2>/dev/null)
 fi
 
 node -e "

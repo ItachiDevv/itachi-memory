@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ssh hetzner:*)"
+      "Bash(ssh hetzner:*)",
+      "Bash(git worktree:*)",
+      "Bash(cd /c/Users/newma/Documents/Crypto/skills-plugins/itachi-memory && git push origin master 2>&1)",
+      "Bash(cd /c/Users/newma/Documents/Crypto/skills-plugins/itachi-memory && git branch | grep task/ | xargs git branch -D 2>&1)",
+      "Bash(head:*)",
+      "Bash(head:)",
+      "Bash(claude:*)",
+      "Bash(scp:*)",
+      "Bash(ssh mac:*)",
+      "Bash(where itachi:*)",
+      "Bash(powershell.exe:*)"
     ]
   }
 }
