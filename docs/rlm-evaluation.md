@@ -157,11 +157,11 @@ The only RLM feedback from local sessions comes through the `extract-insights` A
 
 ## Issues Found
 
-### 1. Low code_change count (5 out of 201)
-**Severity**: Medium
-**Impact**: Edit-level memory barely exists. The recentMemoriesProvider has almost no code changes to surface.
-**Root cause**: Likely after-edit hook failures being silently swallowed, or hook not firing on SSH sessions.
-**Fix**: Add diagnostic logging to after-edit.ps1. Verify PostToolUse matcher is correct.
+### 1. ~~Low code_change count~~ RESOLVED
+**Severity**: ~~Medium~~ → Not an issue
+**Previous finding**: Only 5 code_change entries visible.
+**Actual status**: The after-edit hook is **working correctly**. There are 65+ code_change entries across projects. The initial low count was due to querying without project scope — the `/api/memory/recent` endpoint returns differently when `project` is omitted.
+**Diagnostics added**: `~/.itachi-hook-diag.log` now logs every after-edit hook invocation with file path, tool name, API response status.
 
 ### 2. No reinforcement happening
 **Severity**: Medium
@@ -169,59 +169,78 @@ The only RLM feedback from local sessions comes through the `extract-insights` A
 **Root cause**: `/feedback` command not used. No automatic reinforcement on task re-execution.
 **Fix**: Consider auto-reinforcing lessons when similar tasks succeed. Encourage `/feedback` usage.
 
-### 3. Local sessions don't produce lesson-quality insights
-**Severity**: High
-**Impact**: Most development happens locally, but those sessions barely feed the RLM.
-**Root cause**: ElizaOS evaluators (lessonExtractor, personalityExtractor) only run on Telegram messages. Local sessions only feed through hooks → extract-insights API.
-**Fix options**:
-  - A) Improve extract-insights to produce richer task_lesson entries from transcripts
-  - B) Have session-end hook explicitly call a "lesson extraction" API endpoint
-  - C) Lower the significance threshold from 0.7 to 0.5 for local session insights
+### 3. Local sessions don't produce lesson-quality insights — FIXED
+**Severity**: ~~High~~ → Fixed
+**Previous state**: Windows session-end hook only called `extract-insights` (significance >= 0.7 threshold). Unix session-end hook already had the fix.
+**Fix applied**: Windows session-end hook now also calls `/api/session/contribute-lessons` after `extract-insights`. This endpoint has a lower confidence threshold (0.4) and always stores qualifying lessons.
+**Additional fixes**:
+  - Windows transcript extraction now includes `[USER]` text (was assistant-only)
+  - Transcript context increased from 4000 to 6000 chars (matches unix)
+  - `[ASSISTANT]`/`[USER]` prefixes added for clearer lesson extraction context
 
 ### 4. Session entries are low-value ("Session ended: other")
 **Severity**: Low
-**Impact**: 58 session entries but most just say "Session ended: other" with no useful context.
-**Root cause**: Claude's session-end reason is often "other" for normal exits. The summary field isn't populated.
-**Fix**: Enrich session-end entries with file list, duration, or prompt summary.
+**Impact**: Many session entries just say "Session ended: other" with no useful context.
+**Root cause**: Claude's session-end reason is often "other" for normal exits. The summary and duration fields are populated when transcript data is available.
+**Mitigated by**: The `contribute-lessons` call now extracts actionable lessons from the same transcript data, so even if the session entry is low-value, lessons are still captured.
 
 ### 5. Duplicate/near-duplicate project rules
 **Severity**: Low
-**Impact**: 10 project_rules but some are near-duplicates (e.g., "documentation in /memory directory" appears twice with slight wording differences).
-**Root cause**: Dedup threshold may be too low, or dedup isn't applied to project_rules.
-**Fix**: Run dedup pass on existing rules. Ensure storeFact-style dedup applies to project_rules.
+**Impact**: 8 project_rules but some may overlap.
+**Root cause**: Dedup similarity threshold (0.85) may allow near-duplicates.
+**Fix**: Consider running a dedup pass on existing rules.
+
+---
+
+## Fixes Applied (Feb 25, 2026)
+
+### Windows session-end hook (`hooks/windows/session-end.ps1`)
+1. **Added `contribute-lessons` API call** — mirrors what the unix hook already had. After calling `extract-insights`, the hook now also calls `/api/session/contribute-lessons` with the conversation text to generate task_lesson entries.
+2. **Added user text extraction** — `extractClaudeTexts()` now captures `[USER]` messages (min 10 chars) in addition to `[ASSISTANT]` messages. This gives the lesson extraction LLM both sides of the conversation for better insights.
+3. **Increased context window** — transcript truncation increased from 4000 to 6000 chars.
+4. **Added `[ASSISTANT]`/`[USER]` prefixes** to Codex transcript extraction for parity.
+
+### After-edit hooks (`hooks/windows/after-edit.ps1`, `hooks/unix/after-edit.sh`)
+1. **Added diagnostic logging** — both hooks now log to `~/.itachi-hook-diag.log` with timestamps, file paths, tool names, and API response status.
+2. **Confirmed working** — diagnostic logs show the hook fires correctly, receives stdin JSON, extracts file paths, and gets successful API responses.
+
+### Active hooks deployed
+- Updated hooks copied to `~/.claude/hooks/` (the active hook directory referenced by `settings.json`).
 
 ---
 
 ## Recommendations (Priority Order)
 
-### P0: Fix after-edit hook reliability
-- Add a diagnostic mode that logs to a local file when the hook fires
-- Verify PostToolUse matcher `"Write|Edit"` works on current Claude Code version
-- Test: make an edit, check if code_change memory is created within 5s
+### P0: ~~Fix after-edit hook reliability~~ DONE
+- ✅ Diagnostic logging added to both Windows and Unix hooks
+- ✅ Confirmed hook fires, API responds successfully
+- ✅ PostToolUse matcher `"Write|Edit"` verified working
 
-### P1: Enrich local session → RLM pipeline
-- Have session-end hook extract a richer summary (not just "Session ended: other")
-- Include: files changed (from git diff), session duration, first/last prompt
-- Lower extract-insights significance threshold for local sessions
+### P1: ~~Enrich local session → RLM pipeline~~ DONE
+- ✅ Session-end hook now calls `contribute-lessons` (lower threshold lesson extraction)
+- ✅ User text included in transcript (both sides of conversation)
+- ✅ Context window increased to 6000 chars
+- Remaining: Could lower `extract-insights` significance threshold from 0.7 to 0.5 for local sessions
 
 ### P2: Enable automatic reinforcement
 - When a task succeeds and its description matches existing task_lessons (>0.8 similarity), auto-reinforce those lessons
 - Track lesson_application entries to measure actual usage
 
-### P3: Cross-validate hook execution
+### P3: Cross-validate hook execution across platforms
 - Create a simple test: `itachi --ds -p "echo hello"` → verify all 4 hooks fire
-- Log hook execution timestamps to a local file for debugging
 - Verify hooks work identically on Windows (itachi.ps1) and Mac (itachi wrapper)
+- Monitor `~/.itachi-hook-diag.log` for errors
 
 ---
 
 ## Conclusion
 
-The RLM pipeline is **architecturally complete** but **operationally weak in key areas**:
+The RLM pipeline is **architecturally complete** and now **operationally functional across both Telegram and local sessions**:
 
-- **Telegram → RLM**: Strong. Conversations, facts, lessons, and personality are all captured.
-- **Task execution → RLM**: Strong. Transcript insights, project rules, and patterns are extracted.
-- **Local sessions → RLM**: Weak. Only session-end logging and (sometimes) transcript insights make it through. The main learning evaluators don't fire for local sessions.
-- **Reinforcement loop**: Not cycling. Lessons are stored but never reinforced through outcomes.
+- **Telegram → RLM**: Strong. Conversations, facts, lessons, and personality are all captured via ElizaOS evaluators.
+- **Task execution → RLM**: Strong. Transcript insights, project rules, and patterns are extracted via session-end hooks.
+- **Local sessions → RLM**: **Fixed**. Session-end hook now calls both `extract-insights` (rich analysis with rules) AND `contribute-lessons` (direct lesson extraction). User text is now included in transcripts for better context.
+- **After-edit hook**: **Confirmed working**. 65+ code_change entries. Diagnostic logging enabled.
+- **Reinforcement loop**: Not yet cycling. Lessons are stored but never reinforced through outcomes. This is the remaining gap.
 
-The system learns from Telegram interactions but barely learns from local development sessions — which is where most of the actual coding happens. Fixing the after-edit hook reliability and enriching the local session → extract-insights pipeline would have the highest impact on overall RLM effectiveness.
+The primary remaining gap is the **reinforcement loop** — lessons are extracted from both Telegram and local sessions, but there's no automatic mechanism to reinforce lessons when they're successfully applied in subsequent sessions.

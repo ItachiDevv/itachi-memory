@@ -6,8 +6,16 @@
 
 if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 
+# ============ Diagnostic Logging ============
+$diagLog = Join-Path $env:USERPROFILE ".itachi-hook-diag.log"
+function Write-Diag($msg) {
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$ts [after-edit] $msg" | Out-File -Append -FilePath $diagLog -Encoding utf8
+}
+
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Write-Diag "Hook started (PID=$PID)"
 
     # Load ITACHI_API_URL: ~/.itachi-api-keys > env var > fallback
     $BASE_API = $null
@@ -26,8 +34,9 @@ try {
 
     # Read JSON from stdin
     $raw = [Console]::In.ReadToEnd()
-    if (-not $raw) { exit 0 }
+    if (-not $raw) { Write-Diag "No stdin data, exiting"; exit 0 }
 
+    Write-Diag "Stdin received (${($raw.Length)} chars)"
     $json = $raw | ConvertFrom-Json
 
     # Extract file_path from tool_input
@@ -35,7 +44,8 @@ try {
     if ($json.tool_input -and $json.tool_input.file_path) {
         $filePath = $json.tool_input.file_path
     }
-    if (-not $filePath) { exit 0 }
+    if (-not $filePath) { Write-Diag "No file_path in tool_input, exiting"; exit 0 }
+    Write-Diag "File: $filePath | Tool: $($json.tool_name)"
 
     # Get filename
     $fileName = Split-Path $filePath -Leaf
@@ -106,11 +116,17 @@ try {
 
     $body = $bodyObj | ConvertTo-Json -Compress
 
-    Invoke-RestMethod -Uri "$MEMORY_API/code-change" `
-        -Method Post `
-        -Headers $authHeaders `
-        -Body $body `
-        -TimeoutSec 10 | Out-Null
+    Write-Diag "POST $MEMORY_API/code-change ($category) project=$project"
+    try {
+        $memResult = Invoke-RestMethod -Uri "$MEMORY_API/code-change" `
+            -Method Post `
+            -Headers $authHeaders `
+            -Body $body `
+            -TimeoutSec 10
+        Write-Diag "Memory API OK: $($memResult | ConvertTo-Json -Compress -ErrorAction SilentlyContinue)"
+    } catch {
+        Write-Diag "Memory API FAILED: $($_.Exception.Message)"
+    }
 
     # ============ Code-Intel: Session Edit ============
     $toolName = if ($json.tool_name) { $json.tool_name } else { "unknown" }
@@ -443,6 +459,7 @@ try {
 }
 catch {
     # Silently ignore all errors - hooks must never block Claude Code
+    Write-Diag "UNCAUGHT ERROR: $($_.Exception.Message)"
 }
 
 exit 0

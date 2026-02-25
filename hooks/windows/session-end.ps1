@@ -316,7 +316,12 @@ function extractClaudeTexts(lines) {
                 const textParts = Array.isArray(entry.message.content)
                     ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
                     : (typeof entry.message.content === 'string' ? entry.message.content : '');
-                if (textParts.length > 50) texts.push(textParts);
+                if (textParts.length > 50) texts.push('[ASSISTANT] ' + textParts);
+            } else if (entry.type === 'human' && entry.message && entry.message.content) {
+                const textParts = Array.isArray(entry.message.content)
+                    ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                    : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                if (textParts.length > 10) texts.push('[USER] ' + textParts);
             }
         } catch {}
     }
@@ -334,11 +339,11 @@ function extractCodexTexts(lines) {
                     const textParts = Array.isArray(p.content)
                         ? p.content.filter(c => c.type === 'output_text' || c.type === 'text').map(c => c.text).join(' ')
                         : (typeof p.content === 'string' ? p.content : '');
-                    if (textParts.length > 50) texts.push(textParts);
+                    if (textParts.length > 50) texts.push('[ASSISTANT] ' + textParts);
                 }
             }
             if (entry.type === 'event_msg' && entry.payload && entry.payload.agent_reasoning) {
-                if (entry.payload.agent_reasoning.length > 50) texts.push(entry.payload.agent_reasoning);
+                if (entry.payload.agent_reasoning.length > 50) texts.push('[ASSISTANT] ' + entry.payload.agent_reasoning);
             }
         } catch {}
     }
@@ -367,7 +372,7 @@ function extractCodexTexts(lines) {
 
         if (assistantTexts.length === 0) return;
 
-        const conversationText = assistantTexts.join('\n---\n').substring(0, 4000);
+        const conversationText = assistantTexts.join('\n---\n').substring(0, 6000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,
@@ -377,6 +382,15 @@ function extractCodexTexts(lines) {
             summary: summary,
             duration_ms: durationMs
         });
+
+        // Also contribute lessons directly to the task_lesson pool
+        // (mirrors lessonExtractor evaluator for local sessions)
+        try {
+            await httpPost(sessionApi + '/contribute-lessons', {
+                conversation_text: conversationText,
+                project: project,
+            });
+        } catch(e) {}
     } catch(e) {}
 })();
 "@

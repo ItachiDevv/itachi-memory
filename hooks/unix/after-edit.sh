@@ -4,11 +4,17 @@
 # 2) Sends per-edit data to code-intel API (session/edit)
 # 3) If .env or .md file AND ~/.itachi-key exists, encrypts + pushes to sync API
 
+# ============ Diagnostic Logging ============
+DIAG_LOG="$HOME/.itachi-hook-diag.log"
+diag() { echo "$(date '+%Y-%m-%d %H:%M:%S') [after-edit] $1" >> "$DIAG_LOG"; }
+
 BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 MEMORY_API="$BASE_API/api/memory"
 SYNC_API="$BASE_API/api/sync"
 SESSION_API="$BASE_API/api/session"
 AUTH_HEADER="Authorization: Bearer ${ITACHI_API_KEY:-}"
+
+diag "Hook started (PID=$$)"
 
 # ============ Project Resolution ============
 # Priority: ITACHI_PROJECT_NAME > .itachi-project > git remote > basename
@@ -46,13 +52,24 @@ fi
 # Read JSON input from stdin
 INPUT=$(cat)
 
+if [ -z "$INPUT" ]; then
+    diag "No stdin data, exiting"
+    exit 0
+fi
+
+diag "Stdin received (${#INPUT} chars)"
+
 # Extract file_path using node (portable, no jq needed)
 FILE_PATH=$(node -e "try{const j=JSON.parse(process.argv[1]);console.log(j.tool_input&&j.tool_input.file_path||'')}catch(e){}" "$INPUT" 2>/dev/null)
 
 # Skip if no file path
 if [ -z "$FILE_PATH" ]; then
+    diag "No file_path in tool_input, exiting"
     exit 0
 fi
+
+TOOL_NAME=$(node -e "try{console.log(JSON.parse(process.argv[1]).tool_name||'unknown')}catch(e){console.log('unknown')}" "$INPUT" 2>/dev/null)
+diag "File: $FILE_PATH | Tool: $TOOL_NAME"
 
 # Get just the filename
 FILENAME=$(basename "$FILE_PATH")
@@ -74,11 +91,14 @@ if [ -n "$TASK_ID" ]; then
 fi
 
 # ============ Memory API (existing) ============
-curl -s -k -X POST "${MEMORY_API}/code-change" \
+diag "POST ${MEMORY_API}/code-change ($CATEGORY) project=$PROJECT_NAME"
+MEM_RESULT=$(curl -s -k -X POST "${MEMORY_API}/code-change" \
   -H "Content-Type: application/json" \
   -H "$AUTH_HEADER" \
   -d "{\"files\":[\"${FILENAME}\"],\"summary\":\"${SUMMARY}\",\"category\":\"${CATEGORY}\",\"project\":\"${PROJECT_NAME}\",\"branch\":\"${BRANCH}\"${TASK_FIELD}}" \
-  --max-time 10 > /dev/null 2>&1
+  --max-time 10 -w "\nHTTP_STATUS:%{http_code}" 2>&1)
+HTTP_STATUS=$(echo "$MEM_RESULT" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+diag "Memory API response: HTTP $HTTP_STATUS"
 
 # ============ Code-Intel: Session Edit ============
 node -e "
