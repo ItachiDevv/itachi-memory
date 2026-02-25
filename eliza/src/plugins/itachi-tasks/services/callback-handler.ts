@@ -6,7 +6,8 @@ import { MachineRegistryService } from './machine-registry.js';
 import { listRemoteDirectory, browsingSessionMap } from '../utils/directory-browser.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { resolveSSHTarget } from '../shared/repo-utils.js';
-import { spawnSessionInTopic, activeSessions } from '../actions/interactive-session.js';
+import { spawnSessionInTopic } from '../actions/interactive-session.js';
+import { isSessionTopic } from '../shared/active-sessions.js';
 import {
   conversationFlows,
   flowKey,
@@ -102,7 +103,7 @@ function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any)
     const originalSendMessage = bot.telegram.sendMessage.bind(bot.telegram);
     bot.telegram.sendMessage = async (chatId: any, text: string, extra?: any) => {
       const threadId = extra?.message_thread_id;
-      if (threadId && (browsingSessionMap.has(threadId) || activeSessions.has(threadId))) {
+      if (threadId && (browsingSessionMap.has(threadId) || isSessionTopic(threadId))) {
         runtime.logger.info(`[chatter-suppression] Blocked LLM chatter to topic ${threadId}: "${String(text).substring(0, 60)}"`);
         // Return a fake successful result so ElizaOS doesn't retry
         return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };

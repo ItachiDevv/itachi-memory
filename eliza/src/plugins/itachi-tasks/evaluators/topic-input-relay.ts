@@ -5,7 +5,7 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { activeSessions } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed } from '../shared/active-sessions.js';
 import { spawnSessionInTopic, wrapStreamJsonInput } from '../actions/interactive-session.js';
 import { cleanupStaleFlows } from '../shared/conversation-flows.js';
 import {
@@ -94,20 +94,25 @@ export const topicInputRelayEvaluator: Evaluator = {
     if (!threadId) return;
 
     // Handle /close typed inside a topic — kill session + close topic
+    // Guard: validate() already handled /close via handleCloseInValidate() and set
+    // _topicRelayQueued. Skip here to avoid triple-firing "Closing topic...".
     if (text === '/close') {
+      if ((message.content as Record<string, unknown>)._topicRelayQueued) {
+        runtime.logger.info(`[topic-relay] /close handler skipped (already handled by validate)`);
+        return;
+      }
+      // Fallback: handle here if validate() didn't get to it
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
       if (topicsService) {
-        // Kill active SSH session if one exists for this topic
         const session = activeSessions.get(threadId);
         if (session) {
           try { session.handle.kill(); } catch { /* best-effort */ }
           activeSessions.delete(threadId);
+          markSessionClosed(threadId);
           runtime.logger.info(`[topic-relay] /close killed session ${session.sessionId} in topic ${threadId}`);
         }
-        // Clean up browsing session if present
         browsingSessionMap.delete(threadId);
 
-        // Resolve topic task to build a status name
         const taskService = runtime.getService<TaskService>('itachi-tasks');
         let statusName: string | undefined;
         if (taskService) {
@@ -317,6 +322,7 @@ async function handleCloseInValidate(
   if (session) {
     try { session.handle.kill(); } catch { /* best-effort */ }
     activeSessions.delete(threadId);
+    markSessionClosed(threadId);
     runtime.logger.info(`[topic-relay] /close (validate) killed session ${session.sessionId} in topic ${threadId}`);
   }
   // Clean up browsing session if present

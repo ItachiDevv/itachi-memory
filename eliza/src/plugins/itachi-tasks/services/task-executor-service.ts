@@ -3,7 +3,7 @@ import { SSHService } from './ssh-service.js';
 import { TaskService, type ItachiTask, generateTaskTitle } from './task-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import { MachineRegistryService } from './machine-registry.js';
-import { activeSessions } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed } from '../shared/active-sessions.js';
 import { resolveRepoPathByProject } from '../shared/repo-utils.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
@@ -113,6 +113,7 @@ export class TaskExecutorService extends Service {
       if (session?.taskId && this.activeTasks.has(session.taskId)) {
         try { session.handle.kill(); } catch { /* best-effort */ }
         activeSessions.delete(topicId);
+        markSessionClosed(topicId);
       }
     }
     this.activeTasks.clear();
@@ -508,8 +509,11 @@ export class TaskExecutorService extends Service {
           });
         }
 
-        // Remove from active sessions
-        if (topicId) activeSessions.delete(topicId);
+        // Remove from active sessions (mark as recently closed for chatter suppression)
+        if (topicId) {
+          activeSessions.delete(topicId);
+          markSessionClosed(topicId);
+        }
         this.activeTasks.delete(task.id);
 
         // Post-completion pipeline
@@ -650,7 +654,10 @@ export class TaskExecutorService extends Service {
           }).catch(() => {});
         }
 
-        if (topicId) activeSessions.delete(topicId);
+        if (topicId) {
+          activeSessions.delete(topicId);
+          markSessionClosed(topicId);
+        }
         this.activeTasks.delete(task.id);
 
         this.handleSessionComplete(task, sshTarget, workspace, code, topicId, sessionTranscript).catch(() => {});

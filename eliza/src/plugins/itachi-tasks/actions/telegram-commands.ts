@@ -8,7 +8,7 @@ import { syncGitHubRepos } from '../services/github-sync.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { listRemoteDirectory, browsingSessionMap } from '../utils/directory-browser.js';
-import { activeSessions } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, isSessionTopic } from '../shared/active-sessions.js';
 import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
   flowKey, conversationFlows, type ConversationFlow,
@@ -139,19 +139,20 @@ export const telegramCommandsAction: Action = {
       }
       if (!text.startsWith('/')) {
         // Suppress LLM chatter for non-command messages in browsing/session topics.
-        // Check this directly here because the evaluator (which sets _topicRelayQueued)
-        // may not have run yet when handler() executes, causing {success: false} fallback
-        // that triggers ElizaOS to send the LLM-generated text anyway.
+        // CRITICAL: Must call callback with empty text to prevent ElizaOS from
+        // sending the LLM-generated response as a fallback message.
         if (!(message.content as Record<string, unknown>)._topicRelayQueued) {
           const suppressThreadId = await getTopicThreadId(runtime, message);
-          if (suppressThreadId !== null && (browsingSessionMap.has(suppressThreadId) || activeSessions.has(suppressThreadId))) {
+          if (suppressThreadId !== null && (browsingSessionMap.has(suppressThreadId) || isSessionTopic(suppressThreadId))) {
             runtime.logger.info(`[telegram-commands] suppressing LLM for topic input (threadId=${suppressThreadId})`);
+            if (callback) await callback({ text: '', action: 'IGNORE' });
             return { success: true };
           }
         }
         // Also check flag set by evaluator (belt-and-suspenders)
         if ((message.content as Record<string, unknown>)._topicRelayQueued) {
           runtime.logger.info(`[telegram-commands] suppressing LLM for _topicRelayQueued non-command message`);
+          if (callback) await callback({ text: '', action: 'IGNORE' });
           return { success: true };
         }
         const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
@@ -297,7 +298,13 @@ export const telegramCommandsAction: Action = {
       // Bare /close inside a topic closes that topic (+ kills active session).
       if (text === '/close' || text.startsWith('/close ')) {
         // Bare /close inside a topic → close topic & kill session
+        // Guard: evaluator validate() already handled /close via handleCloseInValidate().
+        // Skip here to avoid triple-firing "Closing topic...".
         if (text === '/close') {
+          if ((message.content as Record<string, unknown>)._topicRelayQueued) {
+            runtime.logger.info(`[telegram-commands] /close skipped (already handled by evaluator)`);
+            return { success: true, data: { topicClosed: true } };
+          }
           const threadId = await getTopicThreadId(runtime, message);
           if (threadId) {
             const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
@@ -307,6 +314,7 @@ export const telegramCommandsAction: Action = {
               if (session) {
                 try { session.handle.kill(); } catch { /* best-effort */ }
                 activeSessions.delete(threadId);
+                markSessionClosed(threadId);
                 runtime.logger.info(`[telegram-commands] /close killed session ${session.sessionId} in topic ${threadId}`);
               }
               // Clean up browsing session if any

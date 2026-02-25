@@ -10,7 +10,7 @@ import {
   listRemoteDirectory,
   formatDirectoryListing,
 } from '../utils/directory-browser.js';
-import { activeSessions, type ActiveSession, type SessionMode } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, type ActiveSession, type SessionMode } from '../shared/active-sessions.js';
 import { DEFAULT_REPO_PATHS, DEFAULT_REPO_BASES, resolveRepoPath } from '../shared/repo-utils.js';
 
 // ── Stream-JSON output parsing ────────────────────────────────────────
@@ -522,6 +522,7 @@ export async function spawnSessionInTopic(
     }
 
     activeSessions.delete(topicId);
+    markSessionClosed(topicId);
     runtime.logger.info(`[session] ${sessionId} exited with code ${code}`);
   };
 
