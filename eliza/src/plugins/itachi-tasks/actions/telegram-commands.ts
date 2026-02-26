@@ -1,4 +1,4 @@
-import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
+import type { Action, IAgentRuntime, Memory, State, HandlerCallback, HandlerOptions, ActionResult } from '@elizaos/core';
 import { TaskService, type CreateTaskParams, generateTaskTitle } from '../services/task-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
@@ -121,7 +121,7 @@ export const telegramCommandsAction: Action = {
     runtime: IAgentRuntime,
     message: Memory,
     _state?: State,
-    _options?: unknown,
+    _options?: HandlerOptions,
     callback?: HandlerCallback
   ): Promise<ActionResult> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
@@ -185,7 +185,7 @@ export const telegramCommandsAction: Action = {
       if (text.startsWith('/session ')) {
         const result = await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
         (message.content as Record<string, unknown>)._sessionSpawned = true;
-        return result;
+        return result ?? { success: true };
       }
 
       // /delete [done|failed|all] — cleanup task topics (renamed from /close)
@@ -454,9 +454,9 @@ async function handleMachines(
     const status = m.status || 'unknown';
     const engines = (m.engine_priority || []).join(' → ') || '(none)';
     const tasks = m.active_tasks ?? 0;
-    const maxTasks = m.max_concurrent_tasks ?? '?';
+    const maxTasks = m.max_concurrent ?? '?';
     const projects = (m.projects || []).join(', ') || '(none)';
-    const platform = m.platform || 'unknown';
+    const platform = m.os || 'unknown';
     return `${i + 1}. **${name}** (${m.machine_id}) — ${status}\n   Platform: ${platform} | Tasks: ${tasks}/${maxTasks} | Engines: ${engines}\n   Projects: ${projects}`;
   });
 
