@@ -168,9 +168,10 @@ export class MemoryService extends Service {
     project?: string,
     limit = 5,
     branch?: string,
-    category?: string
+    category?: string,
+    outcome?: string
   ): Promise<ItachiMemory[]> {
-    return this.searchMemoriesHybrid(query, project, limit, branch, category);
+    return this.searchMemoriesHybrid(query, project, limit, branch, category, outcome);
   }
 
   async searchMemoriesHybrid(
@@ -178,7 +179,8 @@ export class MemoryService extends Service {
     project?: string,
     limit = 5,
     branch?: string,
-    category?: string
+    category?: string,
+    outcome?: string
   ): Promise<ItachiMemory[]> {
     const embedding = await this.getEmbedding(query);
 
@@ -190,6 +192,7 @@ export class MemoryService extends Service {
         match_project: project ?? null,
         match_category: category ?? null,
         match_branch: branch ?? null,
+        match_metadata_outcome: outcome ?? null,
         match_limit: limit,
       });
 
@@ -207,6 +210,7 @@ export class MemoryService extends Service {
       match_project: project ?? null,
       match_category: category ?? null,
       match_branch: branch ?? null,
+      match_metadata_outcome: outcome ?? null,
       match_limit: limit,
     });
 

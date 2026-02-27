@@ -113,6 +113,9 @@ function getDiagnosticsForOS(os: string | null | undefined): Record<string, { la
   return DIAGNOSTICS; // Linux / default
 }
 
+// ── Self-referential patterns (user asking about the bot itself → coolify) ──
+const SELF_REF_PATTERNS = /\b(your(?:self| own)?|the bot|our (?:setup|vps|server|environment|config|env)|itachi.?s? (?:setup|server|env|config|storage|limits?|usage))\b/i;
+
 /**
  * Extract a machine target name from natural language text.
  * Returns the SSH target name (e.g. "mac", "windows", "coolify") or null.
@@ -130,6 +133,33 @@ function extractTarget(text: string, sshService: SSHService): string | null {
     if (lower.includes(name)) return name;
   }
   return null;
+}
+
+/**
+ * Extract target from conversation context (state.data.recentMessages).
+ * Scans recent messages for machine mentions when the current message has none.
+ */
+function extractTargetFromContext(
+  state: State | undefined,
+  sshService: SSHService
+): string | null {
+  const recent = (state?.data?.recentMessages as Array<{ role: string; content: string }>) || [];
+  // Scan backwards (most recent first) for a machine mention
+  for (let i = recent.length - 1; i >= Math.max(0, recent.length - 8); i--) {
+    const msg = recent[i];
+    if (!msg?.content) continue;
+    const found = extractTarget(msg.content, sshService);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Check if the user's message is self-referential (asking about the bot/our setup).
+ * If so, default to coolify (where the bot runs).
+ */
+function isSelfReferential(text: string): boolean {
+  return SELF_REF_PATTERNS.test(text);
 }
 
 /**
@@ -221,7 +251,7 @@ export const coolifyControlAction: Action = {
     ],
   ],
 
-  validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State): Promise<boolean> => {
     // Skip messages in active session/browsing topics — the topic-input-relay handles those
     const threadId = await getTopicThreadId(runtime, message);
     if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
@@ -236,6 +266,13 @@ export const coolifyControlAction: Action = {
     if (mentionsMachine && mentionsAction) return true;
     // Match if they mention SSH explicitly
     if (/\bssh\b/i.test(text)) return true;
+    // Match self-referential queries about the bot/setup + action word
+    if (isSelfReferential(text) && mentionsAction) return true;
+    // Match if conversation context has a recent machine target + current message has action word
+    if (mentionsAction && !mentionsMachine) {
+      const sshService = runtime.getService<SSHService>('ssh');
+      if (sshService && extractTargetFromContext(state, sshService)) return true;
+    }
     return false;
   },
 
@@ -268,8 +305,31 @@ export const coolifyControlAction: Action = {
       }
 
       // ── Natural language handling ───────────────────────────────
-      const target = extractTarget(text, sshService);
+      let target = extractTarget(text, sshService);
       let intent = detectIntent(text);
+
+      // Fallback 1: self-referential queries about the bot → coolify
+      if (!target && isSelfReferential(text) && sshService.getTarget('coolify')) {
+        target = 'coolify';
+        runtime.logger.info(`[coolify-control] Self-referential query → defaulting to coolify`);
+      }
+
+      // Fallback 2: check conversation context for recently mentioned target
+      if (!target) {
+        target = extractTargetFromContext(_state, sshService);
+        if (target) {
+          runtime.logger.info(`[coolify-control] Target "${target}" resolved from conversation context`);
+        }
+      }
+
+      // Fallback 3: if only one SSH target exists, use it
+      if (!target) {
+        const targets = [...sshService.getTargets().keys()];
+        if (targets.length === 1) {
+          target = targets[0];
+          runtime.logger.info(`[coolify-control] Only one target available → "${target}"`);
+        }
+      }
 
       // If defaulted to 'investigate' but user mentions a repo/project, treat as navigate
       if (intent === 'investigate' && (/\b(repo|project)\b/i.test(text) || /specifically\s+into/i.test(text))) {
@@ -277,10 +337,10 @@ export const coolifyControlAction: Action = {
       }
 
       if (!target) {
-        // No machine identified — list available targets
+        // No machine identified even after context search — ask once, don't loop
         const available = [...sshService.getTargets().keys()].join(', ');
         if (callback) await callback({
-          text: `Which machine? Available targets: ${available}\n\nYou can say things like "check the mac" or "ssh into windows and run docker ps"`,
+          text: `I need to know which machine to target. Available: **${available}**\n\nTip: say "on coolify" or "check the mac"`,
         });
         return { success: false, error: 'No target machine identified' };
       }

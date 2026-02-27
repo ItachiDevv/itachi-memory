@@ -231,6 +231,7 @@ const sessionApi = process.argv[5];
 const summary = process.argv[6] || '';
 const durationMs = parseInt(process.argv[7]) || 0;
 const filesChanged = process.argv[8] ? process.argv[8].split(',').filter(Boolean) : [];
+const exitReason = process.argv[9] || 'unknown';
 
 function httpPost(url, body) {
     return new Promise((resolve, reject) => {
@@ -380,7 +381,8 @@ function extractCodexTexts(lines) {
             conversation_text: conversationText,
             files_changed: filesChanged,
             summary: summary,
-            duration_ms: durationMs
+            duration_ms: durationMs,
+            exit_reason: exitReason
         });
 
         // Also contribute lessons directly to the task_lesson pool
@@ -389,6 +391,7 @@ function extractCodexTexts(lines) {
             await httpPost(sessionApi + '/contribute-lessons', {
                 conversation_text: conversationText,
                 project: project,
+                exit_reason: exitReason,
             });
         } catch(e) {}
     } catch(e) {}
@@ -402,7 +405,7 @@ function extractCodexTexts(lines) {
         Start-Process -NoNewWindow -FilePath "node" -ArgumentList @(
             "-e", $insightsScript,
             $client, $sessionId, $project, $cwd, $SESSION_API,
-            $summaryArg, $durationArg, $filesArg
+            $summaryArg, $durationArg, $filesArg, $reason
         ) -RedirectStandardOutput "NUL" -RedirectStandardError "NUL"
     } catch {}
 }

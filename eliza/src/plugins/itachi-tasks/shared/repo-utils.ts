@@ -46,14 +46,14 @@ export function getMachineIdsForTarget(sshTarget: string): string[] {
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
   mac: '~/itachi/itachi-memory',
   windows: '~/Documents/Crypto/skills-plugins/itachi-memory',
-  coolify: '/app',
+  coolify: '/home/itachi/itachi/itachi-memory',
 };
 
 /** Base directories where repos are typically cloned per machine */
 export const DEFAULT_REPO_BASES: Record<string, string> = {
   mac: '~/itachi',
   windows: '~/Documents/Crypto',
-  coolify: '/tmp/repos',
+  coolify: '/home/itachi/itachi',
 };
 
 export interface RepoResolution {

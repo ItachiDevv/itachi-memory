@@ -192,6 +192,7 @@ const sessionApi = process.argv[4];
 const summary = process.argv[5] || '';
 const durationMs = parseInt(process.argv[6]) || 0;
 const filesChanged = process.argv[7] ? process.argv[7].split(',').filter(Boolean) : [];
+const exitReason = process.argv[8] || 'unknown';
 
 function encodeCwd(p) {
     return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+\$/g, '');
@@ -284,7 +285,8 @@ function httpPost(url, body) {
             conversation_text: conversationText,
             files_changed: filesChanged,
             summary: summary,
-            duration_ms: durationMs
+            duration_ms: durationMs,
+            exit_reason: exitReason
         });
 
         // Also contribute lessons directly to the task_lesson pool
@@ -292,10 +294,11 @@ function httpPost(url, body) {
             await httpPost(sessionApi + '/contribute-lessons', {
                 conversation_text: conversationText,
                 project: project,
+                exit_reason: exitReason,
             });
         } catch(e) {}
     } catch(e) {}
 })();
-" "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" 2>/dev/null &
+" "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" "$REASON" 2>/dev/null &
 
 exit 0

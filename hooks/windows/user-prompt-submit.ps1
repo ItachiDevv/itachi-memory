@@ -102,7 +102,11 @@ try {
             $files = if ($mem.files -and $mem.files.Count -gt 0) { " (" + ($mem.files -join ", ") + ")" } else { "" }
             $cat = if ($mem.category) { "[$($mem.category)] " } else { "" }
             $prefix = if ($idx -ge $projectResultCount) { "[GLOBAL] " } else { "" }
-            $contextLines += "$prefix$cat$($mem.summary)$files"
+            $outcomeTag = ""
+            if ($mem.metadata -and $mem.metadata.outcome) {
+                $outcomeTag = "[$($mem.metadata.outcome.ToUpper())] "
+            }
+            $contextLines += "$prefix$cat$outcomeTag$($mem.summary)$files"
             $idx++
         }
         $contextLines += "=== End Memory Context ==="

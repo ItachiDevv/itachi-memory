@@ -71,7 +71,7 @@ export const memoryRoutes: Route[] = [
         const rt = runtime as IAgentRuntime;
         if (!checkAuth(req as any, res, rt)) return;
 
-        const { query, limit, project, category, branch } = req.query as Record<string, string>;
+        const { query, limit, project, category, branch, outcome } = req.query as Record<string, string>;
         if (!query) {
           res.status(400).json({ error: 'Query required' });
           return;
@@ -85,13 +85,16 @@ export const memoryRoutes: Route[] = [
 
         const safeQuery = truncate(query, MAX_LENGTHS.query);
         const safeLimit = clampLimit(limit, 5, 50);
+        const validOutcomes = ['success', 'partial', 'failure'];
+        const safeOutcome = outcome && validOutcomes.includes(outcome) ? outcome : undefined;
 
         const memories = await memoryService.searchMemories(
           safeQuery,
           project ? truncate(project, MAX_LENGTHS.project) : undefined,
           safeLimit,
           branch ? truncate(branch, MAX_LENGTHS.branch) : undefined,
-          category ? truncate(category, MAX_LENGTHS.category) : undefined
+          category ? truncate(category, MAX_LENGTHS.category) : undefined,
+          safeOutcome
         );
         res.json({ count: memories.length, results: memories });
       } catch (error) {

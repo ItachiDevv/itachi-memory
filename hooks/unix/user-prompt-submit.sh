@@ -72,7 +72,8 @@ try {
         const files = (mem.files && mem.files.length > 0) ? ' (' + mem.files.join(', ') + ')' : '';
         const cat = mem.category ? '[' + mem.category + '] ' : '';
         const prefix = i >= projectResults.length ? '[GLOBAL] ' : '';
-        lines.push(prefix + cat + mem.summary + files);
+        const outcomeTag = (mem.metadata && mem.metadata.outcome) ? '[' + mem.metadata.outcome.toUpperCase() + '] ' : '';
+        lines.push(prefix + cat + outcomeTag + mem.summary + files);
     }
     lines.push('=== End Memory Context ===');
 

@@ -117,6 +117,7 @@ const sessionApi = process.argv[4];
 const summary = process.argv[5] || '';
 const durationMs = parseInt(process.argv[6]) || 0;
 const filesChanged = process.argv[7] ? process.argv[7].split(',').filter(Boolean) : [];
+const exitReason = process.argv[8] || 'unknown';
 
 function httpPost(url, body) {
     return new Promise((resolve, reject) => {
@@ -260,10 +261,11 @@ function httpPost(url, body) {
             conversation_text: conversationText,
             files_changed: filesChanged,
             summary: summary,
-            duration_ms: durationMs
+            duration_ms: durationMs,
+            exit_reason: exitReason
         });
     } catch(e) {}
 })();
-" "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "" "0" "$FILES_CHANGED" 2>/dev/null &
+" "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "" "0" "$FILES_CHANGED" "$REASON" 2>/dev/null &
 
 exit 0

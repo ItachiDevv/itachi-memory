@@ -273,7 +273,7 @@ export const codeIntelRoutes: Route[] = [
         const project = (resolveProject(req as any) || body.project) as string | null;
         const {
           session_id, conversation_text, files_changed,
-          summary, duration_ms,
+          summary, duration_ms, exit_reason,
         } = body;
 
         if (!conversation_text || conversation_text.length < 50) {
@@ -295,12 +295,14 @@ export const codeIntelRoutes: Route[] = [
         const filesStr = Array.isArray(files_changed) ? files_changed.join(', ') : 'unknown';
         const safeText = truncate(conversation_text, 4000);
 
+        const exitReasonStr = exit_reason ? `\nSession exit reason: ${truncate(String(exit_reason), 50)}` : '';
+
         const prompt = `Analyze this Claude Code session conversation and extract insights.
 
 Project: ${truncate(project, MAX_LENGTHS.project)}
 Duration: ${durationMin}min
 Files changed: ${filesStr}
-Session summary: ${summary ? truncate(summary, MAX_LENGTHS.summary) : 'none'}
+Session summary: ${summary ? truncate(summary, MAX_LENGTHS.summary) : 'none'}${exitReasonStr}
 
 Conversation (contains both [USER] and [ASSISTANT] messages):
 ${safeText}
@@ -311,7 +313,15 @@ Score significance 0.0-1.0:
 0.6-0.8: Technical decisions, architectural choices, important patterns
 0.9-1.0: Critical decisions, project pivots, major refactors
 
-FRUSTRATION DETECTION: Look for signs of user frustration — repeated corrections, user saying "no", "wrong", "I already told you", "stop", insults, or the assistant going in circles. If frustration is detected, set significance >= 0.8 and extract a rule capturing what went wrong.
+OUTCOME ASSESSMENT — Determine the session outcome:
+- "success": User's goal was achieved, no unresolved errors, no frustration
+- "partial": Some progress but incomplete, workarounds used, or user had to redirect significantly
+- "failure": Errors blocked progress, user frustrated, repeated corrections, goal not achieved
+
+Signals for failure/partial: user saying "no", "wrong", "stop", "I already told you", assistant going in circles, unresolved errors at session end, exit_reason="error".
+Signals for success: user confirms completion, files changed match goal, exit_reason="completed", positive acknowledgment.
+
+FRUSTRATION DETECTION: If frustration is detected, set significance >= 0.8 and extract a rule capturing what went wrong.
 
 Extract key insights as categorized items. Valid categories: decision, pattern, bugfix, architecture, preference, learning.
 
@@ -326,7 +336,7 @@ Each rule must have a "scope" field:
 Only include rules if there's clear evidence in the conversation. Be specific and actionable — no vague platitudes.
 
 Respond ONLY with valid JSON, no markdown fences:
-{"significance": 0.7, "insights": [{"category": "decision", "summary": "..."}], "rules": [{"rule": "WHEN ..., DO ..., AVOID ...", "confidence": 0.8, "scope": "project"}]}`;
+{"significance": 0.7, "outcome": "success", "insights": [{"category": "decision", "summary": "..."}], "rules": [{"rule": "WHEN ..., DO ..., AVOID ...", "confidence": 0.8, "scope": "project"}]}`;
 
         const result = await rt.useModel(ModelType.TEXT_SMALL, {
           prompt,
@@ -336,6 +346,7 @@ Respond ONLY with valid JSON, no markdown fences:
         const raw = typeof result === 'string' ? result : String(result);
         let parsed: {
           significance: number;
+          outcome?: 'success' | 'partial' | 'failure';
           insights: Array<{ category: string; summary: string }>;
           rules?: Array<{ rule: string; confidence: number; scope?: string }>;
         };
@@ -353,6 +364,9 @@ Respond ONLY with valid JSON, no markdown fences:
         }
 
         const significance = Math.max(0, Math.min(1, parsed.significance));
+        const validOutcomes = ['success', 'partial', 'failure'] as const;
+        const sessionOutcome = parsed.outcome && validOutcomes.includes(parsed.outcome)
+          ? parsed.outcome : 'success';
 
         // Skip storing if trivial
         if (significance < 0.25 || parsed.insights.length === 0) {
@@ -393,7 +407,7 @@ Respond ONLY with valid JSON, no markdown fences:
                   type: 'management-lesson',
                   category: rlmCategory,
                   confidence: significance,
-                  outcome: 'success' as const,
+                  outcome: sessionOutcome,
                   source: 'session-insights',
                   session_id,
                   project: truncate(project, MAX_LENGTHS.project),
@@ -428,7 +442,7 @@ Respond ONLY with valid JSON, no markdown fences:
                   source: 'session-insights',
                   lesson_category: lessonCategory,
                   confidence: significance,
-                  outcome: 'success' as const,
+                  outcome: sessionOutcome,
                   session_id,
                   extracted_at: new Date().toISOString(),
                 },
@@ -525,7 +539,7 @@ Respond ONLY with valid JSON, no markdown fences:
         const rt = runtime as IAgentRuntime;
         if (!checkAuth(req as any, res, rt)) return;
 
-        const { conversation_text, project, task_id } = req.body as Record<string, any>;
+        const { conversation_text, project, task_id, exit_reason: lessonExitReason } = req.body as Record<string, any>;
         if (!conversation_text || !project) {
           res.status(400).json({ error: 'conversation_text and project required' });
           return;
@@ -537,6 +551,8 @@ Respond ONLY with valid JSON, no markdown fences:
           return;
         }
 
+        const exitCtx = lessonExitReason ? `\nSession exit reason: ${truncate(String(lessonExitReason), 50)}` : '';
+
         // Use LLM to extract lessons from conversation
         const result = await rt.useModel(ModelType.TEXT_SMALL, {
           prompt: `Extract actionable lessons from this local Claude Code session. Focus on:
@@ -544,6 +560,7 @@ Respond ONLY with valid JSON, no markdown fences:
 - User preferences discovered
 - Error patterns and solutions
 - Tool/approach selections that succeeded
+${exitCtx}
 
 Conversation:
 ${truncate(conversation_text, 3000)}
@@ -552,13 +569,18 @@ Each lesson must have a "scope" field:
 - "global": Operational knowledge useful across ALL projects (SSH, tokens, auth, tooling, git, environment setup)
 - "project": Project-specific conventions (naming, testing, dependencies, architecture)
 
-Return a JSON array of lessons: [{"text": "...", "category": "error-handling|user-preference|tool-selection|project-selection", "confidence": 0.0-1.0, "scope": "project"}]
+Each lesson must also have an "outcome" field:
+- "success": This lesson comes from something that worked
+- "failure": This lesson comes from something that failed or caused problems
+- "partial": Mixed results — partially worked or required significant correction
+
+Return a JSON array of lessons: [{"text": "...", "category": "error-handling|user-preference|tool-selection|project-selection", "confidence": 0.0-1.0, "scope": "project", "outcome": "success"}]
 If no meaningful lessons, return []. Respond ONLY with JSON, no markdown fences.`,
           temperature: 0.2,
         });
 
         const raw = typeof result === 'string' ? result : String(result);
-        let lessons: Array<{ text: string; category: string; confidence: number; scope?: string }>;
+        let lessons: Array<{ text: string; category: string; confidence: number; scope?: string; outcome?: string }>;
         try {
           const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
           lessons = JSON.parse(cleaned);
@@ -572,11 +594,14 @@ If no meaningful lessons, return []. Respond ONLY with JSON, no markdown fences.
           return;
         }
 
+        const validOutcomesLocal = ['success', 'partial', 'failure'] as const;
         let stored = 0;
         for (const lesson of lessons.slice(0, 8)) {
           if (!lesson.text || lesson.text.length < 10 || !lesson.category) continue;
           if (typeof lesson.confidence !== 'number' || lesson.confidence < 0.4) continue;
           const lessonProject = lesson.scope === 'global' ? '_global' : truncate(project, MAX_LENGTHS.project);
+          const lessonOutcome = lesson.outcome && validOutcomesLocal.includes(lesson.outcome as any)
+            ? lesson.outcome : 'success';
           try {
             await memoryService.storeMemory({
               project: lessonProject,
@@ -590,7 +615,7 @@ If no meaningful lessons, return []. Respond ONLY with JSON, no markdown fences.
                 lesson_category: lesson.category,
                 confidence: lesson.confidence,
                 scope: lesson.scope || 'project',
-                outcome: 'success' as const,
+                outcome: lessonOutcome,
                 extracted_at: new Date().toISOString(),
               },
             });

@@ -130,6 +130,7 @@ const sessionApi = process.argv[4];
 const summary = process.argv[5] || '';
 const durationMs = parseInt(process.argv[6]) || 0;
 const filesChanged = process.argv[7] ? process.argv[7].split(',').filter(Boolean) : [];
+const exitReason = process.argv[8] || 'unknown';
 
 function httpPost(url, body) {
     return new Promise((resolve, reject) => {
@@ -250,7 +251,8 @@ function httpPost(url, body) {
             conversation_text: conversationText,
             files_changed: filesChanged,
             summary: summary,
-            duration_ms: durationMs
+            duration_ms: durationMs,
+            exit_reason: exitReason
         });
     } catch(e) {}
 })();
@@ -263,7 +265,7 @@ function httpPost(url, body) {
         Start-Process -NoNewWindow -FilePath "node" -ArgumentList @(
             "-e", $insightsScript,
             $sessionId, $project, $cwd, $SESSION_API,
-            $summaryArg, $durationArg, $filesArg
+            $summaryArg, $durationArg, $filesArg, $reason
         ) -RedirectStandardOutput "NUL" -RedirectStandardError "NUL"
     } catch {}
 }

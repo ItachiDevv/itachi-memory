@@ -64,6 +64,7 @@ export class TaskExecutorService extends Service {
   capabilityDescription = 'Claims and executes tasks via SSH on remote machines';
 
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private managedMachines: string[] = [];
   private maxConcurrent: number;
   private executorId: string;
@@ -92,12 +93,22 @@ export class TaskExecutorService extends Service {
 
     runtime.logger.info(`TaskExecutorService started — managing: [${service.managedMachines.join(', ')}], max concurrent: ${service.maxConcurrent}`);
 
+    // Register + heartbeat managed machines immediately so dispatcher can assign to them
+    await service.registerAndHeartbeat();
+
     // Start polling every 5 seconds
     service.pollInterval = setInterval(() => {
       service.pollForTasks().catch((err) => {
         runtime.logger.error(`[executor] Poll error: ${err instanceof Error ? err.message : String(err)}`);
       });
     }, 5_000);
+
+    // Heartbeat every 30 seconds to keep machines "online" in the registry
+    service.heartbeatInterval = setInterval(() => {
+      service.registerAndHeartbeat().catch((err) => {
+        runtime.logger.error(`[executor] Heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }, 30_000);
 
     return service;
   }
@@ -106,6 +117,10 @@ export class TaskExecutorService extends Service {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
+    }
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
     // Kill active sessions
     for (const [topicId] of activeSessions) {
@@ -137,6 +152,49 @@ export class TaskExecutorService extends Service {
   /** Get the list of managed machines (used by task-dispatcher to skip them) */
   getManagedMachines(): string[] {
     return this.managedMachines;
+  }
+
+  /**
+   * Register managed machines in the machine_registry and send heartbeats.
+   * This ensures the dispatcher can find and assign tasks to them.
+   * Runs immediately at startup and every 30s thereafter.
+   */
+  private async registerAndHeartbeat(): Promise<void> {
+    const registry = this.runtime.getService<MachineRegistryService>('machine-registry');
+    if (!registry) return;
+
+    for (const machineId of this.managedMachines) {
+      try {
+        // Get all registry IDs for this SSH target (e.g., 'mac' → ['mac', 'itachi-m1', 'macbook'])
+        const registryIds = getMachineIdsForTarget(machineId);
+        // Count active tasks on this machine
+        const activeTasks = [...this.activeTasks.values()].filter(t => t.machineId === machineId).length;
+
+        // Determine OS from target name
+        const lower = machineId.toLowerCase();
+        const os = lower === 'mac' ? 'darwin' : lower === 'windows' ? 'win32' : 'linux';
+
+        // Register or heartbeat each registry ID for this SSH target
+        for (const regId of registryIds) {
+          try {
+            await registry.heartbeat(regId, activeTasks);
+          } catch {
+            // Machine not registered yet — register it
+            await registry.registerMachine({
+              machine_id: regId,
+              display_name: regId,
+              projects: [],
+              max_concurrent: this.maxConcurrent,
+              os,
+              engine_priority: ['claude', 'codex', 'gemini'],
+            });
+            this.runtime.logger.info(`[executor] Registered machine "${regId}" in registry`);
+          }
+        }
+      } catch (err) {
+        this.runtime.logger.warn(`[executor] Heartbeat failed for ${machineId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   // ── Polling & Claiming ───────────────────────────────────────────────
@@ -350,6 +408,12 @@ export class TaskExecutorService extends Service {
       }
     }
 
+    // If SSH target is root, chown workspace to 'itachi' user so claude can write
+    const wsTarget = sshService.getTarget(sshTarget);
+    if (wsTarget?.user === 'root') {
+      await sshService.exec(sshTarget, `chown -R itachi:itachi "${workspacePath}" 2>/dev/null`, 10_000);
+    }
+
     this.runtime.logger.info(`[executor] Created worktree at ${workspacePath} from ${branch}`);
     return workspacePath;
   }
@@ -448,7 +512,18 @@ export class TaskExecutorService extends Service {
         `Get-Content '${remotePath}' | claude --dangerously-skip-permissions -p`,
       ].join('; ');
     } else {
-      sshCommand = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
+      // Check if SSH target connects as root — if so, we need to run claude as a
+      // non-root user because --dangerously-skip-permissions is blocked for root.
+      const target = sshService.getTarget(sshTarget);
+      const isRoot = target?.user === 'root';
+      const coreCmd = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
+      if (isRoot) {
+        // Use su to switch to 'itachi' user; -l gives login shell with PATH
+        // -c wraps the command; -s /bin/bash ensures bash shell
+        sshCommand = `su - itachi -s /bin/bash -c 'cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp'`;
+      } else {
+        sshCommand = coreCmd;
+      }
     }
 
     if (topicId && topicsService) {
@@ -574,7 +649,7 @@ export class TaskExecutorService extends Service {
       const remotePath = `/tmp/itachi-prompts/${shortId}.txt`;
       await sshService.exec(
         sshTarget,
-        `mkdir -p /tmp/itachi-prompts && echo '${b64}' | base64 -d > ${remotePath}`,
+        `mkdir -p /tmp/itachi-prompts && echo '${b64}' | base64 -d > ${remotePath} && chmod 644 ${remotePath}`,
         10_000,
       );
       return remotePath;
@@ -620,7 +695,14 @@ export class TaskExecutorService extends Service {
           `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
           `Get-Content '${remotePath}' | claude --continue --dangerously-skip-permissions -p`,
         ].join('; ')
-      : `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
+      : (() => {
+          const resumeTarget = sshService.getTarget(sshTarget);
+          const resumeIsRoot = resumeTarget?.user === 'root';
+          const resumeCore = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
+          return resumeIsRoot
+            ? `su - itachi -s /bin/bash -c '${resumeCore.replace(/'/g, "'\\''")}'`
+            : resumeCore;
+        })();
 
     if (topicId && topicsService) {
       await topicsService.sendToTopic(topicId, `Resuming session...\nInput: ${input.substring(0, 100)}`);
