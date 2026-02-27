@@ -634,17 +634,23 @@ async function handleDeleteAllTopics(
 
   const taskService = runtime.getService<TaskService>('itachi-tasks');
 
-  // Collect topic IDs from all task statuses
+  // Collect topic IDs — query Supabase directly for all tasks with non-null telegram_topic_id
   const topicIds = new Set<number>();
   if (taskService) {
-    for (const status of ['pending', 'in_progress', 'completed', 'failed'] as const) {
-      try {
-        const tasks = await taskService.listTasks({ status: status as any, limit: 500 });
-        for (const task of tasks) {
-          const topicId = (task as any).telegram_topic_id;
-          if (topicId) topicIds.add(topicId);
+    try {
+      const supabase = taskService.getSupabase();
+      if (supabase) {
+        const { data: tasks } = await supabase
+          .from('itachi_tasks')
+          .select('id, telegram_topic_id')
+          .not('telegram_topic_id', 'is', null)
+          .limit(1000);
+        for (const task of tasks || []) {
+          if (task.telegram_topic_id) topicIds.add(task.telegram_topic_id);
         }
-      } catch { /* status might not exist */ }
+      }
+    } catch (err) {
+      runtime.logger.warn(`[close-all] Failed to query tasks: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -659,6 +665,18 @@ async function handleDeleteAllTopics(
 
   if (callback) await callback({ text: `Closing ${topicIds.size} topic(s)...` });
 
+  // Helper: clear telegram_topic_id from DB for a given topicId
+  const clearTopicFromDb = async (topicId: number) => {
+    if (!taskService) return;
+    try {
+      const supabase = taskService.getSupabase();
+      await supabase
+        .from('itachi_tasks')
+        .update({ telegram_topic_id: null })
+        .eq('telegram_topic_id', topicId);
+    } catch { /* best-effort */ }
+  };
+
   let deleted = 0;
   let cleaned = 0;
   for (const topicId of topicIds) {
@@ -672,12 +690,7 @@ async function handleDeleteAllTopics(
       const reopened = await topicsService.reopenTopic(topicId);
       if (!reopened) {
         cleaned++;
-        // Clear from DB
-        if (taskService) {
-          const tasks = await taskService.listTasks({ limit: 500 });
-          const task = tasks.find((t: any) => t.telegram_topic_id === topicId);
-          if (task) await taskService.updateTask(task.id, { telegram_topic_id: null } as any).catch(() => {});
-        }
+        await clearTopicFromDb(topicId);
         continue;
       }
 
@@ -688,21 +701,11 @@ async function handleDeleteAllTopics(
       const ok = await topicsService.deleteTopic(topicId);
       if (ok) deleted++;
 
-      // Clear topic_id from task
-      if (taskService) {
-        const tasks = await taskService.listTasks({ limit: 500 });
-        const task = tasks.find((t: any) => t.telegram_topic_id === topicId);
-        if (task) await taskService.updateTask(task.id, { telegram_topic_id: null } as any).catch(() => {});
-      }
+      await clearTopicFromDb(topicId);
     } catch (err) {
       cleaned++;
       runtime.logger.error(`[close-all] Error deleting topic ${topicId}: ${err instanceof Error ? err.message : String(err)}`);
-      // Clear stale topic_id
-      if (taskService) {
-        const tasks = await taskService.listTasks({ limit: 500 });
-        const task = tasks.find((t: any) => t.telegram_topic_id === topicId);
-        if (task) await taskService.updateTask(task.id, { telegram_topic_id: null } as any).catch(() => {});
-      }
+      await clearTopicFromDb(topicId);
     }
   }
 
@@ -1406,7 +1409,10 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
 
 **Topic Management**
   /close — Close current topic (use inside a topic)
+  /close_all — Delete ALL topics (regardless of status)
   /delete done|failed|all — Delete completed/failed topics
+
+**Other**
   /help — Show this message`;
 
   if (callback) await callback({ text: help });
