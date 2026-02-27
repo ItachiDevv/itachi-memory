@@ -115,6 +115,10 @@ function getDiagnosticsForOS(os: string | null | undefined): Record<string, { la
 
 // ── Per-room cooldown for "Which machine?" clarification ─────────────
 const lastMachineAsk: Map<string, number> = new Map();
+// ── Per-room cooldown for ANY coolify-control handler invocation ──────
+const lastHandlerRun: Map<string, number> = new Map();
+// ── Per-message dedup to prevent handler running twice on same message ─
+const handledMessages: Set<string> = new Set();
 
 // ── Self-referential patterns (user asking about the bot itself → coolify) ──
 const SELF_REF_PATTERNS = /\b(your(?:self| own)?|the bot|our (?:setup|vps|server|environment|config|env)|itachi.?s? (?:setup|server|env|config|storage|limits?|usage))\b/i;
@@ -140,17 +144,20 @@ function extractTarget(text: string, sshService: SSHService): string | null {
 
 /**
  * Extract target from conversation context (state.data.recentMessages).
- * Scans recent messages for machine mentions when the current message has none.
+ * Scans recent USER messages (skips bot/assistant messages) for machine mentions.
  */
 function extractTargetFromContext(
   state: State | undefined,
-  sshService: SSHService
+  sshService: SSHService,
+  agentId?: string
 ): string | null {
-  const recent = (state?.data?.recentMessages as Array<{ role: string; content: string }>) || [];
-  // Scan backwards (most recent first) for a machine mention
+  const recent = (state?.data?.recentMessages as Array<{ role: string; content: string; userId?: string }>) || [];
+  // Scan backwards (most recent first) for a machine mention in USER messages only
   for (let i = recent.length - 1; i >= Math.max(0, recent.length - 8); i--) {
     const msg = recent[i];
     if (!msg?.content) continue;
+    // Skip bot/assistant messages — they contain machine names in responses
+    if (msg.role === 'assistant' || (agentId && msg.userId === agentId)) continue;
     const found = extractTarget(msg.content, sshService);
     if (found) return found;
   }
@@ -255,38 +262,52 @@ export const coolifyControlAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory, state?: State): Promise<boolean> => {
+    // ── Guard: never process the bot's own messages ──
+    if (message.userId === runtime.agentId) return false;
+
     // Skip messages in active session/browsing topics — the topic-input-relay handles those
     const threadId = await getTopicThreadId(runtime, message);
     if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
 
     const text = stripBotMention(message.content?.text || '');
+    if (!text.trim()) return false;
+
     // Always match explicit slash commands (including /ops and /exec aliases)
     if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test|ops|exec)\b/.test(text)) {
       runtime.logger.debug(`[COOLIFY_CONTROL] validate: slash command "${text.substring(0, 40)}" → true`);
       return true;
     }
+
     // Match natural language about machines/servers
     const lower = text.toLowerCase();
     const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias => lower.includes(alias));
     const mentionsAction = /\b(ssh|check|investigate|deploy|restart|update|logs?|status|failing|broken|down|running|containers?|docker|fix|diagnose|debug|figure out)\b/i.test(text);
+
+    // Direct match: machine + action
     if (mentionsMachine && mentionsAction) return true;
     // Match if they mention SSH explicitly
     if (/\bssh\b/i.test(text)) return true;
     // Match self-referential queries about the bot/setup + action word
     if (isSelfReferential(text) && mentionsAction) return true;
-    // Match if conversation context has a recent machine target + current message has action word
+
+    // ── For messages with action word but NO machine name: apply cooldown FIRST ──
     if (mentionsAction && !mentionsMachine) {
-      const sshService = runtime.getService<SSHService>('ssh');
-      if (sshService && extractTargetFromContext(state, sshService)) return true;
-    }
-    // Cooldown: if no machine mention and no self-ref, suppress if we recently asked "Which machine?"
-    if (mentionsAction && !mentionsMachine && !isSelfReferential(text)) {
       const roomId = message.roomId;
-      const last = lastMachineAsk.get(roomId);
-      if (last && Date.now() - last < 120_000) {
-        runtime.logger.debug(`[COOLIFY_CONTROL] validate: suppressed by 2min cooldown for room ${roomId}`);
+      // Cooldown: suppress if handler ran recently (prevents rapid-fire loops)
+      const lastRun = lastHandlerRun.get(roomId);
+      if (lastRun && Date.now() - lastRun < 30_000) {
+        runtime.logger.debug(`[COOLIFY_CONTROL] validate: suppressed by 30s handler cooldown for room ${roomId}`);
         return false;
       }
+      // Cooldown: suppress if we recently asked "Which machine?"
+      const lastAsk = lastMachineAsk.get(roomId);
+      if (lastAsk && Date.now() - lastAsk < 120_000) {
+        runtime.logger.debug(`[COOLIFY_CONTROL] validate: suppressed by 2min "which machine?" cooldown for room ${roomId}`);
+        return false;
+      }
+      // Context fallback: check recent USER messages (skip bot messages) for machine mention
+      const sshService = runtime.getService<SSHService>('ssh');
+      if (sshService && extractTargetFromContext(state, sshService, runtime.agentId)) return true;
     }
     return false;
   },
@@ -299,6 +320,26 @@ export const coolifyControlAction: Action = {
     callback?: HandlerCallback
   ): Promise<ActionResult> => {
     try {
+      // ── Dedup: prevent handler running twice on the same message ──
+      const msgId = message.id || `${message.roomId}-${message.createdAt}`;
+      if (handledMessages.has(msgId)) {
+        runtime.logger.info(`[coolify-control] Skipping duplicate handler call for message ${msgId}`);
+        return { success: true, data: { deduplicated: true } };
+      }
+      handledMessages.add(msgId);
+      // Clean old entries (keep last 50)
+      if (handledMessages.size > 50) {
+        const iter = handledMessages.values();
+        for (let i = 0; i < handledMessages.size - 50; i++) iter.next();
+        const keep = new Set<string>();
+        for (const v of iter) keep.add(v);
+        handledMessages.clear();
+        for (const v of keep) handledMessages.add(v);
+      }
+
+      // ── Record handler run time for cooldown ──
+      lastHandlerRun.set(message.roomId, Date.now());
+
       // Double-guard: don't execute SSH commands for session topic messages
       const threadId = await getTopicThreadId(runtime, message);
       if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) {
@@ -453,9 +494,8 @@ export const coolifyControlAction: Action = {
           const targetOS = await detectTargetOS(runtime, target);
           const diagTable = getDiagnosticsForOS(targetOS);
           const diagSteps = diagTable[intent] || diagTable.investigate;
-          if (callback) await callback({ text: `Investigating ${target}${targetOS ? ` (${targetOS})` : ''}...` });
-          const report = await runDiagnostics(sshService, target, diagSteps, callback);
-          if (callback) await callback({ text: report });
+          const report = await runDiagnostics(sshService, target, diagSteps);
+          if (callback) await callback({ text: `**${intent}** on ${target}${targetOS ? ` (${targetOS})` : ''}:\n\n${report}` });
           return { success: true, data: { target, intent, report } };
         }
       }

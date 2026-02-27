@@ -53,6 +53,8 @@ export const createTaskAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+    // Never process the bot's own messages
+    if (message.userId === runtime.agentId) return false;
     const text = stripBotMention(message.content?.text || '');
     // Always valid for explicit /task commands
     if (text.startsWith('/task ')) return true;

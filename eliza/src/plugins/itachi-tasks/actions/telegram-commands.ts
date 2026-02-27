@@ -22,7 +22,7 @@ import { interactiveSessionAction, wrapStreamJsonInput } from './interactive-ses
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete, /close, /close_done, /close_failed, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, interactive /task flows, /session (no args, shows machine picker), and /session <machine> (direct session on named target)',
+  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete, /close, /close_all, /close_done, /close_failed, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, interactive /task flows, /session (no args, shows machine picker), and /session <machine> (direct session on named target)',
   similes: ['help', 'show commands', 'recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'delete done topics', 'delete failed topics', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'unteach', 'forget rule', 'spawn agent', 'list agents', 'message agent', 'engine priority', 'show engines', 'set engines'],
   examples: [
     [
@@ -114,6 +114,7 @@ export const telegramCommandsAction: Action = {
       text === '/sync-repos' || text === '/sync_repos' ||
       text === '/close-done' || text === '/close_done' || text === '/close_finished' ||
       text === '/close-failed' || text === '/close_failed' ||
+      text === '/close-all' || text === '/close_all' ||
       text === '/close' || text.startsWith('/close ');
   },
 
@@ -351,6 +352,11 @@ export const telegramCommandsAction: Action = {
         }
         if (callback) await callback({ text: 'Usage: /delete [done|failed|all] (default: all)' });
         return { success: false, error: 'Unknown close subcommand' };
+      }
+
+      // /close_all or /close-all — close ALL topics regardless of task status
+      if (text === '/close-all' || text === '/close_all') {
+        return await handleDeleteAllTopics(runtime, callback);
       }
 
       // /close-done, /close_done, /close_finished — hidden aliases (still work)
@@ -610,6 +616,99 @@ async function handleDeleteTopics(
   const cleanedMsg = cleaned > 0 ? ` (${cleaned} stale topic(s) cleared from DB)` : '';
   if (callback) await callback({ text: `Deleted ${deleted}/${withTopics.length} ${status} topic(s).${cleanedMsg}` });
   return { success: true, data: { deleted, cleaned, total: withTopics.length } };
+}
+
+/**
+ * Close ALL topics in the group — regardless of task status (pending, in-progress, completed, failed).
+ * Also cleans up orphaned topics that have no associated task.
+ */
+async function handleDeleteAllTopics(
+  runtime: IAgentRuntime,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!topicsService) {
+    if (callback) await callback({ text: 'Telegram topics service not available.' });
+    return { success: false, error: 'Topics service not available' };
+  }
+
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+
+  // Collect topic IDs from all task statuses
+  const topicIds = new Set<number>();
+  if (taskService) {
+    for (const status of ['pending', 'in_progress', 'completed', 'failed'] as const) {
+      try {
+        const tasks = await taskService.listTasks({ status: status as any, limit: 500 });
+        for (const task of tasks) {
+          const topicId = (task as any).telegram_topic_id;
+          if (topicId) topicIds.add(topicId);
+        }
+      } catch { /* status might not exist */ }
+    }
+  }
+
+  // Also collect any active session or browsing topic IDs
+  for (const [threadId] of activeSessions) topicIds.add(threadId);
+  for (const [threadId] of browsingSessionMap) topicIds.add(threadId);
+
+  if (topicIds.size === 0) {
+    if (callback) await callback({ text: 'No topics found to close.' });
+    return { success: true, data: { deleted: 0 } };
+  }
+
+  if (callback) await callback({ text: `Closing ${topicIds.size} topic(s)...` });
+
+  let deleted = 0;
+  let cleaned = 0;
+  for (const topicId of topicIds) {
+    try {
+      // Clean up in-memory session state
+      activeSessions.delete(topicId);
+      markSessionClosed(topicId);
+      browsingSessionMap.delete(topicId);
+
+      // Try reopen first (closed topics can't be deleted)
+      const reopened = await topicsService.reopenTopic(topicId);
+      if (!reopened) {
+        cleaned++;
+        // Clear from DB
+        if (taskService) {
+          const tasks = await taskService.listTasks({ limit: 500 });
+          const task = tasks.find((t: any) => t.telegram_topic_id === topicId);
+          if (task) await taskService.updateTask(task.id, { telegram_topic_id: null } as any).catch(() => {});
+        }
+        continue;
+      }
+
+      await new Promise(r => setTimeout(r, 300));
+      await topicsService.closeTopic(topicId);
+      await new Promise(r => setTimeout(r, 500));
+
+      const ok = await topicsService.deleteTopic(topicId);
+      if (ok) deleted++;
+
+      // Clear topic_id from task
+      if (taskService) {
+        const tasks = await taskService.listTasks({ limit: 500 });
+        const task = tasks.find((t: any) => t.telegram_topic_id === topicId);
+        if (task) await taskService.updateTask(task.id, { telegram_topic_id: null } as any).catch(() => {});
+      }
+    } catch (err) {
+      cleaned++;
+      runtime.logger.error(`[close-all] Error deleting topic ${topicId}: ${err instanceof Error ? err.message : String(err)}`);
+      // Clear stale topic_id
+      if (taskService) {
+        const tasks = await taskService.listTasks({ limit: 500 });
+        const task = tasks.find((t: any) => t.telegram_topic_id === topicId);
+        if (task) await taskService.updateTask(task.id, { telegram_topic_id: null } as any).catch(() => {});
+      }
+    }
+  }
+
+  const cleanedMsg = cleaned > 0 ? ` (${cleaned} stale/orphaned cleared)` : '';
+  if (callback) await callback({ text: `Closed ${deleted}/${topicIds.size} topic(s).${cleanedMsg}` });
+  return { success: true, data: { deleted, cleaned, total: topicIds.size } };
 }
 
 async function handleFeedback(
