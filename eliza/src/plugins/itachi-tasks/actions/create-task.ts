@@ -100,8 +100,17 @@ export const createTaskAction: Action = {
       }
     }
 
+    // Only validate for natural language if there's a task-creation or confirmation signal
+    const hasTaskSignal = /\b(task|queue|create|make|add|schedule|work on)\b/i.test(lower)
+      || /\b(yes|yeah|do it|go ahead|please|confirm|yep|sure|ok|okay)\b/i.test(lower);
+    if (!hasTaskSignal) {
+      runtime.logger.debug(`[CREATE_TASK] validate: "${text.substring(0, 60)}" → false (no task signal)`);
+      return false;
+    }
     const taskService = runtime.getService<TaskService>('itachi-tasks');
-    return !!taskService;
+    const result = !!taskService;
+    runtime.logger.debug(`[CREATE_TASK] validate: "${text.substring(0, 60)}" → ${result}`);
+    return result;
   },
 
   handler: async (
@@ -335,6 +344,14 @@ export const createTaskAction: Action = {
           await callback({ text: 'Usage: /task <project> <description>' });
         }
         return { success: false, error: 'Missing project or description' };
+      }
+
+      // Validate description is meaningful (at least 10 chars)
+      if (description.trim().length < 10) {
+        if (callback) {
+          await callback({ text: "I couldn't extract a clear task description. Could you be more specific about what needs to be done?" });
+        }
+        return { success: false, error: 'Task description too short (< 10 chars)' };
       }
 
       const telegramUserId = (message.content as Record<string, unknown>).telegram_user_id as number || 0;

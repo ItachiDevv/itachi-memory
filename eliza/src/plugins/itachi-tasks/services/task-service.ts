@@ -97,6 +97,12 @@ export class TaskService extends Service {
   }
 
   async createTask(params: CreateTaskParams): Promise<ItachiTask> {
+    // Validate description is non-empty and meaningful
+    const desc = (params.description || '').trim();
+    if (desc.length < 10) {
+      throw new Error('Task description must be at least 10 characters');
+    }
+
     // Validate budget
     const maxAllowed = 10;
     if (params.max_budget_usd != null && (params.max_budget_usd > maxAllowed || !isFinite(params.max_budget_usd))) {

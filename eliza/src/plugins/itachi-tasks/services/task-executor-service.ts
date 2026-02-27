@@ -281,6 +281,16 @@ export class TaskExecutorService extends Service {
         throw new Error(`SSH target "${sshTarget}" not configured`);
       }
 
+      // 3.5. Pre-flight SSH connectivity check
+      try {
+        const ping = await sshService.exec(sshTarget, 'echo OK', 5_000);
+        if (!ping.success || !ping.stdout?.includes('OK')) {
+          throw new Error(`Machine ${sshTarget} unreachable (ping failed)`);
+        }
+      } catch (err) {
+        throw new Error(`SSH target ${sshTarget} offline: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
       // 4. Send start notification
       if (topicId && topicsService) {
         await topicsService.sendToTopic(topicId, `Executor claiming task on ${machineId}...\nSetting up workspace...`);
@@ -421,6 +431,10 @@ export class TaskExecutorService extends Service {
   // ── Prompt Building ──────────────────────────────────────────────────
 
   private async buildPrompt(task: ItachiTask): Promise<string> {
+    if (!task.description?.trim()) {
+      throw new Error('Task has empty description — cannot build prompt');
+    }
+
     const lines: string[] = [
       `You are working on project "${task.project}".`,
       '',

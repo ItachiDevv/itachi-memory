@@ -1,5 +1,8 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
+import { getTopicThreadId } from '../utils/telegram.js';
+import { activeSessions } from '../shared/active-sessions.js';
+import { browsingSessionMap } from '../utils/directory-browser.js';
 
 /**
  * Extract project + description from LLM response text.
@@ -73,13 +76,34 @@ export const spawnSessionAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    const text = message.content?.text?.toLowerCase() || '';
-    // Trigger on coding-related requests
-    const codingKeywords = [
-      'fix', 'implement', 'add', 'create', 'build', 'deploy', 'update',
-      'refactor', 'test', 'debug', 'task', 'code', 'feature', 'bug',
-    ];
-    return codingKeywords.some((kw) => text.includes(kw));
+    const text = message.content?.text || '';
+    const lower = text.toLowerCase();
+
+    // Skip slash commands — handled by TELEGRAM_COMMANDS
+    if (text.startsWith('/')) return false;
+
+    // Skip session/browsing topics — topic-input-relay handles those
+    const threadId = await getTopicThreadId(runtime, message);
+    if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
+
+    // Require a strong coding keyword (narrowed from 14 to 5)
+    const hasCodingKeyword = /\b(fix|implement|refactor|deploy|debug)\b/i.test(lower);
+    if (!hasCodingKeyword) return false;
+
+    // AND require either a known project name or explicit task intent
+    const taskService = runtime.getService<TaskService>('itachi-tasks');
+    if (!taskService) return false;
+
+    let mentionsProject = false;
+    try {
+      const repos = await taskService.getMergedRepos();
+      mentionsProject = repos.some(r => lower.includes(r.name.toLowerCase()));
+    } catch { /* fall through */ }
+
+    const hasTaskIntent = /\b(task|queue|make a|create a|work on|build|ship)\b/i.test(lower);
+    const result = mentionsProject || hasTaskIntent;
+    runtime.logger.debug(`[SPAWN_CLAUDE_SESSION] validate: "${text.substring(0, 60)}" → ${result}`);
+    return result;
   },
 
   handler: async (

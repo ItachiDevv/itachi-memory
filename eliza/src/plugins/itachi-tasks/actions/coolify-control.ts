@@ -113,6 +113,9 @@ function getDiagnosticsForOS(os: string | null | undefined): Record<string, { la
   return DIAGNOSTICS; // Linux / default
 }
 
+// ── Per-room cooldown for "Which machine?" clarification ─────────────
+const lastMachineAsk: Map<string, number> = new Map();
+
 // ── Self-referential patterns (user asking about the bot itself → coolify) ──
 const SELF_REF_PATTERNS = /\b(your(?:self| own)?|the bot|our (?:setup|vps|server|environment|config|env)|itachi.?s? (?:setup|server|env|config|storage|limits?|usage))\b/i;
 
@@ -258,7 +261,10 @@ export const coolifyControlAction: Action = {
 
     const text = stripBotMention(message.content?.text || '');
     // Always match explicit slash commands (including /ops and /exec aliases)
-    if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test|ops|exec)\b/.test(text)) return true;
+    if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test|ops|exec)\b/.test(text)) {
+      runtime.logger.debug(`[COOLIFY_CONTROL] validate: slash command "${text.substring(0, 40)}" → true`);
+      return true;
+    }
     // Match natural language about machines/servers
     const lower = text.toLowerCase();
     const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias => lower.includes(alias));
@@ -272,6 +278,15 @@ export const coolifyControlAction: Action = {
     if (mentionsAction && !mentionsMachine) {
       const sshService = runtime.getService<SSHService>('ssh');
       if (sshService && extractTargetFromContext(state, sshService)) return true;
+    }
+    // Cooldown: if no machine mention and no self-ref, suppress if we recently asked "Which machine?"
+    if (mentionsAction && !mentionsMachine && !isSelfReferential(text)) {
+      const roomId = message.roomId;
+      const last = lastMachineAsk.get(roomId);
+      if (last && Date.now() - last < 120_000) {
+        runtime.logger.debug(`[COOLIFY_CONTROL] validate: suppressed by 2min cooldown for room ${roomId}`);
+        return false;
+      }
     }
     return false;
   },
@@ -338,11 +353,13 @@ export const coolifyControlAction: Action = {
 
       if (!target) {
         // No machine identified even after context search — ask once, don't loop
+        // Return success: true so ElizaOS doesn't re-invoke the LLM → prevents loop
         const available = [...sshService.getTargets().keys()].join(', ');
+        lastMachineAsk.set(message.roomId, Date.now());
         if (callback) await callback({
           text: `I need to know which machine to target. Available: **${available}**\n\nTip: say "on coolify" or "check the mac"`,
         });
-        return { success: false, error: 'No target machine identified' };
+        return { success: true };
       }
 
       // Handle specific intents
