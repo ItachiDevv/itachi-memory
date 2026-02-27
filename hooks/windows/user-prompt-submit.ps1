@@ -137,13 +137,19 @@ try {
         $idx = 0
         foreach ($mem in $allResults) {
             $files = if ($mem.files -and $mem.files.Count -gt 0) { " (" + ($mem.files -join ", ") + ")" } else { "" }
-            $cat = if ($mem.category) { "[$($mem.category)] " } else { "" }
             $prefix = if ($idx -ge $projectResultCount) { "[GLOBAL] " } else { "" }
-            $outcomeTag = ""
+            # Format: [category|outcome] with AVOID prefix for failures
+            $catName = if ($mem.category) { $mem.category } else { "general" }
+            $outcomeName = ""
             if ($mem.metadata -and $mem.metadata.outcome) {
-                $outcomeTag = "[$($mem.metadata.outcome.ToUpper())] "
+                $outcomeName = "|$($mem.metadata.outcome)"
             }
-            $contextLines += "$prefix$cat$outcomeTag$($mem.summary)$files"
+            $catTag = "[$catName$outcomeName] "
+            $avoidPrefix = ""
+            if ($mem.metadata -and $mem.metadata.outcome -eq "failure") {
+                $avoidPrefix = "AVOID: "
+            }
+            $contextLines += "$prefix$catTag$avoidPrefix$($mem.summary)$files"
             $idx++
         }
         $contextLines += "=== End Memory Context ==="

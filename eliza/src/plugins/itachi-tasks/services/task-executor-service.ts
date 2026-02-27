@@ -110,6 +110,9 @@ export class TaskExecutorService extends Service {
       });
     }, 30_000);
 
+    // Recover any tasks left in claimed/running state from a previous crash
+    await service.recoverStaleTasks(runtime);
+
     return service;
   }
 
@@ -154,6 +157,16 @@ export class TaskExecutorService extends Service {
     return this.managedMachines;
   }
 
+  /** Check if a task is actively being executed in this process */
+  isTaskActive(taskId: string): boolean {
+    return this.activeTasks.has(taskId);
+  }
+
+  /** Get active task info (for /taskstatus) */
+  getActiveTaskInfo(taskId: string): { taskId: string; machineId: string; topicId?: number } | undefined {
+    return this.activeTasks.get(taskId);
+  }
+
   /**
    * Register managed machines in the machine_registry and send heartbeats.
    * This ensures the dispatcher can find and assign tasks to them.
@@ -194,6 +207,55 @@ export class TaskExecutorService extends Service {
       } catch (err) {
         this.runtime.logger.warn(`[executor] Heartbeat failed for ${machineId}: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+  }
+
+  /**
+   * Recover tasks stuck in 'claimed' or 'running' state from a previous crash.
+   * If updated_at (or started_at for claimed) is older than 10 minutes, mark as failed.
+   */
+  private async recoverStaleTasks(runtime: IAgentRuntime): Promise<void> {
+    const taskService = runtime.getService<TaskService>('itachi-tasks');
+    if (!taskService) return;
+
+    const supabase = taskService.getSupabase();
+    const staleThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+    try {
+      const { data: staleTasks, error } = await supabase
+        .from('itachi_tasks')
+        .select('id, status, description, assigned_machine, started_at')
+        .in('status', ['claimed', 'running'])
+        .eq('orchestrator_id', this.executorId)
+        .lt('started_at', staleThreshold)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) {
+        runtime.logger.error(`[executor] recoverStaleTasks query error: ${error.message}`);
+        return;
+      }
+
+      if (!staleTasks || staleTasks.length === 0) return;
+
+      for (const task of staleTasks) {
+        // Skip tasks that are actively running in this process
+        if (this.activeTasks.has(task.id)) continue;
+
+        runtime.logger.warn(`[executor] Recovering stale task ${task.id.substring(0, 8)} (status=${task.status}, machine=${task.assigned_machine})`);
+
+        await taskService.updateTask(task.id, {
+          status: 'failed',
+          error_message: 'Executor crashed/restarted during execution',
+          completed_at: new Date().toISOString(),
+        });
+      }
+
+      if (staleTasks.length > 0) {
+        runtime.logger.info(`[executor] Recovered ${staleTasks.length} stale task(s)`);
+      }
+    } catch (err) {
+      runtime.logger.error(`[executor] recoverStaleTasks error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -319,19 +381,30 @@ export class TaskExecutorService extends Service {
       await this.startSession(task, sshTarget, workspace, prompt, engineCmd, topicId || 0);
 
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = err instanceof Error ? err.stack || err.message : String(err);
       this.runtime.logger.error(`[executor] Task ${shortId} failed: ${msg}`);
 
       await taskService.updateTask(task.id, {
         status: 'failed',
-        error_message: msg,
+        error_message: msg.substring(0, 2000),
         completed_at: new Date().toISOString(),
       });
 
       if (topicsService) {
         const topicId = this.activeTasks.get(task.id)?.topicId;
         if (topicId) {
-          await topicsService.sendToTopic(topicId, `Task failed: ${msg}`);
+          await topicsService.sendToTopic(topicId, `Task ${shortId} failed:\n${msg}`);
+        } else {
+          // No topic created yet — send error to main chat so it's not silently lost
+          try {
+            // Use sendMessageWithKeyboard without keyboard to post to main chat
+            await topicsService.sendMessageWithKeyboard(
+              `Task ${shortId} (${task.project}) failed before topic was created:\n${msg.substring(0, 1000)}`,
+              [], // no keyboard
+            );
+          } catch (notifyErr) {
+            this.runtime.logger.error(`[executor] Failed to notify main chat: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`);
+          }
         }
       }
 
@@ -547,6 +620,20 @@ export class TaskExecutorService extends Service {
     const sessionId = `executor-${shortId}-${Date.now()}`;
     const sessionTranscript: TranscriptEntry[] = [];
 
+    // Task heartbeat: update updated_at every 60s so recoverStaleTasks knows we're alive
+    let taskHeartbeat: ReturnType<typeof setInterval> | null = null;
+    const startTaskHeartbeat = () => {
+      taskHeartbeat = setInterval(() => {
+        const supabase = this.runtime.getService<TaskService>('itachi-tasks')?.getSupabase();
+        if (supabase) {
+          supabase.from('itachi_tasks').update({ started_at: new Date().toISOString() }).eq('id', task.id).then();
+        }
+      }, 60_000);
+    };
+    const clearTaskHeartbeat = () => {
+      if (taskHeartbeat) { clearInterval(taskHeartbeat); taskHeartbeat = null; }
+    };
+
     const handle = sshService.spawnInteractiveSession(
       sshTarget,
       sshCommand,
@@ -574,6 +661,7 @@ export class TaskExecutorService extends Service {
       },
       // onExit
       (code: number) => {
+        clearTaskHeartbeat();
         // Final flush
         if (topicsService) {
           topicsService.finalFlush(sessionId).then(() => {
@@ -616,8 +704,12 @@ export class TaskExecutorService extends Service {
     );
 
     if (!handle) {
+      clearTaskHeartbeat();
       throw new Error(`Failed to spawn SSH session on ${sshTarget}`);
     }
+
+    // Start heartbeat now that the session is running
+    startTaskHeartbeat();
 
     // Register in shared active sessions map for Telegram input relay
     if (topicId) {

@@ -188,6 +188,8 @@ export class MemoryService extends Service {
   ): Promise<ItachiMemory[]> {
     const embedding = await this.getEmbedding(query);
 
+    let results: ItachiMemory[] = [];
+
     // Try hybrid search first (vector + FTS)
     try {
       const { data, error } = await this.supabase.rpc('match_memories_hybrid', {
@@ -201,25 +203,50 @@ export class MemoryService extends Service {
       });
 
       if (!error && data) {
-        return (data as ItachiMemory[]) || [];
+        results = (data as ItachiMemory[]) || [];
       }
       // Fall through to vector-only if hybrid RPC doesn't exist yet
     } catch {
       // Hybrid RPC not available — fall back to vector-only
     }
 
-    // Fallback: vector-only search via match_memories
-    const { data, error } = await this.supabase.rpc('match_memories', {
-      query_embedding: embedding,
-      match_project: project ?? null,
-      match_category: category ?? null,
-      match_branch: branch ?? null,
-      match_metadata_outcome: outcome ?? null,
-      match_limit: limit,
-    });
+    if (results.length === 0) {
+      // Fallback: vector-only search via match_memories
+      const { data, error } = await this.supabase.rpc('match_memories', {
+        query_embedding: embedding,
+        match_project: project ?? null,
+        match_category: category ?? null,
+        match_branch: branch ?? null,
+        match_metadata_outcome: outcome ?? null,
+        match_limit: limit,
+      });
 
-    if (error) throw error;
-    return (data as ItachiMemory[]) || [];
+      if (error) throw error;
+      results = (data as ItachiMemory[]) || [];
+    }
+
+    // Outcome-based re-ranking: boost successes, demote failures
+    return this.applyOutcomeReranking(results);
+  }
+
+  /** Re-rank search results by outcome metadata.
+   *  success -> similarity * 1.1 (capped at 1.0)
+   *  failure -> similarity * 0.7
+   *  partial / no outcome -> unchanged */
+  private applyOutcomeReranking(results: ItachiMemory[]): ItachiMemory[] {
+    return results
+      .map((m) => {
+        const outcomeVal = (m.metadata as Record<string, unknown>)?.outcome;
+        let sim = m.similarity ?? 0.5;
+        if (outcomeVal === 'success') {
+          sim = Math.min(sim * 1.1, 1.0);
+        } else if (outcomeVal === 'failure') {
+          sim = sim * 0.7;
+        }
+        // 'partial' or no outcome: no change
+        return { ...m, similarity: sim };
+      })
+      .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
   }
 
   async searchMemoriesWeighted(

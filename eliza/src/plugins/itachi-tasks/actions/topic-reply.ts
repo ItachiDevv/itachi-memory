@@ -138,7 +138,7 @@ export const topicReplyAction: Action = {
       }
 
       // Completed/failed/cancelled tasks: try resume via executor, or create follow-up
-      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled' || task.status === 'timeout') {
         // If the task has a workspace (was run by executor), try to resume the session
         const executor = runtime.getService<TaskExecutorService>('task-executor');
         if (executor && task.workspace_path && task.assigned_machine && text.split(/\s+/).length >= 3) {

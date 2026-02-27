@@ -96,16 +96,29 @@ try {
     }
 
     # ============ Memory API (existing) ============
+    # Compute duration if session start time is available
+    $durationMs = 0
+    if ($env:ITACHI_SESSION_START_MS) {
+        $nowMs = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        $startMs = [long]$env:ITACHI_SESSION_START_MS
+        $durationMs = $nowMs - $startMs
+    }
+
     $bodyObj = @{
         files    = @()
         summary  = "Session ended: $reason"
         category = "session"
         project  = $project
         branch   = $branchName
+        metadata = @{
+            outcome      = $reason
+            exit_reason  = $reason
+            duration_ms  = $durationMs
+        }
     }
     if ($taskId) { $bodyObj.task_id = $taskId }
 
-    $body = $bodyObj | ConvertTo-Json -Compress
+    $body = $bodyObj | ConvertTo-Json -Compress -Depth 4
 
     Invoke-RestMethod -Uri "$MEMORY_API/code-change" `
         -Method Post `

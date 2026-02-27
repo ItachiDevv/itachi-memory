@@ -1,5 +1,6 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, HandlerOptions, ActionResult } from '@elizaos/core';
 import { TaskService, type CreateTaskParams, generateTaskTitle } from '../services/task-service.js';
+import { TaskExecutorService } from '../services/task-executor-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { SSHService } from '../services/ssh-service.js';
@@ -22,7 +23,7 @@ import { interactiveSessionAction, wrapStreamJsonInput } from './interactive-ses
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete_topics, /close, /close_all_topics, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, interactive /task flows, /session (no args, shows machine picker), and /session <machine> (direct session on named target)',
+  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete_topics, /close, /close_all_topics, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, /taskstatus, interactive /task flows, /session (no args, shows machine picker), and /session <machine> (direct session on named target)',
   similes: ['help', 'show commands', 'recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'delete done topics', 'delete failed topics', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'unteach', 'forget rule', 'spawn agent', 'list agents', 'message agent', 'engine priority', 'show engines', 'set engines'],
   examples: [
     [
@@ -154,7 +155,8 @@ export const telegramCommandsAction: Action = {
     if (text === '/delete_topic' || text === '/delete-topic' || text === '/deletetopic' ||
         text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ') || text.startsWith('/deletetopic ')) return true;
 
-    return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
+    return text === '/help' || text === '/taskstatus' || text.startsWith('/taskstatus ') ||
+      text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text.startsWith('/learn ') || text.startsWith('/teach ') ||
       text.startsWith('/unteach ') || text.startsWith('/forget ') ||
       text.startsWith('/spawn ') || text === '/agents' || text.startsWith('/agents ') ||
@@ -179,6 +181,17 @@ export const telegramCommandsAction: Action = {
   ): Promise<ActionResult> => {
     const text = stripBotMention(message.content?.text?.trim() || '');
     runtime.logger.info(`[telegram-commands] handler: text="${text.substring(0, 50)}" hasCallback=${!!callback}`);
+
+    // Early session-topic detection: if this message is in a session/browsing/spawning topic,
+    // flag it so we can unconditionally IGNORE in the catch block and at handler exit.
+    let _isSessionTopic = false;
+    try {
+      const earlyThreadId = await getTopicThreadId(runtime, message);
+      if (earlyThreadId !== null && (activeSessions.has(earlyThreadId) || browsingSessionMap.has(earlyThreadId)
+          || isSessionTopic(earlyThreadId) || spawningTopics.has(earlyThreadId))) {
+        _isSessionTopic = true;
+      }
+    } catch { /* best-effort — will still catch via _topicRelayQueued */ }
 
     try {
       // Clean up stale flows
@@ -307,6 +320,11 @@ export const telegramCommandsAction: Action = {
         }
         if (callback) await callback({ text: 'Usage: /deletetopics [done|failed|cancelled|all]\nDefault: all' });
         return { success: false, error: 'Unknown delete subcommand' };
+      }
+
+      // /taskstatus [id] — detailed task status with executor info
+      if (text === '/taskstatus' || text.startsWith('/taskstatus ')) {
+        return await handleTaskStatus(runtime, text, callback);
       }
 
       // /help
@@ -441,9 +459,21 @@ export const telegramCommandsAction: Action = {
         return await handleCloseAllTopics(runtime, callback);
       }
 
+      // Safety net: if we somehow fell through to here for a session topic, IGNORE
+      if (_isSessionTopic) {
+        runtime.logger.info(`[telegram-commands] session topic message fell through to end — suppressing`);
+        if (callback) await callback({ text: '', action: 'IGNORE' });
+        return { success: true };
+      }
       return { success: false, error: 'Unknown command' };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      // If this is a session topic, ALWAYS suppress LLM — never leak error text to topic
+      if (_isSessionTopic || (message.content as Record<string, unknown>)?._topicRelayQueued) {
+        runtime.logger.warn(`[telegram-commands] handler error in session topic (suppressed): ${msg}`);
+        if (callback) await callback({ text: '', action: 'IGNORE' });
+        return { success: false, error: msg };
+      }
       if (callback) await callback({ text: `Error: ${msg}` });
       return { success: false, error: msg };
     }
@@ -1636,11 +1666,83 @@ async function handleFlowDescription(
   return { success: true, data: { taskId: task.id, shortId, project, assignedMachine: machineLabel } };
 }
 
+async function handleTaskStatus(
+  runtime: IAgentRuntime,
+  text: string,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  if (!taskService) {
+    if (callback) await callback({ text: 'Task service not available.' });
+    return { success: false, error: 'Task service not available' };
+  }
+
+  const idArg = text.substring('/taskstatus'.length).trim();
+  if (!idArg) {
+    if (callback) await callback({ text: 'Usage: /taskstatus <task-id>\nProvide the full UUID or first 8 chars.' });
+    return { success: false, error: 'No task ID provided' };
+  }
+
+  const supabase = taskService.getSupabase();
+
+  // Support partial IDs (first 8 chars)
+  let query = supabase.from('itachi_tasks').select('*');
+  if (idArg.length < 36) {
+    query = query.ilike('id', `${idArg}%`);
+  } else {
+    query = query.eq('id', idArg);
+  }
+
+  const { data, error } = await query.limit(1).single();
+  if (error || !data) {
+    if (callback) await callback({ text: `Task not found: ${idArg}` });
+    return { success: false, error: 'Task not found' };
+  }
+
+  const task = data as Record<string, unknown>;
+  const shortId = (task.id as string).substring(0, 8);
+
+  // Check if actively executing in-process
+  const executor = runtime.getService<TaskExecutorService>('task-executor');
+  const activeInfo = executor?.getActiveTaskInfo(task.id as string);
+  const isActive = !!activeInfo;
+
+  // Check if topic exists via activeSessions
+  const topicId = task.telegram_topic_id as number | undefined;
+  const hasActiveSession = topicId ? activeSessions.has(topicId) : false;
+
+  // Compute age
+  const updatedAt = task.updated_at || task.started_at || task.created_at;
+  const ageMs = updatedAt ? Date.now() - new Date(updatedAt as string).getTime() : 0;
+  const ageMins = Math.round(ageMs / 60_000);
+
+  const lines: string[] = [
+    `Task ${shortId}`,
+    `Status: ${task.status}`,
+    `Project: ${task.project}`,
+    `Machine: ${task.assigned_machine || 'unassigned'}`,
+    `Orchestrator: ${task.orchestrator_id || 'none'}`,
+    `Created: ${task.created_at}`,
+  ];
+  if (task.started_at) lines.push(`Started: ${task.started_at}`);
+  if (task.completed_at) lines.push(`Completed: ${task.completed_at}`);
+  if (updatedAt) lines.push(`Last updated: ${updatedAt} (${ageMins}m ago)`);
+  lines.push(`In-process active: ${isActive ? 'YES' : 'no'}${activeInfo ? ` (machine: ${activeInfo.machineId})` : ''}`);
+  lines.push(`Topic: ${topicId || 'none'}${hasActiveSession ? ' (session active)' : ''}`);
+  if (task.workspace_path) lines.push(`Workspace: ${task.workspace_path}`);
+  if (task.error_message) lines.push(`Error: ${(task.error_message as string).substring(0, 500)}`);
+  if (task.pr_url) lines.push(`PR: ${task.pr_url}`);
+
+  if (callback) await callback({ text: lines.join('\n') });
+  return { success: true };
+}
+
 async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   const help = `**Tasks**
   /task <name> — Interactive task creation (pick machine, repo, describe)
   /task [@machine] <project> <description> — Quick task creation
   /status — Show task queue & recent completions
+  /taskstatus <id> — Detailed task status (executor, heartbeat, topic)
   /cancel <id> — Cancel a queued or running task
   /feedback <id> <good|bad> <reason> — Rate a completed task
 

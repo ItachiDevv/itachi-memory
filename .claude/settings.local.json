@@ -11,7 +11,9 @@
       "Bash(scp:*)",
       "Bash(ssh mac:*)",
       "Bash(where itachi:*)",
-      "Bash(powershell.exe:*)"
+      "Bash(powershell.exe:*)",
+      "Bash(node_modules/.bin/tsc --noEmit --pretty)",
+      "Bash(git add:*)"
     ]
   }
 }

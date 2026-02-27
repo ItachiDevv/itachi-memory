@@ -111,6 +111,13 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
         // while ElizaOS LLM responses go through bot.telegram.sendMessage().
         patchSendMessageForChatterSuppression(runtime, bot);
 
+        // Recover orphaned session topics after container restart.
+        // Topics registered as 'active' in Supabase but absent from in-memory
+        // activeSessions were lost when the container restarted. Notify users.
+        recoverOrphanedSessions(runtime).catch((err) => {
+          runtime.logger.warn(`[callback-handler] Orphan recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+
         runtime.logger.info('[callback-handler] Registered Telegram callback_query handler');
         return;
       }
@@ -916,6 +923,55 @@ async function handleDeleteTopicCallback(
     if (messageId) {
       await topicsService.editMessageWithKeyboard(chatId, messageId, `\u274c Failed to delete topic ${topicId}. May not exist or is the General topic.`, []);
     }
+  }
+}
+
+/**
+ * Recover orphaned session topics after container restart.
+ * Queries itachi_topic_registry for 'active' topics that no longer have
+ * an entry in the in-memory activeSessions map. Sends a notification
+ * to each orphaned topic so the user knows the session was lost.
+ */
+async function recoverOrphanedSessions(runtime: IAgentRuntime): Promise<void> {
+  // Small delay to let other services finish initializing
+  await new Promise((r) => setTimeout(r, 5_000));
+
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!taskService || !topicsService) return;
+
+  try {
+    const supabase = taskService.getSupabase();
+    const { data, error } = await supabase
+      .from('itachi_topic_registry')
+      .select('topic_id, title')
+      .eq('status', 'active')
+      .eq('chat_id', topicsService.chatId);
+
+    if (error || !data || data.length === 0) return;
+
+    let orphanCount = 0;
+    for (const row of data as Array<{ topic_id: number; title: string }>) {
+      // If this topic has an active in-memory session, it's not orphaned
+      if (activeSessions.has(row.topic_id)) continue;
+
+      orphanCount++;
+      runtime.logger.info(`[callback-handler] Orphaned session topic ${row.topic_id} (${row.title}) — notifying user`);
+      try {
+        await topicsService.sendToTopic(
+          row.topic_id,
+          'Session was lost due to bot restart. Use /close to clean up, or start a new session with /session.',
+        );
+      } catch (sendErr: any) {
+        runtime.logger.warn(`[callback-handler] Failed to notify orphaned topic ${row.topic_id}: ${sendErr?.message}`);
+      }
+    }
+
+    if (orphanCount > 0) {
+      runtime.logger.info(`[callback-handler] Notified ${orphanCount} orphaned session topic(s) after restart`);
+    }
+  } catch (err: any) {
+    runtime.logger.warn(`[callback-handler] Orphan recovery query failed: ${err?.message}`);
   }
 }
 

@@ -3,7 +3,7 @@ import { TaskService, generateTaskTitle } from '../services/task-service.js';
 import { SSHService } from '../services/ssh-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
-import { getTopicThreadId } from '../utils/telegram.js';
+import { getTopicThreadId, stripBotMention } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { activeSessions, markSessionClosed, spawningTopics } from '../shared/active-sessions.js';
 import { spawnSessionInTopic, wrapStreamJsonInput, handleEngineHandoff } from '../actions/interactive-session.js';
@@ -90,7 +90,7 @@ export const topicInputRelayEvaluator: Evaluator = {
     // Handle /close directly in validate() since evaluator handlers
     // don't reliably run in ElizaOS when the LLM chooses IGNORE.
     const content = message.content as Record<string, unknown>;
-    const fullText = ((message.content?.text as string) || '').trim();
+    const fullText = stripBotMention(((message.content?.text as string) || '').trim());
     if (!content._topicRelayQueued && fullText === '/close') {
       content._topicRelayQueued = true;
       handleCloseInValidate(runtime, threadId)
@@ -99,19 +99,44 @@ export const topicInputRelayEvaluator: Evaluator = {
     }
 
     // Handle /switch <engine> in active sessions (validate path for reliability)
-    if (!content._topicRelayQueued && /^\/switch\s+(claude|codex|gemini)/i.test(fullText)) {
-      const session = activeSessions.get(threadId);
-      if (session) {
-        content._topicRelayQueued = true;
-        const targetEngine = fullText.match(/^\/switch\s+(\w+)/i)?.[1]?.toLowerCase() || '';
-        const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+    if (!content._topicRelayQueued && /^\/switch\b/i.test(fullText)) {
+      content._topicRelayQueued = true;
+      const engineMatch = fullText.match(/^\/switch\s+(\w+)/i);
+      const targetEngine = engineMatch?.[1]?.toLowerCase() || '';
+      const validEngines = ['claude', 'codex', 'gemini'];
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+
+      if (!targetEngine) {
+        // No engine specified
         if (topicsService) {
-          const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
-          handleEngineHandoff(session, chatId, threadId, `user_request:${targetEngine}`, runtime, topicsService)
-            .catch(err => runtime.logger.error(`[topic-relay] /switch error: ${err instanceof Error ? err.message : String(err)}`));
+          topicsService.sendToTopic(threadId, 'Usage: /switch <engine>\nValid engines: claude, codex, gemini').catch(() => {});
         }
         return true;
       }
+
+      if (!validEngines.includes(targetEngine)) {
+        // Invalid engine name
+        if (topicsService) {
+          topicsService.sendToTopic(threadId, `Unknown engine "${targetEngine}". Valid engines: claude, codex, gemini`).catch(() => {});
+        }
+        return true;
+      }
+
+      const session = activeSessions.get(threadId);
+      if (!session) {
+        // No active session in this topic
+        if (topicsService) {
+          topicsService.sendToTopic(threadId, 'No active session in this topic. Start one with /session first.').catch(() => {});
+        }
+        return true;
+      }
+
+      if (topicsService) {
+        const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+        handleEngineHandoff(session, chatId, threadId, `user_request:${targetEngine}`, runtime, topicsService)
+          .catch(err => runtime.logger.error(`[topic-relay] /switch error: ${err instanceof Error ? err.message : String(err)}`));
+      }
+      return true;
     }
 
     // Handle keyboard control commands in active sessions (validate path for reliability)
