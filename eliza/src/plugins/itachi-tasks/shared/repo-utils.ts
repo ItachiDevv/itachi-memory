@@ -5,6 +5,21 @@ import type { TelegramTopicsService } from '../services/telegram-topics.js';
 import { getStartingDir } from './start-dir.js';
 
 /**
+ * Build the git clone command, injecting GITHUB_TOKEN into HTTPS URLs for auth.
+ * Falls back to GIT_SSH_COMMAND for SSH URLs.
+ */
+function buildCloneCmd(repoUrl: string, destPath: string): string {
+  const token = process.env.GITHUB_TOKEN;
+  if (token && repoUrl.startsWith('https://github.com/')) {
+    // Inject PAT into HTTPS URL: https://<token>@github.com/...
+    const authedUrl = repoUrl.replace('https://github.com/', `https://${token}@github.com/`);
+    return `git clone ${authedUrl} ${destPath} 2>&1`;
+  }
+  // SSH URL or no token — use SSH key
+  return `GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git clone ${repoUrl} ${destPath} 2>&1`;
+}
+
+/**
  * Map machine_id (registry) or common aliases → SSH target name.
  * Used by task-executor-service, callback-handler, and interactive flows.
  */
@@ -129,7 +144,7 @@ export async function resolveRepoPath(
 
       const clone = await sshService.exec(
         target,
-        `GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git clone ${matched.repo_url} ${candidatePath} 2>&1`,
+        buildCloneCmd(matched.repo_url, candidatePath),
         120_000,
       );
 
@@ -183,7 +198,7 @@ export async function resolveRepoPathByProject(
     if (repoUrl) {
       const candidatePath = `${base}/${project}`;
       logger.info(`[repo-utils] Cloning ${repoUrl} → ${candidatePath} on ${target}`);
-      const clone = await sshService.exec(target, `GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git clone ${repoUrl} ${candidatePath} 2>&1`, 120_000);
+      const clone = await sshService.exec(target, buildCloneCmd(repoUrl, candidatePath), 120_000);
       if (clone.success) return candidatePath;
       logger.warn(`[repo-utils] Clone failed: ${clone.stderr || clone.stdout}`);
     }
