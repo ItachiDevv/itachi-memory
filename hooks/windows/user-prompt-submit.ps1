@@ -5,6 +5,43 @@
 
 if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 
+# ============ Turn Tracking (for usage monitoring) ============
+# Track turn count - every 5 turns, check for approaching usage limits
+try {
+    $turnFile = Join-Path $env:USERPROFILE ".claude\.session-turns"
+    $turns = 0
+    if (Test-Path $turnFile) {
+        $raw = (Get-Content $turnFile -ErrorAction SilentlyContinue)
+        if ($raw) { $turns = [int]$raw }
+    }
+    $turns++
+    Set-Content $turnFile $turns -Force
+
+    if ($turns % 5 -eq 0) {
+        $repoUtils = Join-Path $env:USERPROFILE "Documents\Crypto\skills-plugins\itachi-memory\hooks\windows\handoff-utils.ps1"
+        if (Test-Path $repoUtils) {
+            . $repoUtils
+            $transcript = Read-LatestTranscript -MaxLines 20
+            $transcriptText = $transcript -join "`n"
+            $rateLimitCount = ($transcriptText | Select-String 'rate_limit_event' -AllMatches).Matches.Count
+
+            if ($rateLimitCount -ge 2) {
+                $client = if ($env:ITACHI_CLIENT) { $env:ITACHI_CLIENT } else { 'claude' }
+                $projectName = Split-Path (Get-Location) -Leaf
+                $generateScript = Join-Path $env:USERPROFILE ".claude\hooks\generate-handoff.ps1"
+                if (Test-Path $generateScript) {
+                    & $generateScript -FromEngine $client -Reason 'usage_approaching' -ProjectName $projectName 2>$null
+                }
+                $output = @{ additionalContext = "WARNING: Approaching usage limits ($rateLimitCount rate_limit events detected). Handoff context saved. If session expires, run 'itachic' or 'itachig' to continue." } | ConvertTo-Json -Compress
+                Write-Output $output
+                exit 0
+            }
+        }
+    }
+} catch {
+    # Non-critical - don't block the prompt
+}
+
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -60,7 +97,7 @@ try {
     # Skip trivial/short prompts
     if ($prompt.Length -lt 30) { exit 0 }
 
-    # Query memory search API (5s timeout) — project-scoped
+    # Query memory search API (5s timeout) - project-scoped
     $encodedQuery = [System.Uri]::EscapeDataString($prompt.Substring(0, [Math]::Min($prompt.Length, 500)))
     $encodedProject = [System.Uri]::EscapeDataString($project)
     $searchUrl = "$MEMORY_API/search?query=$encodedQuery&project=$encodedProject&limit=3"

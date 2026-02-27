@@ -5,7 +5,8 @@ export type ParsedChunk =
   | { kind: 'ask_user'; toolId: string; question: string; options: string[] }
   | { kind: 'hook_response'; text: string }
   | { kind: 'result'; subtype: string; cost?: string; duration?: string }
-  | { kind: 'passthrough'; text: string };
+  | { kind: 'passthrough'; text: string }
+  | { kind: 'rate_limit'; retryAfter: number };
 
 /**
  * Parse options from an AskUserQuestion question string.

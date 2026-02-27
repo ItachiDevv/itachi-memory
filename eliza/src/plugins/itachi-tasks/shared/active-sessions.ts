@@ -18,6 +18,14 @@ export interface ActiveSession {
   taskId?: string;
   /** Workspace path on remote machine (for executor sessions) */
   workspace?: string;
+  /** Current engine running this session (claude, codex, gemini) */
+  currentEngine?: string;
+  /** Count of rate_limit_event messages received during this session */
+  rateLimitCount?: number;
+  /** Total assistant turns in this session */
+  totalTurns?: number;
+  /** Timestamp of last usage check */
+  lastUsageCheckTime?: number;
 }
 
 /**

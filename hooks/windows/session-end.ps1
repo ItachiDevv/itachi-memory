@@ -413,4 +413,41 @@ catch {
     # Silently ignore
 }
 
+# ============ Usage Limit Detection (for auto-fallback) ============
+# Scan transcript for rate-limit / usage-limit patterns. If found and not weekly,
+# write a .needs-handoff flag that the wrapper's auto-fallback.ps1 will pick up.
+try {
+    $repoUtils = Join-Path $env:USERPROFILE "Documents\Crypto\skills-plugins\itachi-memory\hooks\windows\handoff-utils.ps1"
+    if (Test-Path $repoUtils) {
+        . $repoUtils
+        $transcriptRaw = Read-LatestTranscript -MaxLines 50 -Client $client
+        $transcriptText = $transcriptRaw -join "`n"
+
+        $limitPatterns = @('usage limit', 'add extra usage', 'daily limit', 'rate limit', 'quota exceeded',
+                           'resource exhausted', 'insufficient_quota', 'too many requests')
+        $weeklyPatterns = @('weekly limit', 'week limit', '7 day', '7-day', 'weekly quota', 'weekly usage')
+
+        $hitLimit = $false
+        foreach ($p in $limitPatterns) {
+            if ($transcriptText -match [regex]::Escape($p)) { $hitLimit = $true; break }
+        }
+
+        $isWeekly = $false
+        foreach ($wp in $weeklyPatterns) {
+            if ($transcriptText -match [regex]::Escape($wp)) { $isWeekly = $true; break }
+        }
+
+        if ($hitLimit -and -not $isWeekly) {
+            $flagFile = Join-Path $env:USERPROFILE ".claude\.needs-handoff"
+            @{ from_engine = $client; reason = 'usage_limit'; timestamp = (Get-Date -Format o) } |
+                ConvertTo-Json | Set-Content $flagFile
+        }
+
+        # Reset turn counter
+        Remove-Item (Join-Path $env:USERPROFILE ".claude\.session-turns") -Force -ErrorAction SilentlyContinue
+    }
+} catch {
+    # Non-critical - don't fail the hook
+}
+
 exit 0

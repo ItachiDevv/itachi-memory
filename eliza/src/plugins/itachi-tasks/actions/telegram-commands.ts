@@ -1691,6 +1691,7 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /yes — Send "y" + Enter
   /no — Send "n" + Enter
   /close — Kill session & close topic
+  /switch <engine> — Switch to claude/codex/gemini mid-session
 
 **Topic Management**
   /close — Close current topic (use inside a topic)

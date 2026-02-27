@@ -6,7 +6,7 @@ import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { activeSessions, markSessionClosed, spawningTopics } from '../shared/active-sessions.js';
-import { spawnSessionInTopic, wrapStreamJsonInput } from '../actions/interactive-session.js';
+import { spawnSessionInTopic, wrapStreamJsonInput, handleEngineHandoff } from '../actions/interactive-session.js';
 import { cleanupStaleFlows } from '../shared/conversation-flows.js';
 import {
   browsingSessionMap,
@@ -96,6 +96,22 @@ export const topicInputRelayEvaluator: Evaluator = {
       handleCloseInValidate(runtime, threadId)
         .catch(err => runtime.logger.error(`[topic-relay] /close error in validate: ${err instanceof Error ? err.message : String(err)}`));
       return true;
+    }
+
+    // Handle /switch <engine> in active sessions (validate path for reliability)
+    if (!content._topicRelayQueued && /^\/switch\s+(claude|codex|gemini)/i.test(fullText)) {
+      const session = activeSessions.get(threadId);
+      if (session) {
+        content._topicRelayQueued = true;
+        const targetEngine = fullText.match(/^\/switch\s+(\w+)/i)?.[1]?.toLowerCase() || '';
+        const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+        if (topicsService) {
+          const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+          handleEngineHandoff(session, chatId, threadId, `user_request:${targetEngine}`, runtime, topicsService)
+            .catch(err => runtime.logger.error(`[topic-relay] /switch error: ${err instanceof Error ? err.message : String(err)}`));
+        }
+        return true;
+      }
     }
 
     // Handle keyboard control commands in active sessions (validate path for reliability)

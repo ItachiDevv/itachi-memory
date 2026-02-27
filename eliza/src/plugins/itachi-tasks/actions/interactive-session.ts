@@ -105,7 +105,13 @@ export function parseStreamJsonLine(line: string): ParsedChunk[] {
     return [{ kind: 'result', subtype, cost: cost || undefined, duration: duration || undefined }];
   }
 
-  // System/init/hook_started/rate_limit — internal, skip
+  // Rate limit events — track for proactive engine switching
+  if (type === 'rate_limit_event') {
+    const retryAfter = typeof obj.retry_after === 'number' ? obj.retry_after : 0;
+    return [{ kind: 'rate_limit', retryAfter }];
+  }
+
+  // System/init/hook_started — internal, skip
   return [];
 }
 
@@ -442,8 +448,35 @@ export async function spawnSessionInTopic(
       const preview = chunk.kind === 'text' ? chunk.text.substring(0, 80) :
                       chunk.kind === 'ask_user' ? `Q: ${chunk.question.substring(0, 60)}` :
                       chunk.kind === 'hook_response' ? chunk.text.substring(0, 60) :
+                      chunk.kind === 'rate_limit' ? `retry_after=${chunk.retryAfter}s` :
                       chunk.kind;
       runtime.logger.info(`[session] ${chunk.kind}: "${preview}"`);
+
+      // Track rate limit events for proactive engine switching
+      if (chunk.kind === 'rate_limit') {
+        const session = activeSessions.get(topicId);
+        if (session) {
+          session.rateLimitCount = (session.rateLimitCount || 0) + 1;
+          runtime.logger.info(`[session] Rate limit #${session.rateLimitCount} (retry_after=${chunk.retryAfter}s)`);
+          // Trigger proactive handoff if limits are severe
+          if (chunk.retryAfter >= 30 || session.rateLimitCount >= 3) {
+            runtime.logger.warn(`[session] Rate limit threshold reached — triggering engine handoff`);
+            const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+            handleEngineHandoff(session, chatId, topicId, 'rate_limit', runtime, topicsService).catch(err => {
+              runtime.logger.error(`[session] Engine handoff failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+        }
+        return; // Don't send rate_limit events to Telegram
+      }
+
+      // Track turns for usage monitoring
+      if (chunk.kind === 'text') {
+        const session = activeSessions.get(topicId);
+        if (session) {
+          session.totalTurns = (session.totalTurns || 0) + 1;
+        }
+      }
 
       // Record in transcript
       const content = chunk.kind === 'text' ? chunk.text :
@@ -548,6 +581,10 @@ export async function spawnSessionInTopic(
     handle.write(wrapStreamJsonInput(prompt));
   }
 
+  // Resolve engine name from wrapper command (itachi→claude, itachic→codex, itachig→gemini)
+  const WRAPPER_TO_ENGINE: Record<string, string> = { itachi: 'claude', itachic: 'codex', itachig: 'gemini' };
+  const currentEngine = WRAPPER_TO_ENGINE[engineCommand.split(/\s/)[0]] || 'claude';
+
   activeSessions.set(topicId, {
     sessionId,
     topicId,
@@ -557,10 +594,112 @@ export async function spawnSessionInTopic(
     transcript: sessionTranscript,
     project: project || 'unknown',
     mode,
+    currentEngine,
+    rateLimitCount: 0,
+    totalTurns: 0,
+    lastUsageCheckTime: Date.now(),
   });
   spawningTopics.delete(topicId); // Session registered — spawning lock no longer needed
 
   return sessionId;
+}
+
+// ── Engine handoff (proactive switching on usage limits) ──────────────
+
+/**
+ * Handle engine handoff: kill current session and respawn with next engine.
+ * Used by both proactive monitoring (rate_limit_event threshold) and manual /switch.
+ */
+export async function handleEngineHandoff(
+  session: ActiveSession,
+  chatId: number,
+  topicId: number,
+  reason: string,
+  runtime: IAgentRuntime,
+  topicsService: TelegramTopicsService,
+): Promise<void> {
+  const fromEngine = session.currentEngine || 'claude';
+
+  // Look up engine priority from machine registry
+  let priority: string[] = ['claude', 'codex', 'gemini'];
+  try {
+    const registry = runtime.getService<MachineRegistryService>('machine-registry');
+    if (registry) {
+      const { machine } = await registry.resolveMachine(session.target);
+      if (machine?.engine_priority?.length) {
+        priority = machine.engine_priority;
+      }
+    }
+  } catch (err) {
+    runtime.logger.warn(`[session] Failed to get engine priority: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Find next engine (skip current, follow priority order)
+  let nextEngine: string | null = null;
+  for (const engine of priority) {
+    if (engine !== fromEngine) {
+      nextEngine = engine;
+      break;
+    }
+  }
+
+  if (!nextEngine) {
+    await topicsService.sendToTopic(topicId, `All engines exhausted. Session ended due to ${reason}.`);
+    return;
+  }
+
+  const nextWrapper = ENGINE_WRAPPERS[nextEngine] || 'itachi';
+
+  // Build handoff prompt from recent transcript
+  const recentText = session.transcript
+    .slice(-10)
+    .filter(t => t.type === 'text')
+    .map(t => t.content)
+    .join('\n')
+    .substring(0, 2000);
+
+  const handoffPrompt = `You are continuing work from a previous session that hit its usage limit.\n` +
+    `Previous engine: ${fromEngine}. Reason: ${reason}.\n` +
+    `Project: ${session.project}. Target: ${session.target}.\n` +
+    `Recent context:\n${recentText}\n\n` +
+    `Pick up exactly where the previous session left off.`;
+
+  await topicsService.sendToTopic(topicId,
+    `Switching from ${fromEngine} to ${nextEngine} (reason: ${reason})...`);
+
+  // Kill current session
+  try {
+    session.handle.write('\x04'); // Send EOF
+    session.handle.kill();
+  } catch { /* ignore close errors */ }
+  activeSessions.delete(topicId);
+  markSessionClosed(topicId);
+
+  // Small delay for cleanup
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // Respawn with new engine
+  const sshService = runtime.getService<SSHService>('ssh');
+  if (!sshService) {
+    await topicsService.sendToTopic(topicId, 'SSH service unavailable. Cannot respawn session.');
+    return;
+  }
+
+  const repoPath = session.workspace || DEFAULT_REPO_PATHS[session.target] || '~';
+
+  const newSessionId = await spawnSessionInTopic(
+    runtime, sshService, topicsService,
+    session.target, repoPath, handoffPrompt,
+    nextWrapper, topicId, session.project,
+  );
+
+  if (newSessionId) {
+    await topicsService.sendToTopic(topicId,
+      `Engine switched: ${fromEngine} -> ${nextEngine}. Session ${newSessionId} active.`);
+  } else {
+    await topicsService.sendToTopic(topicId,
+      `Failed to start ${nextEngine} session. Try manually with /switch ${nextEngine}.`);
+  }
 }
 
 /**

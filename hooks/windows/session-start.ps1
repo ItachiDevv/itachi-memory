@@ -685,7 +685,7 @@ try {
 
     fs.writeFileSync(memoryFile, existing);
 
-    // Also write to Codex instructions.md (same sections, always — so both CLIs stay in sync)
+    // Also write to Codex instructions.md (same sections, always - so both CLIs stay in sync)
     try {
         if (fs.existsSync(path.dirname(codexInstructionsFile))) {
             let codexContent = '';

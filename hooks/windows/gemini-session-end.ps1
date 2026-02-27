@@ -61,7 +61,7 @@ try {
         $sessionId = "gemini-manual-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + [System.Environment]::ProcessId
     }
 
-    # Exit code from wrapper (no stdin JSON for Gemini — wrapper sets env var)
+    # Exit code from wrapper (no stdin JSON for Gemini - wrapper sets env var)
     $exitCode = $env:ITACHI_EXIT_CODE
     if (-not $exitCode) { $exitCode = "0" }
     $reason = if ([int]$exitCode -eq 0) { "completed" } else { "error" }
