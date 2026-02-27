@@ -122,37 +122,72 @@ export class TelegramTopicsService extends Service {
     return response.json() as Promise<TelegramApiResponse>;
   }
 
+  // ============================================================
+  // Topic Registry — persistent topic tracking in Supabase
+  // Survives container restarts unlike in-memory maps.
+  // Table: itachi_topic_registry (topic_id, chat_id, title, task_id, status)
+  // ============================================================
+
   /**
-   * Discover all forum topic IDs in the group chat by scanning recent updates.
-   * Uses getUpdates (peek mode, no offset commit) to find message_thread_id values.
-   * Returns a Set of topic IDs found.
+   * Register a topic in the persistent registry.
+   * Called after successful topic creation.
    */
-  async discoverForumTopicIds(): Promise<Set<number>> {
-    const topicIds = new Set<number>();
-    if (!this.isEnabled()) return topicIds;
-
+  async registerTopic(topicId: number, title: string, taskId?: string): Promise<void> {
+    const taskService = this.runtime.getService('itachi-tasks') as TaskService | null;
+    if (!taskService) return;
     try {
-      // Use getUpdates to scan recent messages for thread IDs
-      // Note: this only works if the bot receives updates via polling (not webhook)
-      // For webhook bots, we fall back to trying deleteForumTopic on a range
-      const result = await this.apiCall('getUpdates', {
-        limit: 100,
-        allowed_updates: ['message', 'edited_message'],
-      });
+      const supabase = taskService.getSupabase();
+      await supabase.from('itachi_topic_registry').upsert({
+        topic_id: topicId,
+        chat_id: this.groupChatId,
+        title: title.substring(0, 128),
+        task_id: taskId || null,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'topic_id' });
+    } catch (err) {
+      // Table might not exist yet — log but don't crash
+      this.runtime.logger.warn(`[topics] registerTopic failed (table may not exist): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
-      if (result.ok && Array.isArray(result.result)) {
-        for (const update of result.result) {
-          const msg = update.message || update.edited_message;
-          if (msg?.chat?.id === this.groupChatId && msg?.message_thread_id) {
-            topicIds.add(msg.message_thread_id);
-          }
-        }
+  /**
+   * Get all non-deleted topic IDs from the persistent registry.
+   */
+  async getRegisteredTopicIds(): Promise<Set<number>> {
+    const topicIds = new Set<number>();
+    const taskService = this.runtime.getService('itachi-tasks') as TaskService | null;
+    if (!taskService) return topicIds;
+    try {
+      const supabase = taskService.getSupabase();
+      const { data } = await supabase
+        .from('itachi_topic_registry')
+        .select('topic_id')
+        .neq('status', 'deleted')
+        .eq('chat_id', this.groupChatId)
+        .limit(1000);
+      for (const row of (data || []) as Array<{ topic_id: number }>) {
+        if (row.topic_id) topicIds.add(row.topic_id);
       }
     } catch {
-      // getUpdates may fail if webhook is set — that's OK
+      // Table might not exist — that's OK, registry is optional
     }
-
     return topicIds;
+  }
+
+  /**
+   * Mark a topic as deleted in the registry (after confirmed Telegram deletion).
+   */
+  async unregisterTopic(topicId: number): Promise<void> {
+    const taskService = this.runtime.getService('itachi-tasks') as TaskService | null;
+    if (!taskService) return;
+    try {
+      const supabase = taskService.getSupabase();
+      await supabase
+        .from('itachi_topic_registry')
+        .update({ status: 'deleted', updated_at: new Date().toISOString() })
+        .eq('topic_id', topicId);
+    } catch { /* best-effort */ }
   }
 
   /**
@@ -237,6 +272,9 @@ export class TelegramTopicsService extends Service {
           telegram_topic_id: topicId,
         } as any);
       }
+
+      // Register in persistent registry (survives container restarts)
+      await this.registerTopic(topicId, topicName, task.id);
 
       this.runtime.logger.info(`Created topic ${topicId} for task ${slug}`);
       return { topicId, messageId };

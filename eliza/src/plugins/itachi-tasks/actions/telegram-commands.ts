@@ -104,6 +104,9 @@ export const telegramCommandsAction: Action = {
     // /delete command (replaces /close for topic cleanup)
     if (text === '/delete' || text.startsWith('/delete ')) return true;
 
+    // /delete_topic <id> — manual topic deletion by thread ID
+    if (text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) return true;
+
     return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text.startsWith('/learn ') || text.startsWith('/teach ') ||
       text.startsWith('/unteach ') || text.startsWith('/forget ') ||
@@ -112,7 +115,7 @@ export const telegramCommandsAction: Action = {
       text === '/repos' || text === '/machines' || text.startsWith('/machines ') ||
       text === '/engines' || text.startsWith('/engines ') ||
       text === '/sync-repos' || text === '/sync_repos' ||
-      text === '/close_all_topics' || text === '/close-all-topics' ||
+      text === '/close_all_topics' || text === '/close-all-topics' || text === '/close_all' ||
       text === '/delete_topics' || text.startsWith('/delete_topics ') ||
       text === '/delete-topics' || text.startsWith('/delete-topics ') ||
       text === '/delete' || text.startsWith('/delete ') ||
@@ -188,6 +191,18 @@ export const telegramCommandsAction: Action = {
         const result = await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
         (message.content as Record<string, unknown>)._sessionSpawned = true;
         return result ?? { success: true };
+      }
+
+      // /delete_topic <id> — manually delete a single topic by thread ID (for orphan cleanup)
+      if (text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) {
+        const prefix = text.startsWith('/delete_topic') ? '/delete_topic' : '/delete-topic';
+        const idStr = text.substring(prefix.length).trim();
+        const topicId = parseInt(idStr, 10);
+        if (!topicId || isNaN(topicId)) {
+          if (callback) await callback({ text: 'Usage: /delete_topic <thread_id>\nProvide the numeric topic thread ID.' });
+          return { success: false, error: 'Invalid topic ID' };
+        }
+        return await handleDeleteSingleTopic(runtime, topicId, callback);
       }
 
       // /delete_topics [done|failed|cancelled|all] or /delete [done|failed|all]
@@ -342,7 +357,7 @@ export const telegramCommandsAction: Action = {
       }
 
       // /close_all_topics — close (archive) ALL topics regardless of task status
-      if (text === '/close-all-topics' || text === '/close_all_topics') {
+      if (text === '/close-all-topics' || text === '/close_all_topics' || text === '/close_all') {
         return await handleCloseAllTopics(runtime, callback);
       }
 
@@ -570,10 +585,14 @@ async function handleDeleteTopics(
   for (const task of withTopics) {
     const topicId = task.telegram_topic_id;
     const ok = await topicsService.forceDeleteTopic(topicId);
-    if (ok) deleted++;
-    else failed++;
-
-    await clearTopicFromDb(taskService, topicId);
+    if (ok) {
+      deleted++;
+      // Only clear DB reference AFTER confirmed deletion
+      await clearTopicFromDb(taskService, topicId);
+      await topicsService.unregisterTopic(topicId);
+    } else {
+      failed++;
+    }
   }
 
   const failedMsg = failed > 0 ? ` (${failed} failed)` : '';
@@ -612,15 +631,15 @@ async function collectAllTopicIds(
   for (const [threadId] of activeSessions) topicIds.add(threadId);
   for (const [threadId] of browsingSessionMap) topicIds.add(threadId);
 
-  // Source 3: discover orphaned topics via Telegram getUpdates
+  // Source 3: topic registry table (persistent, survives container restarts)
   try {
-    const discovered = await topicsService.discoverForumTopicIds();
-    for (const id of discovered) topicIds.add(id);
-    if (discovered.size > 0) {
-      runtime.logger.info(`[topics] Discovered ${discovered.size} topic(s) from Telegram updates`);
+    const registered = await topicsService.getRegisteredTopicIds();
+    for (const id of registered) topicIds.add(id);
+    if (registered.size > 0) {
+      runtime.logger.info(`[topics] Found ${registered.size} topic(s) from registry`);
     }
   } catch (err) {
-    runtime.logger.warn(`[topics] Discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+    runtime.logger.warn(`[topics] Registry query failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   return topicIds;
@@ -636,6 +655,42 @@ async function clearTopicFromDb(taskService: TaskService | null, topicId: number
       .update({ telegram_topic_id: null })
       .eq('telegram_topic_id', topicId);
   } catch { /* best-effort */ }
+}
+
+/**
+ * /delete_topic <id> — Manually delete a single topic by thread ID.
+ * Useful for cleaning up orphaned topics where the DB reference was lost.
+ */
+async function handleDeleteSingleTopic(
+  runtime: IAgentRuntime,
+  topicId: number,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!topicsService) {
+    if (callback) await callback({ text: 'Telegram topics service not available.' });
+    return { success: false, error: 'Topics service not available' };
+  }
+
+  if (callback) await callback({ text: `Deleting topic ${topicId}...` });
+
+  // Clean up in-memory state
+  activeSessions.delete(topicId);
+  markSessionClosed(topicId);
+  browsingSessionMap.delete(topicId);
+
+  const ok = await topicsService.forceDeleteTopic(topicId);
+  if (ok) {
+    // Clear from DB and registry
+    const taskService = runtime.getService<TaskService>('itachi-tasks');
+    await clearTopicFromDb(taskService, topicId);
+    await topicsService.unregisterTopic(topicId);
+    if (callback) await callback({ text: `Topic ${topicId} deleted successfully.` });
+    return { success: true, data: { topicId, deleted: true } };
+  }
+
+  if (callback) await callback({ text: `Failed to delete topic ${topicId}. It may not exist or may be the General topic.` });
+  return { success: false, error: `Failed to delete topic ${topicId}` };
 }
 
 /**
@@ -709,10 +764,14 @@ async function handleDeleteTopicsAll(
     browsingSessionMap.delete(topicId);
 
     const ok = await topicsService.forceDeleteTopic(topicId);
-    if (ok) deleted++;
-    else failed++;
-
-    await clearTopicFromDb(taskService, topicId);
+    if (ok) {
+      deleted++;
+      // Only clear DB reference AFTER confirmed deletion
+      await clearTopicFromDb(taskService, topicId);
+      await topicsService.unregisterTopic(topicId);
+    } else {
+      failed++;
+    }
   }
 
   const failedMsg = failed > 0 ? ` (${failed} failed — may be General topic or already deleted)` : '';
@@ -1417,6 +1476,7 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /close — Close current topic (use inside a topic)
   /close_all_topics — Close (archive) ALL topics
   /delete_topics done|failed|cancelled|all — Permanently delete topics
+  /delete_topic <id> — Delete a single topic by thread ID
 
 **Other**
   /help — Show this message`;
