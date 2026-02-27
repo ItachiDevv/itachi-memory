@@ -32,6 +32,31 @@ const ENGINE_WRAPPERS: Record<string, string> = {
   gemini: 'itachig',
 };
 
+/** Engine shortcodes for compact callback_data (64-byte Telegram limit) */
+const ENGINE_SHORT: Record<string, string> = { i: 'itachi', c: 'itachic', g: 'itachig' };
+const ENGINE_TO_SHORT: Record<string, string> = { itachi: 'i', itachic: 'c', itachig: 'g' };
+
+/**
+ * Build a 3×2 inline keyboard for engine + mode selection.
+ * Shows all 6 combinations: {itachi, itachic, itachig} × {--ds, --cds}
+ */
+function buildEngineKeyboard(): Array<Array<{ text: string; callback_data: string }>> {
+  return [
+    [
+      { text: 'itachi --ds', callback_data: 'sf:s:i.ds' },
+      { text: 'itachi --cds', callback_data: 'sf:s:i.cds' },
+    ],
+    [
+      { text: 'itachic --ds', callback_data: 'sf:s:c.ds' },
+      { text: 'itachic --cds', callback_data: 'sf:s:c.cds' },
+    ],
+    [
+      { text: 'itachig --ds', callback_data: 'sf:s:g.ds' },
+      { text: 'itachig --cds', callback_data: 'sf:s:g.cds' },
+    ],
+  ];
+}
+
 /**
  * Register a Telegram callback_query handler on the Telegraf bot instance.
  * Polls for the bot instance since TelegramClientInterface starts async.
@@ -645,17 +670,10 @@ async function handleSessionFlowCallback(
         // No repos — offer to start at base dir
         flow.repoPath = startDir;
         flow.step = 'select_start_mode';
-        flow.engineCommand = await resolveEngine(runtime, sshTarget);
-        const keyboard = [
-          [
-            { text: 'Start (itachi --ds)', callback_data: 'sf:s:ds' },
-            { text: 'Continue (itachi --cds)', callback_data: 'sf:s:cds' },
-          ],
-        ];
         await topicsService.editMessageWithKeyboard(
           chatId, messageId,
-          `Session on ${selected.name}\nPath: ${startDir}\n${error ? `(${error})` : '(no subdirectories)'}\n\nStart mode:`,
-          keyboard,
+          `Session on ${selected.name}\nPath: ${startDir}\n${error ? `(${error})` : '(no subdirectories)'}\n\nSelect engine & mode:`,
+          buildEngineKeyboard(),
         );
       }
       setFlow(chatId, userId, flow);
@@ -715,19 +733,12 @@ async function handleSessionFlowCallback(
       flow.step = 'select_start_mode';
     }
 
-    // Resolve engine command
-    flow.engineCommand = await resolveEngine(runtime, sshTarget);
+    flow.step = 'select_start_mode';
 
-    const keyboard = [
-      [
-        { text: 'Start (itachi --ds)', callback_data: 'sf:s:ds' },
-        { text: 'Continue (itachi --cds)', callback_data: 'sf:s:cds' },
-      ],
-    ];
     await topicsService.editMessageWithKeyboard(
       chatId, messageId,
-      `Session on ${flow.machine}\nPath: ${flow.repoPath}\n\nStart mode:`,
-      keyboard,
+      `Session on ${flow.machine}\nPath: ${flow.repoPath}\n\nSelect engine & mode:`,
+      buildEngineKeyboard(),
     );
     setFlow(chatId, userId, flow);
     return;
@@ -736,7 +747,6 @@ async function handleSessionFlowCallback(
   // sf:d:<idx>|here — subfolder selected
   if (key === 'd') {
     if (!sshService) return;
-    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
 
     if (value === 'here') {
       // Use current repoPath
@@ -747,32 +757,40 @@ async function handleSessionFlowCallback(
       flow.repoPath = `${flow.repoPath}/${dirs[idx]}`;
     }
 
-    flow.engineCommand = await resolveEngine(runtime, sshTarget);
     flow.step = 'select_start_mode';
 
-    const keyboard = [
-      [
-        { text: 'Start (itachi --ds)', callback_data: 'sf:s:ds' },
-        { text: 'Continue (itachi --cds)', callback_data: 'sf:s:cds' },
-      ],
-    ];
     await topicsService.editMessageWithKeyboard(
       chatId, messageId,
-      `Session on ${flow.machine}\nPath: ${flow.repoPath}\n\nStart mode:`,
-      keyboard,
+      `Session on ${flow.machine}\nPath: ${flow.repoPath}\n\nSelect engine & mode:`,
+      buildEngineKeyboard(),
     );
     setFlow(chatId, userId, flow);
     return;
   }
 
-  // sf:s:ds|cds — start mode selected
+  // sf:s:<engine>.<mode> — engine + start mode selected
+  // New format: i.ds, i.cds, c.ds, c.cds, g.ds, g.cds
+  // Old format (backward compat): ds, cds
   if (key === 's') {
     if (!sshService) return;
 
     const sshTarget = resolveSSHTarget(flow.machine || 'mac');
     const repoPath = flow.repoPath || getStartingDir(sshTarget);
-    const engineCmd = flow.engineCommand || await resolveEngine(runtime, sshTarget);
-    const dsFlag = value === 'cds' ? '--cds' : '--ds';
+
+    let engineCmd: string;
+    let dsFlag: string;
+
+    if (value.includes('.')) {
+      // New format: <engineShort>.<mode>
+      const [engShort, mode] = value.split('.');
+      engineCmd = ENGINE_SHORT[engShort] || 'itachi';
+      dsFlag = mode === 'cds' ? '--cds' : '--ds';
+    } else {
+      // Old format: ds or cds (backward compat for cached keyboards)
+      engineCmd = flow.engineCommand || await resolveEngine(runtime, sshTarget);
+      dsFlag = value === 'cds' ? '--cds' : '--ds';
+    }
+
     const prompt = `Work in ${repoPath}`;
 
     // Remove keyboard, show summary

@@ -12,7 +12,7 @@ import type { IAgentRuntime, Memory } from '@elizaos/core';
  *   "normal text @mention" → "normal text @mention" (unchanged)
  */
 export function stripBotMention(text: string): string {
-  return text.replace(/^(\/\w+)@\w+/, '$1');
+  return text.replace(/^(\/[\w-]+)@[\w]+/, '$1');
 }
 
 /**

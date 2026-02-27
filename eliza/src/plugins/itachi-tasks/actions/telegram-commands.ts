@@ -898,6 +898,9 @@ async function handleDeleteTopicPicker(
     keyboard,
   );
 
+  // Suppress LLM fallback — the keyboard IS the response
+  if (callback) await callback({ text: '', action: 'IGNORE' });
+
   return { success: true, data: { found: topics.length } };
 }
 

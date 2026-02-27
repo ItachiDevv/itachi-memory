@@ -88,7 +88,7 @@ export function cleanupStaleFlows(): void {
 // Session flow:  sf:m:<idx>           — machine selection
 //                sf:r:<idx>           — repo/folder selection
 //                sf:d:<idx>|here      — subfolder or "start here"
-//                sf:s:ds|cds          — start mode (fresh / continue)
+//                sf:s:i.ds|i.cds|c.ds|c.cds|g.ds|g.cds — engine + mode
 
 export function encodeCallback(prefix: string, key: string, value: string | number): string {
   return `${prefix}:${key}:${value}`;
