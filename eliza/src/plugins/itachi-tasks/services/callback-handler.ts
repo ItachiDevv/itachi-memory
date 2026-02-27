@@ -297,6 +297,15 @@ async function handleCallback(runtime: IAgentRuntime, ctx: any): Promise<void> {
     return;
   }
 
+  // dt:<topicId> — delete topic callback from /delete_topic picker
+  if (data.startsWith('dt:')) {
+    const topicId = parseInt(data.substring(3), 10);
+    if (!isNaN(topicId) && topicId > 0) {
+      await handleDeleteTopicCallback(runtime, topicId, chatId, messageId);
+    }
+    return;
+  }
+
   const decoded = decodeCallback(data);
   if (!decoded) return;
 
@@ -830,6 +839,54 @@ function buildDirKeyboard(
   }
 
   return rows;
+}
+
+/**
+ * Handle dt:<topicId> callback — delete a topic selected from the /delete_topic picker.
+ */
+async function handleDeleteTopicCallback(
+  runtime: IAgentRuntime,
+  topicId: number,
+  chatId: number,
+  messageId?: number,
+): Promise<void> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  if (!topicsService) return;
+
+  // Update the picker message to show progress
+  if (messageId) {
+    await topicsService.editMessageWithKeyboard(chatId, messageId, `Deleting topic ${topicId}...`, []);
+  }
+
+  // Clean up in-memory state
+  activeSessions.delete(topicId);
+  browsingSessionMap.delete(topicId);
+
+  const ok = await topicsService.forceDeleteTopic(topicId);
+
+  if (ok) {
+    // Clear from DB and registry
+    if (taskService) {
+      try {
+        const supabase = taskService.getSupabase();
+        await supabase
+          .from('itachi_tasks')
+          .update({ telegram_topic_id: null })
+          .eq('telegram_topic_id', topicId);
+      } catch { /* best-effort */ }
+    }
+    await topicsService.unregisterTopic(topicId);
+
+    if (messageId) {
+      await topicsService.editMessageWithKeyboard(chatId, messageId, `\u2705 Topic ${topicId} deleted.`, []);
+    }
+    runtime.logger.info(`[callback] Deleted topic ${topicId} via picker`);
+  } else {
+    if (messageId) {
+      await topicsService.editMessageWithKeyboard(chatId, messageId, `\u274c Failed to delete topic ${topicId}. May not exist or is the General topic.`, []);
+    }
+  }
 }
 
 async function resolveEngine(runtime: IAgentRuntime, sshTarget: string): Promise<string> {

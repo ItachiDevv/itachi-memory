@@ -104,8 +104,9 @@ export const telegramCommandsAction: Action = {
     // /delete command (replaces /close for topic cleanup)
     if (text === '/delete' || text.startsWith('/delete ')) return true;
 
-    // /delete_topic <id> — manual topic deletion by thread ID
-    if (text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) return true;
+    // /delete_topic [id] — topic deletion (shows picker or deletes by ID)
+    if (text === '/delete_topic' || text === '/delete-topic' ||
+        text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) return true;
 
     return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text.startsWith('/learn ') || text.startsWith('/teach ') ||
@@ -193,16 +194,24 @@ export const telegramCommandsAction: Action = {
         return result ?? { success: true };
       }
 
-      // /delete_topic <id> — manually delete a single topic by thread ID (for orphan cleanup)
-      if (text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) {
+      // /delete_topic [id] — show topic picker or delete by ID
+      if (text === '/delete_topic' || text === '/delete-topic' ||
+          text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) {
         const prefix = text.startsWith('/delete_topic') ? '/delete_topic' : '/delete-topic';
         const idStr = text.substring(prefix.length).trim();
-        const topicId = parseInt(idStr, 10);
-        if (!topicId || isNaN(topicId)) {
-          if (callback) await callback({ text: 'Usage: /delete_topic <thread_id>\nProvide the numeric topic thread ID.' });
-          return { success: false, error: 'Invalid topic ID' };
+
+        // If ID provided, delete directly
+        if (idStr) {
+          const topicId = parseInt(idStr, 10);
+          if (!topicId || isNaN(topicId)) {
+            if (callback) await callback({ text: 'Invalid topic ID. Use /delete_topic to see a list of topics.' });
+            return { success: false, error: 'Invalid topic ID' };
+          }
+          return await handleDeleteSingleTopic(runtime, topicId, callback);
         }
-        return await handleDeleteSingleTopic(runtime, topicId, callback);
+
+        // No ID → show topic picker with buttons
+        return await handleDeleteTopicPicker(runtime, callback);
       }
 
       // /delete_topics [done|failed|cancelled|all] or /delete [done|failed|all]
@@ -691,6 +700,103 @@ async function handleDeleteSingleTopic(
 
   if (callback) await callback({ text: `Failed to delete topic ${topicId}. It may not exist or may be the General topic.` });
   return { success: false, error: `Failed to delete topic ${topicId}` };
+}
+
+/**
+ * /delete_topic (no args) — Show inline keyboard with all known topics.
+ * Mobile-friendly: user taps a button instead of typing an ID.
+ */
+async function handleDeleteTopicPicker(
+  runtime: IAgentRuntime,
+  callback?: HandlerCallback
+): Promise<ActionResult> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!topicsService) {
+    if (callback) await callback({ text: 'Telegram topics service not available.' });
+    return { success: false, error: 'Topics service not available' };
+  }
+
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+
+  // Collect topics from all sources with labels
+  const topics: Array<{ topicId: number; label: string }> = [];
+  const seen = new Set<number>();
+
+  // Source 1: DB tasks with non-null telegram_topic_id (have task context)
+  if (taskService) {
+    try {
+      const supabase = taskService.getSupabase();
+      const { data: tasks } = await supabase
+        .from('itachi_tasks')
+        .select('id, telegram_topic_id, project, description, status')
+        .not('telegram_topic_id', 'is', null)
+        .limit(50);
+      for (const task of (tasks || []) as Array<{ id: string; telegram_topic_id: number; project: string; description: string; status: string }>) {
+        if (task.telegram_topic_id && !seen.has(task.telegram_topic_id)) {
+          seen.add(task.telegram_topic_id);
+          const emoji = task.status === 'completed' ? '\u2705' : task.status === 'failed' ? '\u274c' : task.status === 'running' ? '\u23f3' : '\u2754';
+          const slug = generateTaskTitle(task.description);
+          topics.push({ topicId: task.telegram_topic_id, label: `${emoji} ${slug} (${task.project})` });
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  // Source 2: topic registry (may have topics not in tasks)
+  try {
+    const supabase = taskService?.getSupabase();
+    if (supabase) {
+      const { data: registered } = await supabase
+        .from('itachi_topic_registry')
+        .select('topic_id, title, status')
+        .neq('status', 'deleted')
+        .eq('chat_id', topicsService.chatId)
+        .limit(50);
+      for (const row of (registered || []) as Array<{ topic_id: number; title: string; status: string }>) {
+        if (row.topic_id && !seen.has(row.topic_id)) {
+          seen.add(row.topic_id);
+          const emoji = row.status === 'closed' ? '\ud83d\udcad' : '\ud83d\udcc4';
+          topics.push({ topicId: row.topic_id, label: `${emoji} ${row.title || `Topic ${row.topic_id}`}` });
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+
+  // Source 3: in-memory sessions
+  for (const [threadId, session] of activeSessions) {
+    if (!seen.has(threadId)) {
+      seen.add(threadId);
+      topics.push({ topicId: threadId, label: `\u23f3 Active: ${(session as any).sessionId?.substring(0, 8) || threadId}` });
+    }
+  }
+  for (const [threadId] of browsingSessionMap) {
+    if (!seen.has(threadId)) {
+      seen.add(threadId);
+      topics.push({ topicId: threadId, label: `\ud83d\udcc2 Browsing: ${threadId}` });
+    }
+  }
+
+  if (topics.length === 0) {
+    if (callback) await callback({ text: 'No topics found. All topic references have been cleared.\n\nFuture topics will be tracked automatically.' });
+    return { success: true, data: { found: 0 } };
+  }
+
+  // Build inline keyboard — 1 topic per row for readability on mobile
+  const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (const topic of topics.slice(0, 20)) { // Telegram limit: ~50 buttons
+    keyboard.push([{
+      text: topic.label.substring(0, 64), // Telegram button text limit
+      callback_data: `dt:${topic.topicId}`, // dt = delete topic
+    }]);
+  }
+
+  // Send with inline keyboard
+  await topicsService.sendMessageWithKeyboard(
+    `Select a topic to delete (${topics.length} found):`,
+    keyboard,
+  );
+
+  return { success: true, data: { found: topics.length } };
 }
 
 /**
@@ -1476,7 +1582,7 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /close — Close current topic (use inside a topic)
   /close_all_topics — Close (archive) ALL topics
   /delete_topics done|failed|cancelled|all — Permanently delete topics
-  /delete_topic <id> — Delete a single topic by thread ID
+  /delete_topic — Pick a topic to delete (shows buttons)
 
 **Other**
   /help — Show this message`;
