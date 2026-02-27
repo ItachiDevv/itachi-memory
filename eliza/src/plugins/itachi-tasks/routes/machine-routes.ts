@@ -121,6 +121,49 @@ export const machineRoutes: Route[] = [
     },
   },
 
+  // Get engine priority for a machine (used by wrapper auto-fallback scripts)
+  // Query: ?machine_id=<id> or ?hostname=<name>
+  {
+    type: 'GET',
+    path: '/api/machines/engine-priority',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const registry = getRegistryService(rt, res);
+        if (!registry) return;
+
+        const query = req.query as Record<string, string> | undefined;
+        const machineId = query?.machine_id || query?.hostname;
+
+        if (!machineId) {
+          res.status(400).json({ error: 'machine_id or hostname query parameter required' });
+          return;
+        }
+
+        const machine = await registry.getMachine(machineId);
+        const defaultPriority = ['claude', 'codex', 'gemini'];
+
+        if (!machine) {
+          // Machine not registered — return default priority
+          res.json({ engine_priority: defaultPriority, source: 'default' });
+          return;
+        }
+
+        const priority = Array.isArray(machine.engine_priority) && machine.engine_priority.length > 0
+          ? machine.engine_priority
+          : defaultPriority;
+
+        res.json({ engine_priority: priority, source: 'machine_registry' });
+      } catch (error) {
+        (runtime as IAgentRuntime).logger.error('Engine priority lookup error:', error instanceof Error ? error.message : String(error));
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    },
+  },
+
   // Get single machine details
   {
     type: 'GET',

@@ -1,7 +1,7 @@
 # Itachi Memory - Daily Skill Sync
 # Bidirectional sync of ~/.claude/skills/ and ~/.claude/commands/ with remote _global repo
 # Runs as a scheduled task daily at 3:00 AM
-# Silent — never blocks anything, logs to ~/.claude/.skill-sync.log
+# Silent - never blocks anything, logs to ~/.claude/.skill-sync.log
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -95,7 +95,7 @@ function walkDir(dir, baseDir) {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
-        // Follow symlinks — resolve to real file
+        // Follow symlinks - resolve to real file
         let stat;
         try {
             const realPath = fs.realpathSync(fullPath);
@@ -228,7 +228,7 @@ function walkDir(dir, baseDir) {
     }
 }
 catch {
-    # Silent — never block anything
+    # Silent - never block anything
     $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
     $logFile = Join-Path $env:USERPROFILE ".claude\.skill-sync.log"
     try {
