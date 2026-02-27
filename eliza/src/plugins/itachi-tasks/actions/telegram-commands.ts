@@ -100,6 +100,45 @@ export const telegramCommandsAction: Action = {
       return false;
     }
 
+    // Session control commands (/ctrl+c, /esc, /stop, etc.) — send bytes
+    // to session stdin immediately and claim the message.
+    {
+      const ctrlMatch = text.toLowerCase().match(/^\/(ctrl\+[a-z\\]|esc|interrupt|kill|stop|exit|enter|tab|yes|no)$/);
+      if (ctrlMatch) {
+        const threadId2 = await getTopicThreadId(runtime, message);
+        if (threadId2 !== null) {
+          const session = activeSessions.get(threadId2);
+          if (session) {
+            const CTRL: Record<string, { bytes: string; label: string }> = {
+              'ctrl+c': { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
+              'ctrl+d': { bytes: '\x04', label: 'Ctrl+D (EOF)' },
+              'ctrl+z': { bytes: '\x1a', label: 'Ctrl+Z (suspend)' },
+              'ctrl+\\': { bytes: '\x1c', label: 'Ctrl+\\ (quit)' },
+              'esc': { bytes: '\x1b', label: 'Escape' },
+              'enter': { bytes: '\r', label: 'Enter' },
+              'tab': { bytes: '\t', label: 'Tab' },
+              'yes': { bytes: 'y\r', label: 'y + Enter' },
+              'no': { bytes: 'n\r', label: 'n + Enter' },
+              'interrupt': { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
+              'kill': { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
+              'stop': { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
+              'exit': { bytes: '\x04', label: 'Ctrl+D (EOF)' },
+            };
+            const cmd = CTRL[ctrlMatch[1]];
+            if (cmd) {
+              session.handle.write(cmd.bytes);
+              session.transcript.push({ type: 'user_input', content: cmd.label, timestamp: Date.now() });
+              (message.content as Record<string, unknown>)._topicRelayQueued = true;
+              runtime.logger.info(`[telegram-commands] validate: sent ${cmd.label} to session ${session.sessionId}`);
+              const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+              if (topicsService) topicsService.sendToTopic(threadId2, `Sent ${cmd.label}`).catch(() => {});
+              return true;
+            }
+          }
+        }
+      }
+    }
+
     // /task <singleWord> (no spaces after task name) → interactive flow
     const taskMatch = text.match(/^\/task\s+(\S+)$/);
     if (taskMatch && !taskMatch[1].includes(' ')) return true;
@@ -189,6 +228,13 @@ export const telegramCommandsAction: Action = {
             return await handleFlowDescription(runtime, flow, text, flowChatId, flow.userId || 0, callback);
           }
         }
+      }
+
+      // Session control commands — already handled by topic-input-relay evaluator,
+      // just suppress the LLM here.
+      if (/^\/(ctrl\+[a-z\\]|esc|interrupt|kill|stop|exit|enter|tab|yes|no)$/i.test(text)) {
+        if (callback) await callback({ text: '', action: 'IGNORE' });
+        return { success: true };
       }
 
       // /task <singleWord> → interactive flow (no spaces = just a task name)
@@ -1633,6 +1679,15 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /spawn <profile> <task> — Spawn a subagent
   /agents — List recent subagent runs
   /agents msg <id> <message> — Message an agent
+
+**Session Controls** (use inside an active session topic)
+  /ctrl+c — Interrupt (SIGINT)
+  /ctrl+d — End input (EOF/exit)
+  /esc — Escape key
+  /stop — Interrupt (alias for /ctrl+c)
+  /yes — Send "y" + Enter
+  /no — Send "n" + Enter
+  /close — Kill session & close topic
 
 **Topic Management**
   /close — Close current topic (use inside a topic)

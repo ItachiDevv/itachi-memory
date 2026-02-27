@@ -19,8 +19,33 @@ import {
 } from '../utils/directory-browser.js';
 
 /**
+ * Map of Telegram text commands → raw bytes to send to the SSH session's stdin.
+ * Users type these in the topic chat to send terminal control signals.
+ */
+const CONTROL_COMMANDS: Record<string, { bytes: string; label: string }> = {
+  '/ctrl+c':  { bytes: '\x03',   label: 'Ctrl+C (interrupt)' },
+  '/ctrl+d':  { bytes: '\x04',   label: 'Ctrl+D (EOF/exit)' },
+  '/ctrl+z':  { bytes: '\x1a',   label: 'Ctrl+Z (suspend)' },
+  '/ctrl+\\': { bytes: '\x1c',   label: 'Ctrl+\\ (SIGQUIT)' },
+  '/esc':     { bytes: '\x1b',   label: 'Escape' },
+  '/enter':   { bytes: '\r',     label: 'Enter' },
+  '/tab':     { bytes: '\t',     label: 'Tab' },
+  '/yes':     { bytes: 'y\r',    label: 'y + Enter' },
+  '/no':      { bytes: 'n\r',    label: 'n + Enter' },
+  // Aliases
+  '/interrupt': { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
+  '/kill':      { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
+  '/exit':      { bytes: '\x04', label: 'Ctrl+D (EOF/exit)' },
+  '/stop':      { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
+};
+
+function resolveControlCommand(text: string): { bytes: string; label: string } | null {
+  const lower = text.toLowerCase().trim();
+  return CONTROL_COMMANDS[lower] || null;
+}
+
+/**
  * Evaluator that intercepts messages in Telegram forum topics linked to tasks.
- * Runs on EVERY message (alwaysRun: true) BEFORE the LLM generates a response.
  * If the message is in a task topic, it queues the input for the orchestrator
  * so the input relay works regardless of which action the LLM selects.
  *
@@ -71,6 +96,26 @@ export const topicInputRelayEvaluator: Evaluator = {
       handleCloseInValidate(runtime, threadId)
         .catch(err => runtime.logger.error(`[topic-relay] /close error in validate: ${err instanceof Error ? err.message : String(err)}`));
       return true;
+    }
+
+    // Handle keyboard control commands in active sessions (validate path for reliability)
+    if (!content._topicRelayQueued) {
+      const session = activeSessions.get(threadId);
+      if (session) {
+        const ctrl = resolveControlCommand(fullText);
+        if (ctrl) {
+          content._topicRelayQueued = true;
+          session.handle.write(ctrl.bytes);
+          session.transcript.push({ type: 'user_input', content: ctrl.label, timestamp: Date.now() });
+          runtime.logger.info(`[topic-relay] Sent ${ctrl.label} to session ${session.sessionId}`);
+          // Send feedback to user
+          const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+          if (topicsService) {
+            topicsService.sendToTopic(threadId, `Sent ${ctrl.label}`).catch(() => {});
+          }
+          return true;
+        }
+      }
     }
 
     // Process browsing sessions directly in validate() for the same reason.
