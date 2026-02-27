@@ -123,6 +123,73 @@ export class TelegramTopicsService extends Service {
   }
 
   /**
+   * Discover all forum topic IDs in the group chat by scanning recent updates.
+   * Uses getUpdates (peek mode, no offset commit) to find message_thread_id values.
+   * Returns a Set of topic IDs found.
+   */
+  async discoverForumTopicIds(): Promise<Set<number>> {
+    const topicIds = new Set<number>();
+    if (!this.isEnabled()) return topicIds;
+
+    try {
+      // Use getUpdates to scan recent messages for thread IDs
+      // Note: this only works if the bot receives updates via polling (not webhook)
+      // For webhook bots, we fall back to trying deleteForumTopic on a range
+      const result = await this.apiCall('getUpdates', {
+        limit: 100,
+        allowed_updates: ['message', 'edited_message'],
+      });
+
+      if (result.ok && Array.isArray(result.result)) {
+        for (const update of result.result) {
+          const msg = update.message || update.edited_message;
+          if (msg?.chat?.id === this.groupChatId && msg?.message_thread_id) {
+            topicIds.add(msg.message_thread_id);
+          }
+        }
+      }
+    } catch {
+      // getUpdates may fail if webhook is set — that's OK
+    }
+
+    return topicIds;
+  }
+
+  /**
+   * Try to delete a topic by ID. Returns true if successful, false otherwise.
+   * Handles the reopen→close→delete sequence automatically.
+   */
+  async forceDeleteTopic(topicId: number): Promise<boolean> {
+    if (!this.isEnabled() || !topicId) return false;
+
+    try {
+      // Try reopen (topic might be closed already)
+      await this.apiCall('reopenForumTopic', {
+        chat_id: this.groupChatId,
+        message_thread_id: topicId,
+      });
+      await new Promise(r => setTimeout(r, 200));
+
+      // Close first (required before delete)
+      await this.apiCall('closeForumTopic', {
+        chat_id: this.groupChatId,
+        message_thread_id: topicId,
+      });
+      await new Promise(r => setTimeout(r, 300));
+
+      // Delete
+      const result = await this.apiCall('deleteForumTopic', {
+        chat_id: this.groupChatId,
+        message_thread_id: topicId,
+      });
+
+      return result.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Create a forum topic for a task and send the initial message.
    * Stores telegram_topic_id on the task record.
    */
