@@ -34,6 +34,14 @@ export const pendingQuestions = new Map<number, {
 }>();
 
 /**
+ * Topics currently spawning a session (browsing→session transition).
+ * Prevents messages from leaking to TOPIC_REPLY or the LLM during the async
+ * SSH connect + topic creation window where the threadId is in neither
+ * browsingSessionMap nor activeSessions.
+ */
+export const spawningTopics = new Set<number>();
+
+/**
  * Recently closed sessions — used by chatter suppression to block delayed LLM
  * responses that arrive after the session has already been removed from activeSessions.
  * Entries auto-expire after 30 seconds.
@@ -53,9 +61,10 @@ export function markSessionClosed(topicId: number): void {
   }
 }
 
-/** Check if a topic has an active OR recently-closed session. */
+/** Check if a topic has an active, spawning, or recently-closed session. */
 export function isSessionTopic(topicId: number): boolean {
   if (activeSessions.has(topicId)) return true;
+  if (spawningTopics.has(topicId)) return true;
   const closedAt = recentlyClosedSessions.get(topicId);
   if (closedAt && Date.now() - closedAt < RECENTLY_CLOSED_TTL_MS) return true;
   if (closedAt) recentlyClosedSessions.delete(topicId);

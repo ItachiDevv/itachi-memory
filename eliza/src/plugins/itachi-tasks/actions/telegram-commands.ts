@@ -8,7 +8,7 @@ import { syncGitHubRepos } from '../services/github-sync.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { listRemoteDirectory, browsingSessionMap } from '../utils/directory-browser.js';
-import { activeSessions, markSessionClosed, isSessionTopic } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, isSessionTopic, spawningTopics } from '../shared/active-sessions.js';
 import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
   flowKey, conversationFlows, type ConversationFlow,
@@ -90,6 +90,12 @@ export const telegramCommandsAction: Action = {
           runtime.logger.info(`[telegram-commands] validate: claiming browsing topic input (threadId=${threadId})`);
           return true;
         }
+        // Claim messages during session spawn transition (browsing→session)
+        // to prevent them leaking to TOPIC_REPLY or the LLM
+        if (spawningTopics.has(threadId)) {
+          runtime.logger.info(`[telegram-commands] validate: claiming spawning topic input (threadId=${threadId})`);
+          return true;
+        }
       }
       return false;
     }
@@ -146,22 +152,33 @@ export const telegramCommandsAction: Action = {
         return { success: true, data: { handledByEvaluator: true } };
       }
       if (!text.startsWith('/')) {
-        // Suppress LLM chatter for non-command messages in browsing/session topics.
-        // CRITICAL: Must call callback with empty text to prevent ElizaOS from
+        // Suppress LLM chatter for non-command messages in browsing/session/spawning topics.
+        // CRITICAL: Must call callback with IGNORE to prevent ElizaOS from
         // sending the LLM-generated response as a fallback message.
-        if (!(message.content as Record<string, unknown>)._topicRelayQueued) {
-          const suppressThreadId = await getTopicThreadId(runtime, message);
-          if (suppressThreadId !== null && (browsingSessionMap.has(suppressThreadId) || isSessionTopic(suppressThreadId))) {
-            runtime.logger.info(`[telegram-commands] suppressing LLM for topic input (threadId=${suppressThreadId})`);
+        // Wrapped in try/catch so IGNORE always fires even if getTopicThreadId throws.
+        try {
+          if (!(message.content as Record<string, unknown>)._topicRelayQueued) {
+            const suppressThreadId = await getTopicThreadId(runtime, message);
+            if (suppressThreadId !== null && (browsingSessionMap.has(suppressThreadId) || isSessionTopic(suppressThreadId) || spawningTopics.has(suppressThreadId))) {
+              runtime.logger.info(`[telegram-commands] suppressing LLM for topic input (threadId=${suppressThreadId})`);
+              if (callback) await callback({ text: '', action: 'IGNORE' });
+              return { success: true };
+            }
+          }
+          // Also check flag set by evaluator (belt-and-suspenders)
+          if ((message.content as Record<string, unknown>)._topicRelayQueued) {
+            runtime.logger.info(`[telegram-commands] suppressing LLM for _topicRelayQueued non-command message`);
             if (callback) await callback({ text: '', action: 'IGNORE' });
             return { success: true };
           }
-        }
-        // Also check flag set by evaluator (belt-and-suspenders)
-        if ((message.content as Record<string, unknown>)._topicRelayQueued) {
-          runtime.logger.info(`[telegram-commands] suppressing LLM for _topicRelayQueued non-command message`);
-          if (callback) await callback({ text: '', action: 'IGNORE' });
-          return { success: true };
+        } catch (suppressErr) {
+          runtime.logger.warn(`[telegram-commands] suppression check error: ${suppressErr instanceof Error ? suppressErr.message : String(suppressErr)}`);
+          // If we claimed this message in validate() for a session topic,
+          // still suppress the LLM even if the check errored
+          if ((message.content as Record<string, unknown>)._topicRelayQueued) {
+            if (callback) await callback({ text: '', action: 'IGNORE' });
+            return { success: true };
+          }
         }
         const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
         const flowChatId = topicsService?.chatId;

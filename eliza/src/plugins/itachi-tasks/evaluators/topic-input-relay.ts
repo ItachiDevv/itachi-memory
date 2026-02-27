@@ -5,7 +5,7 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { activeSessions, markSessionClosed } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, spawningTopics } from '../shared/active-sessions.js';
 import { spawnSessionInTopic, wrapStreamJsonInput } from '../actions/interactive-session.js';
 import { cleanupStaleFlows } from '../shared/conversation-flows.js';
 import {
@@ -305,12 +305,20 @@ async function handleBrowsingInput(
 
   if (parsed.action === 'start') {
     runtime.logger.info(`[handleBrowsing] starting session in topic ${threadId} at ${session.currentPath}`);
+    // Lock the topic BEFORE removing from browsingSessionMap to prevent
+    // race condition where messages leak to TOPIC_REPLY or LLM during
+    // the async SSH connect + session registration window.
+    spawningTopics.add(threadId);
     browsingSessionMap.delete(threadId);
-    await spawnSessionInTopic(
-      runtime, sshService, topicsService,
-      session.target, session.currentPath,
-      session.prompt, session.engineCommand, threadId,
-    );
+    try {
+      await spawnSessionInTopic(
+        runtime, sshService, topicsService,
+        session.target, session.currentPath,
+        session.prompt, session.engineCommand, threadId,
+      );
+    } finally {
+      spawningTopics.delete(threadId);
+    }
   }
 }
 

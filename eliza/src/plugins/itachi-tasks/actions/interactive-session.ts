@@ -11,7 +11,7 @@ import {
   formatDirectoryListing,
   buildBrowsingKeyboard,
 } from '../utils/directory-browser.js';
-import { activeSessions, markSessionClosed, pendingQuestions, type ActiveSession, type SessionMode } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, pendingQuestions, spawningTopics, type ActiveSession, type SessionMode } from '../shared/active-sessions.js';
 import { DEFAULT_REPO_PATHS, DEFAULT_REPO_BASES, resolveRepoPath } from '../shared/repo-utils.js';
 import { type ParsedChunk, parseAskUserOptions } from '../shared/parsed-chunks.js';
 
@@ -538,6 +538,7 @@ export async function spawnSessionInTopic(
   );
 
   if (!handle) {
+    spawningTopics.delete(topicId); // Cleanup spawning lock on failure
     await topicsService.sendToTopic(topicId, 'Failed to start SSH session. Check SSH target configuration.');
     return null;
   }
@@ -557,6 +558,7 @@ export async function spawnSessionInTopic(
     project: project || 'unknown',
     mode,
   });
+  spawningTopics.delete(topicId); // Session registered — spawning lock no longer needed
 
   return sessionId;
 }
@@ -598,10 +600,10 @@ export const interactiveSessionAction: Action = {
   ],
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
-    // Don't spawn new sessions in an already-active session topic
+    // Don't spawn new sessions in an already-active, browsing, or spawning session topic
     if (message.content?.source === 'telegram') {
       const threadId = await getTopicThreadId(runtime, message);
-      if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
+      if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId) || spawningTopics.has(threadId))) return false;
     }
     const text = stripBotMention(message.content?.text || '');
     // Explicit commands
