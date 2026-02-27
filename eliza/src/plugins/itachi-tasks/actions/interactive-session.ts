@@ -670,7 +670,7 @@ export async function handleEngineHandoff(
   // Kill current session
   try {
     session.handle.write('\x04'); // Send EOF
-    session.handle.close();
+    session.handle.kill();
   } catch { /* ignore close errors */ }
   activeSessions.delete(topicId);
   markSessionClosed(topicId);
