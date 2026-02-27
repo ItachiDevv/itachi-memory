@@ -27,6 +27,12 @@ export interface ActiveSession {
  */
 export const activeSessions = new Map<number, ActiveSession>();
 
+/** Pending AskUserQuestion prompts waiting for Telegram callback. Key: topicId */
+export const pendingQuestions = new Map<number, {
+  toolId: string;
+  options: string[];
+}>();
+
 /**
  * Recently closed sessions — used by chatter suppression to block delayed LLM
  * responses that arrive after the session has already been removed from activeSessions.

@@ -12,6 +12,7 @@ import {
   browsingSessionMap,
   listRemoteDirectory,
   formatDirectoryListing,
+  buildBrowsingKeyboard,
   parseBrowsingInput,
   cleanupStaleBrowsingSessions,
   type BrowsingSession,
@@ -291,7 +292,14 @@ async function handleBrowsingInput(
     session.currentPath = parsed.path;
     session.history.push(parsed.path);
     session.lastDirListing = dirs;
-    await topicsService.sendToTopic(threadId, formatDirectoryListing(parsed.path, dirs, session.target));
+    const canGoBack = parsed.path !== '~' && parsed.path !== '/';
+    const keyboard = buildBrowsingKeyboard(dirs, canGoBack);
+    await topicsService.sendMessageWithKeyboard(
+      formatDirectoryListing(parsed.path, dirs, session.target),
+      keyboard,
+      undefined,
+      threadId,
+    );
     return;
   }
 

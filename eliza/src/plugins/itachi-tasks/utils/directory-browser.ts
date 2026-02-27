@@ -42,24 +42,51 @@ export async function listRemoteDirectory(
 }
 
 // ── Format directory listing for Telegram ───────────────────────────
-export function formatDirectoryListing(path: string, dirs: string[], target: string): string {
+export function formatDirectoryListing(path: string, dirs: string[], _target: string): string {
   const lines: string[] = [
-    `\ud83d\udcc2 Browsing ${target}:${path}`,
+    `\ud83d\udcc2 ${path}`,
     '',
-    `0. \u2705 START SESSION HERE`,
-    `.. Go up one level`,
   ];
-
-  for (let i = 0; i < dirs.length; i++) {
-    lines.push(`${i + 1}. \ud83d\udcc1 ${dirs[i]}`);
-  }
 
   if (dirs.length === 0) {
     lines.push('(no subdirectories)');
+  } else {
+    for (let i = 0; i < dirs.length; i++) {
+      lines.push(`${i + 1}. \ud83d\udcc1 ${dirs[i]}`);
+    }
   }
 
-  lines.push('', 'Reply with a number, ".." to go up, or type a full path');
+  lines.push('', 'Use buttons below, or type a full path');
   return lines.join('\n');
+}
+
+/** Build inline keyboard for directory browsing in Telegram topics */
+export function buildBrowsingKeyboard(
+  dirs: string[],
+  canGoBack: boolean,
+): Array<Array<{ text: string; callback_data: string }>> {
+  const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+
+  // Start here + Go back row
+  const topRow: Array<{ text: string; callback_data: string }> = [
+    { text: '\u2705 Start here', callback_data: 'browse:start' },
+  ];
+  if (canGoBack) {
+    topRow.push({ text: '\u2b06 Go back', callback_data: 'browse:back' });
+  }
+  rows.push(topRow);
+
+  // Directory buttons, 2 per row
+  for (let i = 0; i < dirs.length; i += 2) {
+    const row: Array<{ text: string; callback_data: string }> = [];
+    row.push({ text: `\ud83d\udcc1 ${dirs[i]}`, callback_data: `browse:${i}` });
+    if (i + 1 < dirs.length) {
+      row.push({ text: `\ud83d\udcc1 ${dirs[i + 1]}`, callback_data: `browse:${i + 1}` });
+    }
+    rows.push(row);
+  }
+
+  return rows;
 }
 
 // ── Parse browsing input ────────────────────────────────────────────

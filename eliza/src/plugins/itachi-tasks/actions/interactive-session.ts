@@ -9,124 +9,104 @@ import {
   browsingSessionMap,
   listRemoteDirectory,
   formatDirectoryListing,
+  buildBrowsingKeyboard,
 } from '../utils/directory-browser.js';
-import { activeSessions, markSessionClosed, type ActiveSession, type SessionMode } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, pendingQuestions, type ActiveSession, type SessionMode } from '../shared/active-sessions.js';
 import { DEFAULT_REPO_PATHS, DEFAULT_REPO_BASES, resolveRepoPath } from '../shared/repo-utils.js';
+import { type ParsedChunk, parseAskUserOptions } from '../shared/parsed-chunks.js';
 
 // ── Stream-JSON output parsing ────────────────────────────────────────
 /**
- * Parse a single line of Claude Code's stream-json output into a human-readable
- * string suitable for Telegram. Returns null for lines that should be skipped
- * (system messages, empty content, malformed JSON).
+ * Parse a single NDJSON line from Claude Code's stream-json output into
+ * typed chunks for smart routing/formatting in Telegram.
  *
- * Claude Code stream-json format (newline-delimited JSON):
- * - {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"..."}]}}
- * - {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"...","name":"Read","input":{...}}]}}
- * - {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"...","content":"..."}]}}
- * - {"type":"result","subtype":"success","session_id":"...","total_cost_usd":0.05,"duration_ms":1234}
- * - {"type":"system","message":"..."}
+ * Returns an array of ParsedChunk (empty array = skip this line).
+ * Each content block in an assistant message becomes its own chunk,
+ * preserving structural boundaries for the output handler.
  */
-export function parseStreamJsonLine(line: string): string | null {
+export function parseStreamJsonLine(line: string): ParsedChunk[] {
   const trimmed = line.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return [];
 
   let obj: any;
   try {
     obj = JSON.parse(trimmed);
   } catch {
-    // Not JSON — might be raw text output (e.g. from wrapper scripts)
-    // Pass through non-empty non-JSON lines as-is
-    if (trimmed.length > 0 && !trimmed.startsWith('{')) return trimmed;
-    return null;
+    // Not JSON — pass through non-empty lines (wrapper output, hook text, etc.)
+    if (trimmed.length > 0 && !trimmed.startsWith('{')) {
+      return [{ kind: 'passthrough', text: trimmed }];
+    }
+    return [];
   }
 
-  if (!obj || typeof obj !== 'object') return null;
+  if (!obj || typeof obj !== 'object') return [];
 
   const type = obj.type;
 
-  // Assistant messages (text + tool calls)
+  // Hook responses — show hook output (session briefings, memory context, etc.)
+  if (type === 'hook_response') {
+    const stdout = obj.stdout?.trim();
+    return stdout ? [{ kind: 'hook_response', text: stdout }] : [];
+  }
+
+  // Assistant messages — each content block becomes its own chunk
   if (type === 'assistant' && obj.message?.content) {
-    const parts: string[] = [];
+    const chunks: ParsedChunk[] = [];
     for (const block of obj.message.content) {
       if (block.type === 'text' && block.text) {
-        parts.push(block.text);
+        chunks.push({ kind: 'text', text: block.text });
       } else if (block.type === 'tool_use') {
         const name = block.name || 'Tool';
         const input = block.input || {};
-        // Show a concise summary of the tool call
-        const summary = formatToolCallSummary(name, input);
-        parts.push(`[${name}] ${summary}`);
+
+        // AskUserQuestion → interactive inline keyboard
+        if (name === 'AskUserQuestion') {
+          const questions = input.questions;
+          // AskUserQuestion has { questions: [{ question, options: [{label}...] }] }
+          if (Array.isArray(questions) && questions.length > 0) {
+            for (const q of questions) {
+              const labels = Array.isArray(q.options)
+                ? q.options.map((o: any) => o.label || String(o)).filter(Boolean)
+                : [];
+              const options = labels.length >= 2 ? labels : parseAskUserOptions(q.question || '');
+              chunks.push({
+                kind: 'ask_user',
+                toolId: block.id || '',
+                question: q.question || 'Choose an option:',
+                options,
+              });
+            }
+          } else {
+            // Fallback: single question string
+            const question = input.question || 'Choose an option:';
+            chunks.push({
+              kind: 'ask_user',
+              toolId: block.id || '',
+              question,
+              options: parseAskUserOptions(question),
+            });
+          }
+        }
+        // All other tools — silently skip. User only wants responses, not tool noise.
+        // Tool calls (Read, Edit, Bash, Grep, etc.) are internal work.
       }
     }
-    return parts.join('\n') || null;
+    return chunks;
   }
 
-  // User messages (tool results)
-  if (type === 'user' && obj.message?.content) {
-    const parts: string[] = [];
-    for (const block of obj.message.content) {
-      if (block.type === 'tool_result') {
-        const content = typeof block.content === 'string'
-          ? block.content
-          : Array.isArray(block.content)
-            ? block.content.map((c: any) => c.text || '').join('\n')
-            : '';
-        if (content) {
-          // Truncate long tool results for Telegram readability
-          const truncated = content.length > 500
-            ? content.substring(0, 500) + `\n... (${content.length} chars total)`
-            : content;
-          parts.push(truncated);
-        }
-      }
-    }
-    return parts.join('\n') || null;
-  }
+  // User messages (tool results) — skip entirely
+  if (type === 'user') return [];
 
   // Result message (session complete)
   if (type === 'result') {
     const cost = obj.total_cost_usd ? `$${obj.total_cost_usd.toFixed(4)}` : '';
     const duration = obj.duration_ms ? `${Math.round(obj.duration_ms / 1000)}s` : '';
     const subtype = obj.subtype || 'done';
-    return `[Session ${subtype}]${cost ? ` Cost: ${cost}` : ''}${duration ? ` Duration: ${duration}` : ''}`;
+    return [{ kind: 'result', subtype, cost: cost || undefined, duration: duration || undefined }];
   }
 
-  // System messages — log but don't show
-  if (type === 'system') return null;
-
-  // Unknown type — pass through if it has meaningful content
-  if (obj.text) return obj.text;
-  if (obj.message && typeof obj.message === 'string') return obj.message;
-
-  return null;
-}
-
-/**
- * Format a concise summary of a tool call's input.
- */
-function formatToolCallSummary(name: string, input: Record<string, any>): string {
-  switch (name) {
-    case 'Read':
-      return input.file_path || '';
-    case 'Write':
-      return input.file_path || '';
-    case 'Edit':
-      return input.file_path || '';
-    case 'Bash':
-      return (input.command || '').substring(0, 100);
-    case 'Glob':
-      return input.pattern || '';
-    case 'Grep':
-      return `${input.pattern || ''} ${input.path || ''}`.trim();
-    case 'WebFetch':
-      return input.url || '';
-    default:
-      // Show first string value from input
-      for (const val of Object.values(input)) {
-        if (typeof val === 'string' && val.length > 0) return val.substring(0, 80);
-      }
-      return '';
-  }
+  // System/init/hook_started/rate_limit — internal, skip
+  return [];
 }
 
 /**
@@ -149,16 +129,18 @@ export function wrapStreamJsonInput(text: string): string {
  * Create a buffered NDJSON line parser. Handles chunks that split across
  * JSON line boundaries (common with pipe/SSH output).
  */
-export function createNdjsonParser(onLine: (parsed: string) => void): (chunk: string) => void {
+export function createNdjsonParser(onChunk: (chunk: ParsedChunk) => void): (data: string) => void {
   let buffer = '';
-  return (chunk: string) => {
-    buffer += chunk;
+  return (data: string) => {
+    buffer += data;
     const lines = buffer.split('\n');
     // Keep the last element (might be incomplete)
     buffer = lines.pop() || '';
     for (const line of lines) {
-      const parsed = parseStreamJsonLine(line);
-      if (parsed) onLine(parsed);
+      const chunks = parseStreamJsonLine(line);
+      for (const chunk of chunks) {
+        onChunk(chunk);
+      }
     }
   };
 }
@@ -455,18 +437,35 @@ export async function spawnSessionInTopic(
   let onStdout: (chunk: string) => void;
 
   if (mode === 'stream-json') {
-    // NDJSON parser: each line is a JSON object from Claude Code
-    const parser = createNdjsonParser((parsed: string) => {
-      runtime.logger.info(`[session] json-out ${parsed.length}b: "${parsed.substring(0, 120).replace(/\n/g, '\\n')}"`);
-      sessionTranscript.push({ type: 'text', content: parsed, timestamp: Date.now() });
-      topicsService.receiveChunk(sessionId, topicId, parsed).catch((err) => {
+    // NDJSON parser: each line produces typed ParsedChunks for smart routing
+    const parser = createNdjsonParser((chunk: ParsedChunk) => {
+      const preview = chunk.kind === 'text' ? chunk.text.substring(0, 80) :
+                      chunk.kind === 'ask_user' ? `Q: ${chunk.question.substring(0, 60)}` :
+                      chunk.kind === 'hook_response' ? chunk.text.substring(0, 60) :
+                      chunk.kind;
+      runtime.logger.info(`[session] ${chunk.kind}: "${preview}"`);
+
+      // Record in transcript
+      const content = chunk.kind === 'text' ? chunk.text :
+                      chunk.kind === 'hook_response' ? chunk.text :
+                      chunk.kind === 'result' ? `Session ${chunk.subtype}` :
+                      chunk.kind === 'ask_user' ? `[AskUser] ${chunk.question}` :
+                      chunk.kind === 'passthrough' ? chunk.text : '';
+      if (content) sessionTranscript.push({ type: 'text', content, timestamp: Date.now() });
+
+      // Store pending question for callback handler to resolve
+      if (chunk.kind === 'ask_user') {
+        pendingQuestions.set(topicId, { toolId: chunk.toolId, options: chunk.options });
+      }
+
+      topicsService.receiveTypedChunk(sessionId, topicId, chunk).catch((err) => {
         runtime.logger.error(`[session] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
       });
     });
 
-    onStdout = (chunk: string) => {
-      runtime.logger.info(`[session] RAW ${chunk.length}b: "${chunk.substring(0, 200).replace(/\n/g, '\\n')}"`);
-      parser(chunk);
+    onStdout = (rawChunk: string) => {
+      runtime.logger.info(`[session] RAW ${rawChunk.length}b`);
+      parser(rawChunk);
     };
   } else {
     // TUI/print mode: normalize → strip ANSI → filter TUI noise
@@ -696,7 +695,8 @@ export const interactiveSessionAction: Action = {
         const startPath = getStartingDir(target);
         const { dirs } = await listRemoteDirectory(sshService, target, startPath);
         const listing = formatDirectoryListing(startPath, dirs, target);
-        await topicsService.sendToTopic(topicId, listing);
+        const keyboard = buildBrowsingKeyboard(dirs, false); // can't go back from root
+        await topicsService.sendMessageWithKeyboard(listing, keyboard, undefined, topicId);
 
         browsingSessionMap.set(topicId, {
           topicId,

@@ -3,10 +3,17 @@ import { SSHService } from './ssh-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import { TaskService } from './task-service.js';
 import { MachineRegistryService } from './machine-registry.js';
-import { listRemoteDirectory, browsingSessionMap } from '../utils/directory-browser.js';
+import {
+  listRemoteDirectory,
+  browsingSessionMap,
+  formatDirectoryListing,
+  buildBrowsingKeyboard,
+  parseBrowsingInput,
+} from '../utils/directory-browser.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { resolveSSHTarget } from '../shared/repo-utils.js';
-import { spawnSessionInTopic } from '../actions/interactive-session.js';
+import { spawnSessionInTopic, wrapStreamJsonInput } from '../actions/interactive-session.js';
+import { activeSessions, pendingQuestions } from '../shared/active-sessions.js';
 import { isSessionTopic } from '../shared/active-sessions.js';
 import {
   conversationFlows,
@@ -269,6 +276,27 @@ async function handleCallback(runtime: IAgentRuntime, ctx: any): Promise<void> {
   const messageId = ctx.callbackQuery.message?.message_id;
   if (!chatId || !userId) return;
 
+  // Handle browsing callbacks (browse:start, browse:back, browse:0, browse:1, etc.)
+  // These are topic-based (not flow-based) and have 2-part format
+  if (data.startsWith('browse:')) {
+    const threadId = ctx.callbackQuery.message?.message_thread_id;
+    if (threadId) {
+      await handleBrowseCallback(runtime, data.substring(7), chatId, threadId, messageId);
+    }
+    return;
+  }
+
+  // AskUserQuestion callbacks: aq:<topicId>:<optionIndex>
+  if (data.startsWith('aq:')) {
+    const parts = data.split(':');
+    const topicId = parseInt(parts[1], 10);
+    const optionIdx = parseInt(parts[2], 10);
+    if (!isNaN(topicId) && !isNaN(optionIdx)) {
+      await handleAskUserCallback(runtime, topicId, optionIdx, chatId, messageId);
+    }
+    return;
+  }
+
   const decoded = decodeCallback(data);
   if (!decoded) return;
 
@@ -278,6 +306,118 @@ async function handleCallback(runtime: IAgentRuntime, ctx: any): Promise<void> {
     await handleTaskFlowCallback(runtime, decoded, chatId, userId, messageId);
   } else if (prefix === 'sf') {
     await handleSessionFlowCallback(runtime, decoded, chatId, userId, messageId);
+  }
+}
+
+// ── Browse Callbacks (directory browsing in topics) ──────────────────
+
+async function handleBrowseCallback(
+  runtime: IAgentRuntime,
+  action: string, // "start", "back", or numeric index
+  chatId: number,
+  threadId: number,
+  messageId: number,
+): Promise<void> {
+  const session = browsingSessionMap.get(threadId);
+  if (!session) return;
+
+  const sshService = runtime.getService<SSHService>('ssh');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!sshService || !topicsService) return;
+
+  // Refresh TTL
+  session.createdAt = Date.now();
+
+  if (action === 'start') {
+    // Start session in current directory
+    browsingSessionMap.delete(threadId);
+    await spawnSessionInTopic(
+      runtime, sshService, topicsService,
+      session.target, session.currentPath,
+      session.prompt, session.engineCommand, threadId,
+    );
+    return;
+  }
+
+  if (action === 'back') {
+    // Navigate up one level
+    const parsed = parseBrowsingInput('..', session);
+    if (parsed.action === 'error') {
+      // Already at root
+      return;
+    }
+    if (parsed.action === 'navigate') {
+      const { dirs, error } = await listRemoteDirectory(sshService, session.target, parsed.path);
+      if (error) return;
+      session.currentPath = parsed.path;
+      session.history.push(parsed.path);
+      session.lastDirListing = dirs;
+      const canGoBack = parsed.path !== '~' && parsed.path !== '/';
+      const keyboard = buildBrowsingKeyboard(dirs, canGoBack);
+      await topicsService.editMessageWithKeyboard(
+        chatId, messageId,
+        formatDirectoryListing(parsed.path, dirs, session.target),
+        keyboard,
+      );
+    }
+    return;
+  }
+
+  // Numeric index — navigate into subdirectory
+  const idx = parseInt(action, 10);
+  if (isNaN(idx) || idx < 0 || idx >= session.lastDirListing.length) return;
+
+  const selected = session.lastDirListing[idx];
+  const base = session.currentPath.replace(/\/+$/, '');
+  const newPath = `${base}/${selected}`;
+
+  const { dirs, error } = await listRemoteDirectory(sshService, session.target, newPath);
+  if (error) return;
+
+  session.currentPath = newPath;
+  session.history.push(newPath);
+  session.lastDirListing = dirs;
+  const keyboard = buildBrowsingKeyboard(dirs, true); // can always go back after navigating in
+  await topicsService.editMessageWithKeyboard(
+    chatId, messageId,
+    formatDirectoryListing(newPath, dirs, session.target),
+    keyboard,
+  );
+}
+
+// ── AskUserQuestion Callbacks ────────────────────────────────────────
+
+async function handleAskUserCallback(
+  runtime: IAgentRuntime,
+  topicId: number,
+  optionIdx: number,
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  const pending = pendingQuestions.get(topicId);
+  if (!pending) return;
+
+  const answer = pending.options[optionIdx];
+  if (!answer) return;
+
+  pendingQuestions.delete(topicId);
+
+  // Update message to show what was selected, remove keyboard
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (topicsService) {
+    await topicsService.editMessageWithKeyboard(
+      chatId, messageId,
+      `Answered: ${answer}`,
+      [],
+    );
+  }
+
+  // Send answer back to SSH session via stream-json stdin
+  const session = activeSessions.get(topicId);
+  if (session) {
+    session.handle.write(wrapStreamJsonInput(answer));
+    session.transcript.push({ type: 'user_input', content: answer, timestamp: Date.now() });
+    runtime.logger.info(`[aq-callback] Sent answer "${answer}" to session in topic ${topicId}`);
   }
 }
 

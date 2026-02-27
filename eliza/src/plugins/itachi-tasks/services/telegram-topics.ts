@@ -1,5 +1,6 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
 import { TaskService, generateTaskTitle, type ItachiTask } from './task-service.js';
+import type { ParsedChunk } from '../shared/parsed-chunks.js';
 
 interface TelegramApiResponse {
   ok: boolean;
@@ -13,12 +14,48 @@ interface StreamBuffer {
   chatId: number;
   messageId: number | null;
   text: string;
+  /** Current buffered chunk kind — used for kind-change flush boundaries */
+  currentKind: string | null;
   lastFlush: number;
   flushTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const FLUSH_INTERVAL_MS = 1500;
 const MAX_MESSAGE_LENGTH = 3500;
+
+// ── HTML utilities for Telegram ────────────────────────────────────────
+
+/** Escape text for Telegram HTML parse_mode */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** Format a ParsedChunk as Telegram HTML */
+function formatChunkHtml(chunk: ParsedChunk): string {
+  switch (chunk.kind) {
+    case 'text':
+      return escapeHtml(chunk.text);
+    case 'hook_response':
+      return `<i>${escapeHtml(chunk.text)}</i>`;
+    case 'result': {
+      const parts = [`<b>[Session ${escapeHtml(chunk.subtype)}]</b>`];
+      if (chunk.cost) parts.push(`Cost: ${escapeHtml(chunk.cost)}`);
+      if (chunk.duration) parts.push(`Duration: ${escapeHtml(chunk.duration)}`);
+      return parts.join(' ');
+    }
+    case 'passthrough':
+      return escapeHtml(chunk.text);
+    case 'ask_user':
+      return `<b>Question:</b>\n${escapeHtml(chunk.question)}`;
+    case 'tool_use':
+      return `<code>[${escapeHtml(chunk.toolName)}] ${escapeHtml(chunk.summary)}</code>`;
+    default:
+      return '';
+  }
+}
 
 export class TelegramTopicsService extends Service {
   static serviceType = 'telegram-topics';
@@ -157,6 +194,33 @@ export class TelegramTopicsService extends Service {
 
     for (const chunk of chunks) {
       try {
+        const result = await this.apiCall('sendMessage', {
+          chat_id: this.groupChatId,
+          message_thread_id: topicId,
+          text: chunk,
+        });
+        if (!result.ok) {
+          this.runtime.logger.error(`sendToTopic failed: ${result.description}`);
+        } else {
+          lastMsgId = result.result?.message_id || null;
+        }
+      } catch (error) {
+        this.runtime.logger.error('sendToTopic error:', error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    return lastMsgId;
+  }
+
+  /** Send a pre-formatted HTML message to a topic. Splits long content. */
+  async sendHtmlToTopic(topicId: number, html: string): Promise<number | null> {
+    if (!this.isEnabled() || !topicId) return null;
+
+    const chunks = splitMessage(html, 4000);
+    let lastMsgId: number | null = null;
+
+    for (const chunk of chunks) {
+      try {
         let result = await this.apiCall('sendMessage', {
           chat_id: this.groupChatId,
           message_thread_id: topicId,
@@ -164,10 +228,9 @@ export class TelegramTopicsService extends Service {
           parse_mode: 'HTML',
         });
 
-        // Fallback: if HTML parsing fails (e.g. TypeScript generics like <string,>),
-        // retry without parse_mode so Telegram treats it as plain text
+        // Fallback: if HTML parsing fails, retry as plain text
         if (!result.ok && result.description?.includes("can't parse entities")) {
-          this.runtime.logger.warn(`sendToTopic HTML parse failed, retrying as plain text`);
+          this.runtime.logger.warn(`sendHtmlToTopic HTML parse failed, retrying as plain text`);
           result = await this.apiCall('sendMessage', {
             chat_id: this.groupChatId,
             message_thread_id: topicId,
@@ -176,12 +239,12 @@ export class TelegramTopicsService extends Service {
         }
 
         if (!result.ok) {
-          this.runtime.logger.error(`sendToTopic failed: ${result.description}`);
+          this.runtime.logger.error(`sendHtmlToTopic failed: ${result.description}`);
         } else {
           lastMsgId = result.result?.message_id || null;
         }
       } catch (error) {
-        this.runtime.logger.error('sendToTopic error:', error instanceof Error ? error.message : String(error));
+        this.runtime.logger.error('sendHtmlToTopic error:', error instanceof Error ? error.message : String(error));
       }
     }
 
@@ -389,12 +452,53 @@ export class TelegramTopicsService extends Service {
   // ============================================================
 
   /**
-   * Receive a chunk of streaming output for a task.
-   * Buffers text and flushes to Telegram at intervals.
+   * Receive a plain-text chunk (backward-compat for TUI mode, stderr, task-stream).
    */
   async receiveChunk(taskId: string, topicId: number, chunk: string): Promise<void> {
+    await this.receiveTypedChunk(taskId, topicId, { kind: 'passthrough', text: chunk });
+  }
+
+  /**
+   * Receive a typed ParsedChunk from the NDJSON parser.
+   * Routes each chunk kind appropriately:
+   * - ask_user → immediate inline keyboard message
+   * - result → immediate standalone message
+   * - text/hook_response → buffer with kind-change flush boundaries
+   * - passthrough → buffer
+   */
+  async receiveTypedChunk(taskId: string, topicId: number, chunk: ParsedChunk): Promise<void> {
     if (!this.isEnabled() || !topicId) return;
 
+    // AskUserQuestion → send immediately as inline keyboard, don't buffer
+    if (chunk.kind === 'ask_user') {
+      await this.flushBuffer(taskId);
+      const options = chunk.options.length > 0 ? chunk.options : ['Yes', 'No'];
+      const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+      for (let i = 0; i < options.length; i += 2) {
+        const row: Array<{ text: string; callback_data: string }> = [];
+        row.push({ text: options[i], callback_data: `aq:${topicId}:${i}` });
+        if (i + 1 < options.length) {
+          row.push({ text: options[i + 1], callback_data: `aq:${topicId}:${i + 1}` });
+        }
+        keyboard.push(row);
+      }
+      await this.sendMessageWithKeyboard(
+        formatChunkHtml(chunk),
+        keyboard,
+        undefined,
+        topicId,
+      );
+      return;
+    }
+
+    // Result → send immediately as standalone message
+    if (chunk.kind === 'result') {
+      await this.flushBuffer(taskId);
+      await this.sendHtmlToTopic(topicId, formatChunkHtml(chunk));
+      return;
+    }
+
+    // All other chunks → buffer with kind-change boundaries
     let buffer = this.buffers.get(taskId);
     if (!buffer) {
       buffer = {
@@ -403,22 +507,38 @@ export class TelegramTopicsService extends Service {
         chatId: this.groupChatId,
         messageId: null,
         text: '',
+        currentKind: null,
         lastFlush: 0,
         flushTimer: null,
       };
       this.buffers.set(taskId, buffer);
     }
 
-    buffer.text += chunk;
+    // Kind changed → flush previous content first to keep different types in separate messages
+    if (buffer.currentKind && buffer.currentKind !== chunk.kind && buffer.text) {
+      if (buffer.flushTimer) {
+        clearTimeout(buffer.flushTimer);
+        buffer.flushTimer = null;
+      }
+      await this.flushBuffer(taskId);
+      buffer = this.buffers.get(taskId);
+      if (buffer) buffer.messageId = null;
+    }
 
-    // If text exceeds max message length, flush immediately and start a new message
+    if (!buffer) return; // safety
+    buffer.currentKind = chunk.kind;
+
+    const html = formatChunkHtml(chunk);
+    if (buffer.text) buffer.text += '\n';
+    buffer.text += html;
+
+    // If text exceeds max message length, flush immediately
     if (buffer.text.length > MAX_MESSAGE_LENGTH) {
       if (buffer.flushTimer) {
         clearTimeout(buffer.flushTimer);
         buffer.flushTimer = null;
       }
       await this.flushBuffer(taskId);
-      // Reset messageId so next flush creates a new message
       buffer = this.buffers.get(taskId);
       if (buffer) buffer.messageId = null;
       return;
@@ -435,19 +555,19 @@ export class TelegramTopicsService extends Service {
 
   /**
    * Flush the buffer for a task to Telegram.
-   * Always sends a new message per flush to avoid overwriting previous output.
+   * Sends as HTML since receiveTypedChunk pre-formats content.
    */
   private async flushBuffer(taskId: string): Promise<void> {
     const buffer = this.buffers.get(taskId);
     if (!buffer || !buffer.text) return;
 
-    const text = buffer.text;
+    const html = buffer.text;
     buffer.text = '';
+    buffer.currentKind = null;
     buffer.lastFlush = Date.now();
 
     try {
-      // Always send a new message — editing replaces content and loses previous output
-      const msgId = await this.sendToTopic(buffer.topicId, text);
+      const msgId = await this.sendHtmlToTopic(buffer.topicId, html);
       if (msgId) buffer.messageId = msgId;
     } catch (error) {
       this.runtime.logger.error(`flushBuffer error for ${taskId}:`, error instanceof Error ? error.message : String(error));
@@ -496,9 +616,8 @@ function splitMessage(text: string, maxLen: number): string[] {
       chunks.push(remaining);
       break;
     }
-    // Try to split at newline near maxLen
     let splitAt = remaining.lastIndexOf('\n', maxLen);
-    if (splitAt < maxLen * 0.5) splitAt = maxLen; // no good newline, hard split
+    if (splitAt < maxLen * 0.5) splitAt = maxLen;
     chunks.push(remaining.substring(0, splitAt));
     remaining = remaining.substring(splitAt);
   }
