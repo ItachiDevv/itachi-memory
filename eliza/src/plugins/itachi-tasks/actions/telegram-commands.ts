@@ -105,8 +105,9 @@ export const telegramCommandsAction: Action = {
     if (text === '/delete' || text.startsWith('/delete ')) return true;
 
     // /delete_topic [id] — topic deletion (shows picker or deletes by ID)
-    if (text === '/delete_topic' || text === '/delete-topic' ||
-        text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) return true;
+    // Also accept no-underscore variants (Telegram markdown eats underscores)
+    if (text === '/delete_topic' || text === '/delete-topic' || text === '/deletetopic' ||
+        text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ') || text.startsWith('/deletetopic ')) return true;
 
     return text === '/help' || text.startsWith('/recall ') || text === '/feedback' || text.startsWith('/feedback ') ||
       text.startsWith('/learn ') || text.startsWith('/teach ') ||
@@ -115,10 +116,11 @@ export const telegramCommandsAction: Action = {
       text.startsWith('/msg ') ||
       text === '/repos' || text === '/machines' || text.startsWith('/machines ') ||
       text === '/engines' || text.startsWith('/engines ') ||
-      text === '/sync-repos' || text === '/sync_repos' ||
-      text === '/close_all_topics' || text === '/close-all-topics' || text === '/close_all' ||
+      text === '/sync-repos' || text === '/sync_repos' || text === '/syncrepos' ||
+      text === '/close_all_topics' || text === '/close-all-topics' || text === '/close_all' || text === '/closealltopics' ||
       text === '/delete_topics' || text.startsWith('/delete_topics ') ||
       text === '/delete-topics' || text.startsWith('/delete-topics ') ||
+      text === '/deletetopics' || text.startsWith('/deletetopics ') ||
       text === '/delete' || text.startsWith('/delete ') ||
       text === '/close' || text.startsWith('/close ');
   },
@@ -195,16 +197,19 @@ export const telegramCommandsAction: Action = {
       }
 
       // /delete_topic [id] — show topic picker or delete by ID
-      if (text === '/delete_topic' || text === '/delete-topic' ||
-          text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ')) {
-        const prefix = text.startsWith('/delete_topic') ? '/delete_topic' : '/delete-topic';
+      // Also accept /deletetopic (no underscore — Telegram eats underscores in markdown)
+      if (text === '/delete_topic' || text === '/delete-topic' || text === '/deletetopic' ||
+          text.startsWith('/delete_topic ') || text.startsWith('/delete-topic ') || text.startsWith('/deletetopic ')) {
+        const prefix = text.startsWith('/delete_topic') ? '/delete_topic'
+          : text.startsWith('/deletetopic') ? '/deletetopic'
+          : '/delete-topic';
         const idStr = text.substring(prefix.length).trim();
 
         // If ID provided, delete directly
         if (idStr) {
           const topicId = parseInt(idStr, 10);
           if (!topicId || isNaN(topicId)) {
-            if (callback) await callback({ text: 'Invalid topic ID. Use /delete_topic to see a list of topics.' });
+            if (callback) await callback({ text: 'Invalid topic ID. Use /deletetopic to see a list of topics.' });
             return { success: false, error: 'Invalid topic ID' };
           }
           return await handleDeleteSingleTopic(runtime, topicId, callback);
@@ -218,9 +223,11 @@ export const telegramCommandsAction: Action = {
       // Permanently removes topics from the chat
       if (text === '/delete_topics' || text.startsWith('/delete_topics ') ||
           text === '/delete-topics' || text.startsWith('/delete-topics ') ||
+          text === '/deletetopics' || text.startsWith('/deletetopics ') ||
           text === '/delete' || text.startsWith('/delete ')) {
         const prefix = text.startsWith('/delete_topics') ? '/delete_topics'
           : text.startsWith('/delete-topics') ? '/delete-topics'
+          : text.startsWith('/deletetopics') ? '/deletetopics'
           : '/delete';
         const sub = text.substring(prefix.length).trim().replace(/^[-_]/, '');
         if (sub === 'done' || sub === 'finished' || sub === 'completed') {
@@ -235,7 +242,7 @@ export const telegramCommandsAction: Action = {
         if (sub === 'all' || sub === '') {
           return await handleDeleteTopicsAll(runtime, callback);
         }
-        if (callback) await callback({ text: 'Usage: /delete_topics [done|failed|cancelled|all]\nDefault: all' });
+        if (callback) await callback({ text: 'Usage: /deletetopics [done|failed|cancelled|all]\nDefault: all' });
         return { success: false, error: 'Unknown delete subcommand' };
       }
 
@@ -322,7 +329,7 @@ export const telegramCommandsAction: Action = {
       }
 
       // /sync-repos or /sync_repos — hidden alias (still works)
-      if (text === '/sync-repos' || text === '/sync_repos') {
+      if (text === '/sync-repos' || text === '/sync_repos' || text === '/syncrepos') {
         return await handleSyncRepos(runtime, callback);
       }
 
@@ -361,12 +368,13 @@ export const telegramCommandsAction: Action = {
           }
         }
         // /close in main chat with no topic context — hint user
-        if (callback) await callback({ text: 'Use /close inside a topic to close it.\nTo close all topics: /close_all_topics\nTo delete topics: /delete_topics [done|failed|cancelled|all]' });
+        if (callback) await callback({ text: 'Use /close inside a topic to close it.\nTo close all topics: /closealltopics\nTo delete topics: /deletetopics [done|failed|cancelled|all]' });
         return { success: true };
       }
 
       // /close_all_topics — close (archive) ALL topics regardless of task status
-      if (text === '/close-all-topics' || text === '/close_all_topics' || text === '/close_all') {
+      // Also accept /closealltopics (no underscore — Telegram eats underscores in markdown)
+      if (text === '/close-all-topics' || text === '/close_all_topics' || text === '/close_all' || text === '/closealltopics') {
         return await handleCloseAllTopics(runtime, callback);
       }
 
@@ -649,6 +657,37 @@ async function collectAllTopicIds(
     }
   } catch (err) {
     runtime.logger.warn(`[topics] Registry query failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Source 4: ElizaOS rooms table — extract topic IDs from channel_id format "<chatId>-<topicId>"
+  if (taskService) {
+    try {
+      const chatId = topicsService.chatId;
+      if (chatId) {
+        const supabase = taskService.getSupabase();
+        const channelPrefix = `${chatId}-`;
+        const { data: rooms } = await supabase
+          .from('rooms')
+          .select('channel_id')
+          .eq('source', 'telegram')
+          .like('channel_id', `${channelPrefix}%`)
+          .limit(1000);
+        let roomCount = 0;
+        for (const room of rooms || []) {
+          const suffix = room.channel_id?.substring(channelPrefix.length);
+          const tid = suffix ? parseInt(suffix, 10) : NaN;
+          if (!isNaN(tid) && tid > 1) {
+            topicIds.add(tid);
+            roomCount++;
+          }
+        }
+        if (roomCount > 0) {
+          runtime.logger.info(`[topics] Found ${roomCount} topic(s) from rooms table`);
+        }
+      }
+    } catch (err) {
+      runtime.logger.warn(`[topics] Rooms query failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   return topicIds;
@@ -1580,9 +1619,9 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
 
 **Topic Management**
   /close — Close current topic (use inside a topic)
-  /close_all_topics — Close (archive) ALL topics
-  /delete_topics done|failed|cancelled|all — Permanently delete topics
-  /delete_topic — Pick a topic to delete (shows buttons)
+  /closealltopics — Close (archive) ALL topics
+  /deletetopics done|failed|cancelled|all — Permanently delete topics
+  /deletetopic — Pick a topic to delete (shows buttons)
 
 **Other**
   /help — Show this message`;
