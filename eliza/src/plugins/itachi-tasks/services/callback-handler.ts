@@ -13,7 +13,7 @@ import {
 import { getStartingDir } from '../shared/start-dir.js';
 import { resolveSSHTarget } from '../shared/repo-utils.js';
 import { spawnSessionInTopic, wrapStreamJsonInput } from '../actions/interactive-session.js';
-import { activeSessions, pendingQuestions } from '../shared/active-sessions.js';
+import { activeSessions, pendingQuestions, spawningTopics } from '../shared/active-sessions.js';
 import { isSessionTopic } from '../shared/active-sessions.js';
 import {
   conversationFlows,
@@ -364,12 +364,19 @@ async function handleBrowseCallback(
 
   if (action === 'start') {
     // Start session in current directory
+    // Lock spawningTopics BEFORE removing from browsingSessionMap to prevent
+    // messages leaking to TOPIC_REPLY/LLM during async SSH connect window
+    spawningTopics.add(threadId);
     browsingSessionMap.delete(threadId);
-    await spawnSessionInTopic(
-      runtime, sshService, topicsService,
-      session.target, session.currentPath,
-      session.prompt, session.engineCommand, threadId,
-    );
+    try {
+      await spawnSessionInTopic(
+        runtime, sshService, topicsService,
+        session.target, session.currentPath,
+        session.prompt, session.engineCommand, threadId,
+      );
+    } finally {
+      spawningTopics.delete(threadId);
+    }
     return;
   }
 
@@ -822,13 +829,18 @@ async function handleSessionFlowCallback(
 
     const sessionTopicId = topicCreateResult.result.message_thread_id;
 
-    // Spawn session inside the topic
-    await spawnSessionInTopic(
-      runtime, sshService, topicsService,
-      sshTarget, repoPath,
-      prompt, `${engineCmd} ${dsFlag}`, sessionTopicId,
-      flow.project,
-    );
+    // Spawn session inside the topic — lock spawningTopics during async SSH connect
+    spawningTopics.add(sessionTopicId);
+    try {
+      await spawnSessionInTopic(
+        runtime, sshService, topicsService,
+        sshTarget, repoPath,
+        prompt, `${engineCmd} ${dsFlag}`, sessionTopicId,
+        flow.project,
+      );
+    } finally {
+      spawningTopics.delete(sessionTopicId);
+    }
     return;
   }
 }
