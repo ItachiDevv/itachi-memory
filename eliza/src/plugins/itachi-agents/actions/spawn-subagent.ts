@@ -32,9 +32,27 @@ export const spawnSubagentAction: Action = {
     ],
   ],
 
-  validate: async (runtime: IAgentRuntime, _message: Memory): Promise<boolean> => {
+  validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const service = runtime.getService('itachi-subagents') as SubagentService | undefined;
-    return !!service;
+    if (!service) return false;
+
+    // Only trigger when user explicitly requests delegation — not on random LLM picks
+    const text = (message.content?.text || '').toLowerCase();
+    const hasDelegationIntent = /\b(delegate|spawn|subagent|hand off|ask the (researcher|devops|code.?reviewer))\b/i.test(text);
+    if (!hasDelegationIntent) return false;
+
+    // Skip messages in active session topics (avoid interfering with SSH sessions)
+    try {
+      const { activeSessions, isSessionTopic, spawningTopics } = await import('../../itachi-tasks/shared/active-sessions.js');
+      const threadId = (message.content as Record<string, unknown>)?.threadId as number | undefined;
+      if (threadId && (activeSessions.has(threadId) || isSessionTopic(threadId) || spawningTopics.has(threadId))) {
+        return false;
+      }
+    } catch {
+      // itachi-tasks not loaded — skip the check
+    }
+
+    return true;
   },
 
   handler: async (
