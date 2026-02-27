@@ -335,8 +335,17 @@ Each rule must have a "scope" field:
 
 Only include rules if there's clear evidence in the conversation. Be specific and actionable — no vague platitudes.
 
+TASK SEGMENTATION: Break this session into distinct tasks/subtasks the user worked on.
+For each segment, provide:
+- "task": brief description of what was attempted (1 sentence)
+- "outcome": "success" | "partial" | "failure"
+- "approach": what approach was used (1-2 sentences)
+- "error": if failure/partial, what went wrong (optional)
+
+This is critical: a single session may involve many sub-tasks with different outcomes. Do NOT assign one blanket outcome — segment accurately.
+
 Respond ONLY with valid JSON, no markdown fences:
-{"significance": 0.7, "outcome": "success", "insights": [{"category": "decision", "summary": "..."}], "rules": [{"rule": "WHEN ..., DO ..., AVOID ...", "confidence": 0.8, "scope": "project"}]}`;
+{"significance": 0.7, "outcome": "success", "task_segments": [{"task": "Fix SSH key loading", "outcome": "success", "approach": "Checked ~/.itachi-api-keys, regenerated PAT"}], "insights": [{"category": "decision", "summary": "..."}], "rules": [{"rule": "WHEN ..., DO ..., AVOID ...", "confidence": 0.8, "scope": "project"}]}`;
 
         const result = await rt.useModel(ModelType.TEXT_SMALL, {
           prompt,
@@ -347,6 +356,7 @@ Respond ONLY with valid JSON, no markdown fences:
         let parsed: {
           significance: number;
           outcome?: 'success' | 'partial' | 'failure';
+          task_segments?: Array<{ task: string; outcome: string; approach?: string; error?: string }>;
           insights: Array<{ category: string; summary: string }>;
           rules?: Array<{ rule: string; confidence: number; scope?: string }>;
         };
@@ -520,8 +530,60 @@ Respond ONLY with valid JSON, no markdown fences:
           }
         }
 
-        rt.logger.info(`[extract-insights] Stored ${stored} insights (significance=${significance.toFixed(2)}, rlm=${rlmPromoted}, lessons=${lessonsStored}, rules=${rulesStored}+${rulesReinforced}r) for ${project}`);
-        res.json({ success: true, significance, insights_stored: stored, rlm_promoted: rlmPromoted, lessons_stored: lessonsStored, rules_stored: rulesStored, rules_reinforced: rulesReinforced });
+        // Task Segments: store per-task granular outcomes for fine-grained RLM learning
+        let segmentsStored = 0;
+        if (Array.isArray(parsed.task_segments) && parsed.task_segments.length > 0) {
+          const projKey = truncate(project, MAX_LENGTHS.project);
+          for (const seg of parsed.task_segments.slice(0, 15)) {
+            if (!seg.task || seg.task.length < 5) continue;
+            const segOutcome = ['success', 'partial', 'failure'].includes(seg.outcome) ? seg.outcome : 'partial';
+            const segSummary = `${seg.task} → ${segOutcome}${seg.approach ? ': ' + seg.approach : ''}`;
+            try {
+              await memoryService.storeMemory({
+                project: projKey,
+                category: 'task_segment',
+                content: [
+                  `Task: ${seg.task}`,
+                  `Outcome: ${segOutcome}`,
+                  seg.approach ? `Approach: ${seg.approach}` : '',
+                  seg.error ? `Error: ${seg.error}` : '',
+                ].filter(Boolean).join('\n'),
+                summary: truncate(segSummary, MAX_LENGTHS.summary),
+                files: Array.isArray(files_changed) ? files_changed.slice(0, 50) : [],
+                metadata: {
+                  source: 'session-segment',
+                  outcome: segOutcome,
+                  confidence: segOutcome === 'success' ? 0.8 : segOutcome === 'partial' ? 0.5 : 0.3,
+                  session_id,
+                  extracted_at: new Date().toISOString(),
+                },
+              });
+              segmentsStored++;
+            } catch (e) {
+              rt.logger.warn(`[extract-insights] Failed to store segment: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+          if (segmentsStored > 0) {
+            rt.logger.info(`[extract-insights] Stored ${segmentsStored} task segments for ${projKey}`);
+
+            // Reinforce existing lessons based on segment outcomes
+            try {
+              const { RLMService } = await import('../../itachi-self-improve/services/rlm-service.js');
+              const rlmService = rt.getService<InstanceType<typeof RLMService>>('rlm');
+              if (rlmService?.reinforceLessonsForSegments) {
+                const result = await rlmService.reinforceLessonsForSegments(parsed.task_segments!, projKey);
+                if (result.reinforced > 0) {
+                  rt.logger.info(`[extract-insights] RLM reinforced ${result.reinforced} lessons from ${result.recorded} segments`);
+                }
+              }
+            } catch (e) {
+              rt.logger.warn(`[extract-insights] RLM segment reinforcement failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        }
+
+        rt.logger.info(`[extract-insights] Stored ${stored} insights (significance=${significance.toFixed(2)}, rlm=${rlmPromoted}, lessons=${lessonsStored}, rules=${rulesStored}+${rulesReinforced}r, segments=${segmentsStored}) for ${project}`);
+        res.json({ success: true, significance, insights_stored: stored, rlm_promoted: rlmPromoted, lessons_stored: lessonsStored, rules_stored: rulesStored, rules_reinforced: rulesReinforced, segments_stored: segmentsStored });
       } catch (error) {
         (runtime as IAgentRuntime).logger.error('Extract insights error:', error instanceof Error ? error.message : String(error));
         res.status(500).json({ error: sanitizeError(error) });

@@ -48,13 +48,15 @@ export const lessonsProvider: Provider = {
       const memoryService = runtime.getService<MemoryService>('itachi-memory');
       if (!memoryService) return { text: '', values: {}, data: {} };
 
-      // Search task_lesson and project_rule in parallel
+      // Search task_lesson, project_rule, and task_segment in parallel
       let rawLessons: ItachiMemory[] = [];
       let rawRules: ItachiMemory[] = [];
+      let rawSegments: ItachiMemory[] = [];
       try {
-        [rawLessons, rawRules] = await Promise.all([
+        [rawLessons, rawRules, rawSegments] = await Promise.all([
           memoryService.searchMemories(query, undefined, 12, undefined, 'task_lesson'),
           memoryService.searchMemories(query, undefined, 5, undefined, 'project_rule'),
+          memoryService.searchMemories(query, undefined, 8, undefined, 'task_segment'),
         ]);
       } catch {
         return { text: '', values: {}, data: {} };
@@ -72,7 +74,14 @@ export const lessonsProvider: Provider = {
         .sort((a, b) => b.weightedScore - a.weightedScore)
         .slice(0, 3);
 
-      if (scoredLessons.length === 0 && scoredRules.length === 0) {
+      // Score and rank task segments into proven/avoid
+      const scoredSegments: ScoredMemory[] = (rawSegments || [])
+        .map(m => ({ ...m, weightedScore: computeWeightedScore(m) }))
+        .filter(m => m.weightedScore > 0.05)
+        .sort((a, b) => b.weightedScore - a.weightedScore)
+        .slice(0, 6);
+
+      if (scoredLessons.length === 0 && scoredRules.length === 0 && scoredSegments.length === 0) {
         return { text: '', values: {}, data: {} };
       }
 
@@ -90,6 +99,30 @@ export const lessonsProvider: Provider = {
         parts.push('## Project Rules');
         for (const r of scoredRules) {
           parts.push(formatRule(r));
+        }
+      }
+
+      if (scoredSegments.length > 0) {
+        const proven = scoredSegments.filter(m => {
+          const meta = (m.metadata || {}) as Record<string, unknown>;
+          return meta.outcome === 'success';
+        });
+        const avoid = scoredSegments.filter(m => {
+          const meta = (m.metadata || {}) as Record<string, unknown>;
+          return meta.outcome === 'failure';
+        });
+
+        if (proven.length > 0 || avoid.length > 0) {
+          parts.push('');
+          parts.push('## Past Approaches');
+          for (const s of proven) {
+            const meta = (s.metadata || {}) as Record<string, unknown>;
+            const reinforced = typeof meta.times_reinforced === 'number' ? meta.times_reinforced : 0;
+            parts.push(`- PROVEN: ${s.summary.substring(0, 120)}${reinforced > 0 ? ` (confirmed ${reinforced}x)` : ''}`);
+          }
+          for (const s of avoid) {
+            parts.push(`- AVOID: ${s.summary.substring(0, 120)}`);
+          }
         }
       }
 

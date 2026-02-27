@@ -99,6 +99,89 @@ export class RLMService extends Service {
     }
   }
 
+  /** Reinforce lessons based on per-segment outcomes from a session */
+  async reinforceLessonsForSegments(
+    segments: Array<{ task: string; outcome: string; approach?: string; error?: string }>,
+    project: string
+  ): Promise<{ reinforced: number; recorded: number }> {
+    const memoryService = this.runtime.getService<MemoryService>('itachi-memory');
+    if (!memoryService) return { reinforced: 0, recorded: 0 };
+
+    let reinforced = 0;
+    let recorded = 0;
+
+    for (const seg of segments.slice(0, 15)) {
+      if (!seg.task || seg.task.length < 5) continue;
+      const succeeded = seg.outcome === 'success';
+      const failed = seg.outcome === 'failure';
+
+      try {
+        // Find lessons related to this segment's task
+        const related = await memoryService.searchMemories(
+          seg.task.substring(0, 200),
+          project,
+          3,
+          undefined,
+          'task_lesson',
+        );
+
+        for (const lesson of related) {
+          if ((lesson.similarity ?? 0) < 0.6) continue;
+          const meta = (lesson.metadata || {}) as Record<string, unknown>;
+          const confNum = typeof meta.confidence === 'number' ? meta.confidence : 0.5;
+          try {
+            if (succeeded) {
+              await memoryService.reinforceMemory(lesson.id, {
+                confidence: Math.min(confNum + 0.03, 0.99),
+                last_outcome: 'success',
+                last_segment: seg.task.substring(0, 100),
+              });
+            } else if (failed) {
+              await memoryService.reinforceMemory(lesson.id, {
+                confidence: Math.max(confNum * 0.9, 0.1),
+                last_outcome: 'failure',
+                last_segment: seg.task.substring(0, 100),
+              });
+            }
+            reinforced++;
+          } catch {}
+        }
+
+        // Also reinforce related task_segment memories (proven/disproven patterns)
+        const relatedSegments = await memoryService.searchMemories(
+          seg.task.substring(0, 200),
+          project,
+          2,
+          undefined,
+          'task_segment',
+        );
+
+        for (const prev of relatedSegments) {
+          if ((prev.similarity ?? 0) < 0.7) continue;
+          const prevOutcome = (prev.metadata as Record<string, unknown>)?.outcome;
+          // If same approach led to same outcome again, reinforce
+          if (prevOutcome === seg.outcome) {
+            try {
+              await memoryService.reinforceMemory(prev.id, {
+                last_outcome: seg.outcome,
+                pattern_confirmed: true,
+              });
+              reinforced++;
+            } catch {}
+          }
+        }
+
+        recorded++;
+      } catch (err) {
+        this.runtime.logger.warn(
+          `[rlm] reinforceLessonsForSegments error for "${seg.task.substring(0, 40)}": ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
+    return { reinforced, recorded };
+  }
+
   /** Get recommendations based on past task outcomes */
   async getRecommendations(project: string, description: string): Promise<RLMRecommendations> {
     const warnings: string[] = [];

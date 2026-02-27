@@ -130,9 +130,13 @@ export class MemoryService extends Service {
   }
 
   async storeMemory(params: StoreMemoryParams): Promise<ItachiMemory> {
+    // Include outcome in embedding text so vector search can semantically
+    // distinguish successful vs failed approaches
+    const outcome = params.metadata?.outcome as string | undefined;
     const contextText = [
       `Category: ${params.category}`,
       `Summary: ${params.summary}`,
+      outcome ? `Outcome: ${outcome}` : '',
       params.files.length > 0 ? `Files: ${params.files.join(', ')}` : '',
       params.content ? `Changes:\n${params.content.substring(0, 500)}` : '',
     ]

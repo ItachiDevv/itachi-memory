@@ -185,6 +185,7 @@ const sessionApi = process.argv[5];
 const summary = process.argv[6] || '';
 const durationMs = parseInt(process.argv[7]) || 0;
 const filesChanged = process.argv[8] ? process.argv[8].split(',').filter(Boolean) : [];
+const exitReason = process.argv[9] || 'unknown';
 
 function httpPost(url, body) {
     return new Promise((resolve, reject) => {
@@ -267,10 +268,37 @@ function extractClaudeTexts(lines) {
         try {
             const entry = JSON.parse(line);
             if (entry.type === 'assistant' && entry.message && entry.message.content) {
+                const contentArr = Array.isArray(entry.message.content) ? entry.message.content : [];
+                const textParts = contentArr
+                    .filter(c => c.type === 'text').map(c => c.text).join(' ');
+                if (textParts.length > 50) texts.push('[ASSISTANT] ' + textParts);
+                for (const c of contentArr) {
+                    if (c.type === 'tool_use' && c.name) {
+                        const inp = c.input || {};
+                        let summary = c.name;
+                        if (inp.file_path) summary += ': ' + inp.file_path.split(/[\\/]/).slice(-2).join('/');
+                        else if (inp.command) summary += ': ' + (inp.command || '').substring(0, 80);
+                        else if (inp.pattern) summary += ': ' + (inp.pattern || '').substring(0, 60);
+                        else if (inp.query) summary += ': ' + (inp.query || '').substring(0, 60);
+                        texts.push('[TOOL_USE] ' + summary.substring(0, 120));
+                    }
+                }
+            } else if (entry.type === 'human' && entry.message && entry.message.content) {
                 const textParts = Array.isArray(entry.message.content)
                     ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
                     : (typeof entry.message.content === 'string' ? entry.message.content : '');
-                if (textParts.length > 50) texts.push(textParts);
+                if (textParts.length > 10) texts.push('[USER] ' + textParts);
+            } else if (entry.type === 'tool_result' || (entry.type === 'human' && entry.message && Array.isArray(entry.message.content) && entry.message.content.some(c => c.type === 'tool_result'))) {
+                const results = entry.type === 'tool_result'
+                    ? [entry]
+                    : (entry.message.content || []).filter(c => c.type === 'tool_result');
+                for (const r of results) {
+                    const content = typeof r.content === 'string' ? r.content
+                        : Array.isArray(r.content) ? r.content.filter(c => c.type === 'text').map(c => c.text).join(' ') : '';
+                    const isError = r.is_error || content.toLowerCase().startsWith('error');
+                    const tag = isError ? '[TOOL_ERROR]' : '[TOOL_RESULT]';
+                    if (content.length > 20) texts.push(tag + ' ' + content.substring(0, 100));
+                }
             }
         } catch {}
     }
@@ -288,11 +316,27 @@ function extractCodexTexts(lines) {
                     const textParts = Array.isArray(p.content)
                         ? p.content.filter(c => c.type === 'output_text' || c.type === 'text').map(c => c.text).join(' ')
                         : (typeof p.content === 'string' ? p.content : '');
-                    if (textParts.length > 50) texts.push(textParts);
+                    if (textParts.length > 50) texts.push('[ASSISTANT] ' + textParts);
+                }
+                if (p.type === 'function_call' && p.name) {
+                    let summary = p.name;
+                    try {
+                        const args = typeof p.arguments === 'string' ? JSON.parse(p.arguments) : p.arguments || {};
+                        if (args.file_path) summary += ': ' + args.file_path.split(/[\\/]/).slice(-2).join('/');
+                        else if (args.command) summary += ': ' + (args.command || '').substring(0, 80);
+                    } catch {}
+                    texts.push('[TOOL_USE] ' + summary.substring(0, 120));
+                }
+                if (p.type === 'function_call_output') {
+                    const out = typeof p.output === 'string' ? p.output : '';
+                    if (out.length > 20) {
+                        const isError = out.toLowerCase().startsWith('error') || p.status === 'failed';
+                        texts.push((isError ? '[TOOL_ERROR] ' : '[TOOL_RESULT] ') + out.substring(0, 100));
+                    }
                 }
             }
             if (entry.type === 'event_msg' && entry.payload && entry.payload.agent_reasoning) {
-                if (entry.payload.agent_reasoning.length > 50) texts.push(entry.payload.agent_reasoning);
+                if (entry.payload.agent_reasoning.length > 50) texts.push('[ASSISTANT] ' + entry.payload.agent_reasoning);
             }
         } catch {}
     }
@@ -321,7 +365,7 @@ function extractCodexTexts(lines) {
 
         if (assistantTexts.length === 0) return;
 
-        const conversationText = assistantTexts.join('\n---\n').substring(0, 4000);
+        const conversationText = assistantTexts.join('\n---\n').substring(0, 8000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,
@@ -329,8 +373,18 @@ function extractCodexTexts(lines) {
             conversation_text: conversationText,
             files_changed: filesChanged,
             summary: summary,
-            duration_ms: durationMs
+            duration_ms: durationMs,
+            exit_reason: exitReason
         });
+
+        // Also contribute lessons directly to the task_lesson pool
+        try {
+            await httpPost(sessionApi + '/contribute-lessons', {
+                conversation_text: conversationText,
+                project: project,
+                exit_reason: exitReason,
+            });
+        } catch(e) {}
     } catch(e) {}
 })();
 "@
@@ -342,7 +396,7 @@ function extractCodexTexts(lines) {
         Start-Process -NoNewWindow -FilePath "node" -ArgumentList @(
             "-e", $insightsScript,
             $client, $sessionId, $project, $cwd, $SESSION_API,
-            $summaryArg, $durationArg, $filesArg
+            $summaryArg, $durationArg, $filesArg, $reason
         ) -RedirectStandardOutput "NUL" -RedirectStandardError "NUL"
     } catch {}
 }
