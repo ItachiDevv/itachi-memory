@@ -9,7 +9,7 @@ import { syncGitHubRepos } from '../services/github-sync.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { listRemoteDirectory, browsingSessionMap } from '../utils/directory-browser.js';
-import { activeSessions, markSessionClosed, isSessionTopic, spawningTopics } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, isSessionTopic, spawningTopics, suppressNextLLMMessage } from '../shared/active-sessions.js';
 import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
   flowKey, conversationFlows, type ConversationFlow,
@@ -267,20 +267,16 @@ export const telegramCommandsAction: Action = {
       // preventing duplicate topic creation. Must be set AFTER so the delegation call
       // itself doesn't see the flag and bail out immediately.
       if (text.startsWith('/session ')) {
-        // Wrap callback: let the handler send its text, then suppress LLM-generated chatter
-        let handlerCallbackFired = false;
-        const wrappedCallback: typeof callback = callback ? async (response) => {
-          handlerCallbackFired = true;
-          // Send the handler's text as a normal response, but tag it as IGNORE
-          // so the LLM's own generated text doesn't also get sent
-          await callback({ ...response, action: 'IGNORE' });
-        } : undefined;
-        const result = await interactiveSessionAction.handler(runtime, message, _state, _options, wrappedCallback);
-        (message.content as Record<string, unknown>)._sessionSpawned = true;
-        // If handler didn't fire callback, suppress LLM chatter anyway
-        if (!handlerCallbackFired && callback) {
-          await callback({ text: '', action: 'IGNORE' });
+        // Suppress the LLM-generated text that ElizaOS sends before the handler runs.
+        // The handler sends its own response via callback — the LLM's text is duplicate chatter.
+        const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+        if (topicsService?.chatId) {
+          // Suppress in General (threadId=1) and also the main chat (no threadId)
+          suppressNextLLMMessage(topicsService.chatId, 1);
+          suppressNextLLMMessage(topicsService.chatId, null);
         }
+        const result = await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
+        (message.content as Record<string, unknown>)._sessionSpawned = true;
         return result ?? { success: true };
       }
 

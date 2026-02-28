@@ -99,6 +99,31 @@ export function markSessionClosed(topicId: number): void {
   }
 }
 
+/**
+ * Suppress next LLM-generated message to a specific threadId (General topic = 1).
+ * Used when /session commands are processed — the handler sends its own callback text,
+ * but the LLM also generates a duplicate response that needs suppression.
+ * Entries auto-expire after 15 seconds as a safety net.
+ */
+const _suppressLLMMap = new Map<string, number>(); // chatId:threadId → timestamp
+const SUPPRESS_TTL_MS = 15_000;
+
+/** Mark that the next LLM-generated sendMessage to this chat/thread should be suppressed. */
+export function suppressNextLLMMessage(chatId: number, threadId?: number | null): void {
+  const key = `${chatId}:${threadId ?? 'main'}`;
+  _suppressLLMMap.set(key, Date.now());
+}
+
+/** Check (and consume) if the next sendMessage to this chat/thread should be suppressed. */
+export function shouldSuppressLLMMessage(chatId: number, threadId?: number | null): boolean {
+  const key = `${chatId}:${threadId ?? 'main'}`;
+  const ts = _suppressLLMMap.get(key);
+  if (ts === undefined) return false;
+  _suppressLLMMap.delete(key);
+  if (Date.now() - ts > SUPPRESS_TTL_MS) return false;
+  return true;
+}
+
 /** Check if a topic has an active, spawning, or recently-closed session. */
 export function isSessionTopic(topicId: number): boolean {
   if (activeSessions.has(topicId)) return true;
