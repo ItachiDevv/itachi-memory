@@ -153,59 +153,36 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
  */
 function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any): void {
   try {
-    const tg = bot.telegram;
+    // KEY INSIGHT: Telegraf creates a NEW Telegram instance for EVERY update
+    // (telegraf.js:228 — `const tg = new Telegram(token, options, res)`).
+    // Patching bot.telegram is useless because ctx.telegram in handlers is a
+    // fresh instance. We must patch the Telegram CLASS PROTOTYPE so ALL
+    // instances (current and future) use our intercepted sendMessage.
+    const TelegramClass = bot.telegram.constructor;
+    const originalSendMessage = TelegramClass.prototype.sendMessage;
 
-    // Strategy: Wrap tg in a Proxy and replace bot.telegram with the proxy.
-    // This intercepts ALL property access including method calls, regardless
-    // of whether the calling code caches references or uses prototype methods.
-    const telegramProxy = new Proxy(tg, {
-      get(target: any, prop: string | symbol, receiver: any) {
-        const original = Reflect.get(target, prop, target);
-        // Intercept sendMessage
-        if (prop === 'sendMessage' && typeof original === 'function') {
-          return async function patchedSendMessage(chatId: any, text: string, extra?: any) {
-            const threadId = extra?.message_thread_id;
-            const preview = String(text).substring(0, 80).replace(/\n/g, ' ');
-            runtime.logger.info(`[chatter-patch] sendMessage: chatId=${chatId} threadId=${threadId} text="${preview}"`);
-            // Block LLM chatter in active session/browsing topics
-            if (threadId && (browsingSessionMap.has(threadId) || isSessionTopic(threadId))) {
-              runtime.logger.info(`[chatter-suppression] Blocked topic chatter ${threadId}`);
-              return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
-            }
-            // Block one-shot LLM chatter in General (from /session commands)
-            if (shouldSuppressLLMMessage(Number(chatId), threadId ?? null)) {
-              runtime.logger.info(`[chatter-suppression] Blocked General chatter`);
-              return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
-            }
-            return original.call(target, chatId, text, extra);
-          };
-        }
-        // Return bound method for other functions to preserve `this`
-        if (typeof original === 'function') {
-          return original.bind(target);
-        }
-        return original;
-      },
-    });
-
-    // Replace bot.telegram with the proxy
-    (bot as any).telegram = telegramProxy;
-
-    // Also replace on the messageManager (the main sending path)
-    const telegramService = runtime.getService('telegram') as any;
-    if (telegramService?.messageManager) {
-      const mm = telegramService.messageManager;
-      // The messageManager stores a reference to bot and uses bot.telegram
-      // But ctx.telegram in existing contexts may still reference the old object.
-      // Patch the messageManager's bot.telegram too.
-      if (mm.bot && mm.bot.telegram === tg) {
-        mm.bot.telegram = telegramProxy;
+    TelegramClass.prototype.sendMessage = async function patchedSendMessage(
+      chatId: any, text: string, extra?: any,
+    ) {
+      const threadId = extra?.message_thread_id;
+      const preview = String(text).substring(0, 80).replace(/\n/g, ' ');
+      runtime.logger.info(`[chatter-patch] sendMessage: chatId=${chatId} threadId=${threadId} text="${preview}"`);
+      // Block LLM chatter in active session/browsing topics
+      if (threadId && (browsingSessionMap.has(threadId) || isSessionTopic(threadId))) {
+        runtime.logger.info(`[chatter-suppression] Blocked topic chatter threadId=${threadId}`);
+        return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
       }
-    }
+      // Block one-shot LLM chatter in General (from /session commands)
+      if (shouldSuppressLLMMessage(Number(chatId), threadId ?? null)) {
+        runtime.logger.info(`[chatter-suppression] Blocked General chatter: "${preview}"`);
+        return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+      }
+      return originalSendMessage.call(this, chatId, text, extra);
+    };
 
-    runtime.logger.info('[callback-handler] Patched telegram via Proxy for chatter suppression');
+    runtime.logger.info('[callback-handler] Patched Telegram.prototype.sendMessage for chatter suppression');
   } catch (err: any) {
-    runtime.logger.warn(`[callback-handler] Could not patch telegram: ${err?.message}`);
+    runtime.logger.warn(`[callback-handler] Could not patch Telegram prototype: ${err?.message}`);
   }
 }
 
