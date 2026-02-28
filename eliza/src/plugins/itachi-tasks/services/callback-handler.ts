@@ -153,26 +153,33 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
  */
 function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any): void {
   try {
-    const originalSendMessage = bot.telegram.sendMessage.bind(bot.telegram);
-    bot.telegram.sendMessage = async (chatId: any, text: string, extra?: any) => {
-      const threadId = extra?.message_thread_id;
-      const preview = String(text).substring(0, 80).replace(/\n/g, ' ');
-      runtime.logger.info(`[chatter-patch] sendMessage called: chatId=${chatId} threadId=${threadId} text="${preview}"`);
-      // Block LLM chatter in active session/browsing topics
-      if (threadId && (browsingSessionMap.has(threadId) || isSessionTopic(threadId))) {
-        runtime.logger.info(`[chatter-suppression] Blocked LLM chatter to topic ${threadId}: "${preview}"`);
-        return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+    // Patch callApi — the lowest-level method in Telegraf. ALL API calls go through it.
+    // This catches sendMessage regardless of whether it's called via ctx.telegram,
+    // bot.telegram, ctx.reply(), or any other high-level wrapper.
+    const tg = bot.telegram;
+    const originalCallApi = tg.callApi.bind(tg);
+    tg.callApi = async (method: string, payload: any, ...rest: any[]) => {
+      if (method === 'sendMessage') {
+        const chatId = payload?.chat_id;
+        const text = String(payload?.text ?? '').substring(0, 80).replace(/\n/g, ' ');
+        const threadId = payload?.message_thread_id;
+        runtime.logger.info(`[chatter-patch] callApi(sendMessage): chatId=${chatId} threadId=${threadId} text="${text}"`);
+        // Block LLM chatter in active session/browsing topics
+        if (threadId && (browsingSessionMap.has(threadId) || isSessionTopic(threadId))) {
+          runtime.logger.info(`[chatter-suppression] Blocked LLM chatter to topic ${threadId}`);
+          return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+        }
+        // Block one-shot LLM chatter in General (from /session commands)
+        if (shouldSuppressLLMMessage(Number(chatId), threadId ?? null)) {
+          runtime.logger.info(`[chatter-suppression] Blocked LLM chatter in General`);
+          return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+        }
       }
-      // Block one-shot LLM chatter in General (from /session commands)
-      if (shouldSuppressLLMMessage(Number(chatId), threadId ?? null)) {
-        runtime.logger.info(`[chatter-suppression] Blocked LLM chatter in General: "${preview}"`);
-        return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
-      }
-      return originalSendMessage(chatId, text, extra);
+      return originalCallApi(method, payload, ...rest);
     };
-    runtime.logger.info('[callback-handler] Patched sendMessage for chatter suppression in browsing/session topics');
+    runtime.logger.info('[callback-handler] Patched callApi for chatter suppression (low-level intercept)');
   } catch (err: any) {
-    runtime.logger.warn(`[callback-handler] Could not patch sendMessage: ${err?.message}`);
+    runtime.logger.warn(`[callback-handler] Could not patch callApi: ${err?.message}`);
   }
 }
 
