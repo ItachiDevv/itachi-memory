@@ -58,7 +58,7 @@ fi
 curl -s -k -X POST "${MEMORY_API}/code-change" \
   -H "Content-Type: application/json" \
   -H "$AUTH_HEADER" \
-  -d "{\"files\":[],\"summary\":\"Session ended: ${REASON}\",\"category\":\"session\",\"project\":\"${PROJECT_NAME}\",\"branch\":\"${BRANCH}\"${TASK_FIELD}}" \
+  -d "{\"files\":[],\"summary\":\"Session ended: ${REASON}\",\"category\":\"session\",\"project\":\"${PROJECT_NAME}\",\"branch\":\"${BRANCH}\",\"metadata\":{\"outcome\":\"${REASON}\",\"exit_reason\":\"${REASON}\"}${TASK_FIELD}}" \
   --max-time 10 > /dev/null 2>&1
 
 # ============ Code-Intel: Session Complete ============
@@ -253,7 +253,7 @@ function httpPost(url, body) {
 
         if (modelTexts.length === 0) return;
 
-        const conversationText = modelTexts.join('\n---\n').substring(0, 4000);
+        const conversationText = modelTexts.join('\n---\n').substring(0, 8000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,
