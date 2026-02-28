@@ -267,8 +267,20 @@ export const telegramCommandsAction: Action = {
       // preventing duplicate topic creation. Must be set AFTER so the delegation call
       // itself doesn't see the flag and bail out immediately.
       if (text.startsWith('/session ')) {
-        const result = await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
+        // Wrap callback: let the handler send its text, then suppress LLM-generated chatter
+        let handlerCallbackFired = false;
+        const wrappedCallback: typeof callback = callback ? async (response) => {
+          handlerCallbackFired = true;
+          // Send the handler's text as a normal response, but tag it as IGNORE
+          // so the LLM's own generated text doesn't also get sent
+          await callback({ ...response, action: 'IGNORE' });
+        } : undefined;
+        const result = await interactiveSessionAction.handler(runtime, message, _state, _options, wrappedCallback);
         (message.content as Record<string, unknown>)._sessionSpawned = true;
+        // If handler didn't fire callback, suppress LLM chatter anyway
+        if (!handlerCallbackFired && callback) {
+          await callback({ text: '', action: 'IGNORE' });
+        }
         return result ?? { success: true };
       }
 

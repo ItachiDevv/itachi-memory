@@ -778,13 +778,13 @@ export const interactiveSessionAction: Action = {
     try {
       const sshService = runtime.getService<SSHService>('ssh');
       if (!sshService) {
-        if (callback) await callback({ text: 'SSH service not available. Configure SSH targets first.' });
+        if (callback) await callback({ text: 'SSH service not available. Configure SSH targets first.', action: 'IGNORE' });
         return { success: false, error: 'SSH service not available' };
       }
 
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
       if (!topicsService) {
-        if (callback) await callback({ text: 'Telegram topics service not available.' });
+        if (callback) await callback({ text: 'Telegram topics service not available.', action: 'IGNORE' });
         return { success: false, error: 'Topics service not available' };
       }
 
@@ -816,7 +816,7 @@ export const interactiveSessionAction: Action = {
 
       if (!topicResult?.ok || !topicResult.result?.message_thread_id) {
         runtime.logger.error(`[interactive-session] Failed to create topic: ${JSON.stringify(topicResult)}`);
-        if (callback) await callback({ text: `Failed to create Telegram topic: ${topicResult?.description || 'unknown error'}` });
+        if (callback) await callback({ text: `Failed to create Telegram topic: ${topicResult?.description || 'unknown error'}`, action: 'IGNORE' });
         return { success: false, error: 'Failed to create topic' };
       }
 
@@ -852,6 +852,7 @@ export const interactiveSessionAction: Action = {
 
         if (callback) await callback({
           text: `Repo not found on ${target}. Browse directories in the topic to pick a folder.`,
+          action: 'IGNORE',
         });
         return { success: true, data: { topicId, target, mode: 'browsing' } };
       }
@@ -863,13 +864,14 @@ export const interactiveSessionAction: Action = {
       );
 
       if (!spawned) {
-        if (callback) await callback({ text: `Failed to spawn SSH session on ${target}. Target may be misconfigured.` });
+        if (callback) await callback({ text: `Failed to spawn SSH session on ${target}. Target may be misconfigured.`, action: 'IGNORE' });
         return { success: false, error: 'Failed to spawn SSH session' };
       }
 
       if (callback) {
         await callback({
           text: `Interactive session started on ${target}!\n\nTopic: "${topicName}"\nPrompt: ${prompt}\n\nReply in the topic to send input to the session.`,
+          action: 'IGNORE',
         });
       }
 
@@ -879,7 +881,7 @@ export const interactiveSessionAction: Action = {
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      if (callback) await callback({ text: `Session error: ${msg}` });
+      if (callback) await callback({ text: `Session error: ${msg}`, action: 'IGNORE' });
       return { success: false, error: msg };
     }
   },
