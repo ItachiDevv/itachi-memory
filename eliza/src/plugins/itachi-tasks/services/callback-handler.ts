@@ -37,6 +37,20 @@ const ENGINE_SHORT: Record<string, string> = { i: 'itachi', c: 'itachic', g: 'it
 const ENGINE_TO_SHORT: Record<string, string> = { itachi: 'i', itachic: 'c', itachig: 'g' };
 
 /**
+ * Browse sessions waiting for engine selection.
+ * When user clicks "Start here" during browsing, we show the engine picker
+ * and store the browse context here. The sf:s: handler checks this map
+ * to spawn in the existing topic instead of creating a new one.
+ * Key: threadId (the browse topic), Value: browse context needed for spawn.
+ */
+const pendingBrowseEngine = new Map<number, {
+  target: string;
+  path: string;
+  prompt: string;
+  project?: string;
+}>();
+
+/**
  * Build a 3×2 inline keyboard for engine + mode selection.
  * Shows all 6 combinations: {itachi, itachic, itachig} × {--ds, --cds}
  */
@@ -346,7 +360,7 @@ async function handleCallback(runtime: IAgentRuntime, ctx: any): Promise<void> {
   if (prefix === 'tf') {
     await handleTaskFlowCallback(runtime, decoded, chatId, userId, messageId);
   } else if (prefix === 'sf') {
-    await handleSessionFlowCallback(runtime, decoded, chatId, userId, messageId);
+    await handleSessionFlowCallback(runtime, decoded, chatId, userId, messageId, ctx);
   }
 }
 
@@ -370,20 +384,23 @@ async function handleBrowseCallback(
   session.createdAt = Date.now();
 
   if (action === 'start') {
-    // Start session in current directory
-    // Lock spawningTopics BEFORE removing from browsingSessionMap to prevent
-    // messages leaking to TOPIC_REPLY/LLM during async SSH connect window
-    spawningTopics.add(threadId);
+    // Show engine picker instead of spawning directly.
+    // Store browse context so the sf:s: handler can spawn in this topic.
+    const projectName = session.currentPath.split('/').pop() || 'session';
+    pendingBrowseEngine.set(threadId, {
+      target: session.target,
+      path: session.currentPath,
+      prompt: session.prompt || `Work in ${session.currentPath}`,
+      project: projectName,
+    });
     browsingSessionMap.delete(threadId);
-    try {
-      await spawnSessionInTopic(
-        runtime, sshService, topicsService,
-        session.target, session.currentPath,
-        session.prompt, session.engineCommand, threadId,
-      );
-    } finally {
-      spawningTopics.delete(threadId);
-    }
+
+    const engineKeyboard = buildEngineKeyboard();
+    await topicsService.editMessageWithKeyboard(
+      chatId, messageId,
+      `Pick engine + mode for session in ${session.currentPath}:`,
+      engineKeyboard,
+    );
     return;
   }
 
@@ -431,6 +448,61 @@ async function handleBrowseCallback(
     formatDirectoryListing(newPath, dirs, session.target),
     keyboard,
   );
+}
+
+// ── Browse → Engine Selection ────────────────────────────────────────
+
+/**
+ * Handle engine+mode selection from the browse → engine picker flow.
+ * The user clicked "Start here" during browsing, saw the 6-button engine picker,
+ * and now selected an engine. Spawn the session in the existing browse topic.
+ */
+async function handleBrowseEngineSelection(
+  runtime: IAgentRuntime,
+  value: string, // e.g. "i.ds", "c.cds"
+  chatId: number,
+  threadId: number,
+  messageId: number,
+): Promise<void> {
+  const browse = pendingBrowseEngine.get(threadId);
+  if (!browse) return;
+  pendingBrowseEngine.delete(threadId);
+
+  const sshService = runtime.getService<SSHService>('ssh');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!sshService || !topicsService) return;
+
+  let engineCmd: string;
+  let dsFlag: string;
+
+  if (value.includes('.')) {
+    const [engShort, mode] = value.split('.');
+    engineCmd = ENGINE_SHORT[engShort] || 'itachi';
+    dsFlag = mode === 'cds' ? '--cds' : '--ds';
+  } else {
+    engineCmd = 'itachi';
+    dsFlag = value === 'cds' ? '--cds' : '--ds';
+  }
+
+  // Remove keyboard, show summary
+  await topicsService.editMessageWithKeyboard(
+    chatId, messageId,
+    `Starting session...\nTarget: ${browse.target}\nPath: ${browse.path}\nMode: ${dsFlag}\nEngine: ${engineCmd}`,
+    [], // remove keyboard
+  );
+
+  // Spawn session in the existing browse topic
+  spawningTopics.add(threadId);
+  try {
+    await spawnSessionInTopic(
+      runtime, sshService, topicsService,
+      browse.target, browse.path,
+      browse.prompt, `${engineCmd} ${dsFlag}`, threadId,
+      browse.project,
+    );
+  } finally {
+    spawningTopics.delete(threadId);
+  }
 }
 
 // ── AskUserQuestion Callbacks ────────────────────────────────────────
@@ -628,9 +700,17 @@ async function handleSessionFlowCallback(
   chatId: number,
   userId: number,
   messageId: number,
+  ctx?: any,
 ): Promise<void> {
   const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
   if (!topicsService) return;
+
+  // Check if this is an engine selection from the browse → engine picker flow
+  const threadId = ctx?.callbackQuery?.message?.message_thread_id;
+  if (decoded.key === 's' && threadId && pendingBrowseEngine.has(threadId)) {
+    await handleBrowseEngineSelection(runtime, decoded.value, chatId, threadId, messageId);
+    return;
+  }
 
   const flow = getFlow(chatId, userId);
   if (!flow || flow.flowType !== 'session') return;
