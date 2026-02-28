@@ -156,14 +156,16 @@ function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any)
     const originalSendMessage = bot.telegram.sendMessage.bind(bot.telegram);
     bot.telegram.sendMessage = async (chatId: any, text: string, extra?: any) => {
       const threadId = extra?.message_thread_id;
+      const preview = String(text).substring(0, 80).replace(/\n/g, ' ');
+      runtime.logger.info(`[chatter-patch] sendMessage called: chatId=${chatId} threadId=${threadId} text="${preview}"`);
       // Block LLM chatter in active session/browsing topics
       if (threadId && (browsingSessionMap.has(threadId) || isSessionTopic(threadId))) {
-        runtime.logger.info(`[chatter-suppression] Blocked LLM chatter to topic ${threadId}: "${String(text).substring(0, 60)}"`);
+        runtime.logger.info(`[chatter-suppression] Blocked LLM chatter to topic ${threadId}: "${preview}"`);
         return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
       }
       // Block one-shot LLM chatter in General (from /session commands)
       if (shouldSuppressLLMMessage(Number(chatId), threadId ?? null)) {
-        runtime.logger.info(`[chatter-suppression] Blocked LLM chatter in General: "${String(text).substring(0, 60)}"`);
+        runtime.logger.info(`[chatter-suppression] Blocked LLM chatter in General: "${preview}"`);
         return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
       }
       return originalSendMessage(chatId, text, extra);

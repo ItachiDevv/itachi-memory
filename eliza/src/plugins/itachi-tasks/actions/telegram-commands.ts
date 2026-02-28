@@ -149,6 +149,7 @@ export const telegramCommandsAction: Action = {
     // the LLM generates text, so this is the right place to set the flag.
     if (text === '/session' || text.startsWith('/session ')) {
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      runtime.logger.info(`[telegram-commands] validate /session: chatId=${topicsService?.chatId} suppressing LLM chatter`);
       if (topicsService?.chatId) {
         suppressNextLLMMessage(topicsService.chatId, 1);   // General topic (threadId=1)
         suppressNextLLMMessage(topicsService.chatId, null); // fallback (no threadId)
