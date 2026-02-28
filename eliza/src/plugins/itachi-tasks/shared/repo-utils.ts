@@ -67,7 +67,7 @@ export const DEFAULT_REPO_PATHS: Record<string, string> = {
 /** Base directories where repos are typically cloned per machine */
 export const DEFAULT_REPO_BASES: Record<string, string> = {
   mac: '~/itachi',
-  windows: '~/Documents/Crypto',
+  windows: '~/Documents/Crypto/skills-plugins',
   coolify: '/home/itachi/itachi',
 };
 
