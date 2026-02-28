@@ -229,21 +229,40 @@ export class MemoryService extends Service {
     return this.applyOutcomeReranking(results);
   }
 
-  /** Re-rank search results by outcome metadata.
-   *  success -> similarity * 1.1 (capped at 1.0)
-   *  failure -> similarity * 0.7
-   *  partial / no outcome -> unchanged */
+  /** Re-rank search results by outcome metadata and category relevance.
+   *  Outcome: success * 1.1, failure * 0.7, partial unchanged
+   *  Category: actionable categories (rules, lessons, error_recovery) boosted,
+   *            generic categories (code_change, documentation) slightly demoted */
   private applyOutcomeReranking(results: ItachiMemory[]): ItachiMemory[] {
+    // Categories that contain actionable, distilled knowledge get boosted
+    const CATEGORY_BOOST: Record<string, number> = {
+      project_rule: 1.25,
+      task_lesson: 1.20,
+      error_recovery: 1.15,
+      bug_fix: 1.10,
+      conversation: 1.05,
+      // Generic/noisy categories get slightly demoted
+      code_change: 0.85,
+      documentation: 0.90,
+      session: 0.80,
+    };
+
     return results
       .map((m) => {
         const outcomeVal = (m.metadata as Record<string, unknown>)?.outcome;
         let sim = m.similarity ?? 0.5;
+
+        // Outcome reranking
         if (outcomeVal === 'success') {
           sim = Math.min(sim * 1.1, 1.0);
         } else if (outcomeVal === 'failure') {
           sim = sim * 0.7;
         }
-        // 'partial' or no outcome: no change
+
+        // Category reranking
+        const catBoost = CATEGORY_BOOST[m.category] ?? 1.0;
+        sim = Math.min(sim * catBoost, 1.0);
+
         return { ...m, similarity: sim };
       })
       .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
