@@ -114,7 +114,7 @@ if (!(globalThis as any)[_globalKey]) {
   (globalThis as any).__itachi_suppressMapId = Math.random().toString(36).substring(2, 8);
 }
 const _suppressLLMMap: Map<string, number> = (globalThis as any)[_globalKey];
-const SUPPRESS_TTL_MS = 15_000;
+const SUPPRESS_TTL_MS = 60_000; // 60s — LLM generation can take 15-30s
 
 /** Mark that the next LLM-generated sendMessage to this chat/thread should be suppressed. */
 export function suppressNextLLMMessage(chatId: number, threadId?: number | null): void {
