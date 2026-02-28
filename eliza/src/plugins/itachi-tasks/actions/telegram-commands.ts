@@ -179,7 +179,8 @@ export const telegramCommandsAction: Action = {
       text === '/delete-topics' || text.startsWith('/delete-topics ') ||
       text === '/deletetopics' || text.startsWith('/deletetopics ') ||
       text === '/delete' || text.startsWith('/delete ') ||
-      text === '/close' || text.startsWith('/close ');
+      text === '/close' || text.startsWith('/close ') ||
+      text === '/health' || text === '/brain' || text.startsWith('/brain ');
   },
 
   handler: async (
@@ -340,6 +341,16 @@ export const telegramCommandsAction: Action = {
       // /help
       if (text === '/help') {
         return await handleHelp(callback);
+      }
+
+      // /health — system health check
+      if (text === '/health') {
+        return await handleHealth(runtime, callback);
+      }
+
+      // /brain [status|on|off|config ...] — brain loop control
+      if (text === '/brain' || text.startsWith('/brain ')) {
+        return await handleBrain(runtime, text, callback);
       }
 
       // /feedback <taskId> <good|bad> <reason>
@@ -1747,6 +1758,147 @@ async function handleTaskStatus(
   return { success: true };
 }
 
+async function handleHealth(runtime: IAgentRuntime, callback?: HandlerCallback): Promise<ActionResult> {
+  try {
+    const { lastHealthStatus } = await import('../workers/health-monitor.js');
+    const taskService = runtime.getService<TaskService>('itachi-tasks');
+    const registry = runtime.getService<MachineRegistryService>('machine-registry');
+    const memoryService = runtime.getService<MemoryService>('itachi-memory');
+
+    const lines: string[] = ['**System Health**\n'];
+
+    // Supabase
+    if (lastHealthStatus) {
+      lines.push(`Supabase: ${lastHealthStatus.supabase === 'ok' ? 'OK' : 'ERROR'}`);
+      lines.push(`Machines: ${lastHealthStatus.machines.online}/${lastHealthStatus.machines.total} online`);
+      lines.push(`Stale tasks: ${lastHealthStatus.staleTasks}`);
+      lines.push(`Total memories: ${lastHealthStatus.memoryCount}`);
+      lines.push(`Last check: ${new Date(lastHealthStatus.timestamp).toLocaleTimeString()}`);
+    } else {
+      lines.push('Health monitor has not run yet (starts within 60s of boot).');
+    }
+
+    // Live task counts
+    if (taskService) {
+      try {
+        const supabase = taskService.getSupabase();
+        const { data: counts } = await supabase
+          .from('itachi_tasks')
+          .select('status')
+          .in('status', ['queued', 'claimed', 'running'])
+          .limit(100);
+        if (counts) {
+          const byStatus: Record<string, number> = {};
+          for (const t of counts) byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+          lines.push(`\n**Active Tasks**`);
+          lines.push(`Queued: ${byStatus['queued'] || 0}, Claimed: ${byStatus['claimed'] || 0}, Running: ${byStatus['running'] || 0}`);
+        }
+      } catch { /* non-critical */ }
+    }
+
+    // Machine details
+    if (registry) {
+      try {
+        const machines = await registry.getAllMachines();
+        if (machines.length > 0) {
+          lines.push(`\n**Machines**`);
+          for (const m of machines) {
+            lines.push(`  ${m.display_name || m.machine_id}: ${m.status} (tasks: ${m.active_tasks || 0})`);
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+
+    if (callback) await callback({ text: lines.join('\n') });
+    return { success: true };
+  } catch (error) {
+    if (callback) await callback({ text: `Health check failed: ${error instanceof Error ? error.message : String(error)}` });
+    return { success: false, error: String(error) };
+  }
+}
+
+async function handleBrain(runtime: IAgentRuntime, text: string, callback?: HandlerCallback): Promise<ActionResult> {
+  const sub = text.substring('/brain'.length).trim();
+
+  try {
+    // Dynamic import to avoid circular deps — brain-loop-service may not exist yet
+    let brainService: any;
+    try {
+      brainService = await import('../services/brain-loop-service.js');
+    } catch {
+      if (callback) await callback({ text: 'Brain loop service not yet deployed. Deploy the latest code to enable /brain.' });
+      return { success: true };
+    }
+
+    if (!sub || sub === 'status') {
+      const config = brainService.getConfig();
+      const taskService = runtime.getService<TaskService>('itachi-tasks');
+      let statsText = '';
+
+      if (taskService) {
+        try {
+          const stats = await brainService.getDailyStats(taskService.getSupabase());
+          statsText = `\nToday: ${stats.proposed} proposed, ${stats.approved} approved, ${stats.rejected} rejected, ${stats.expired} expired`;
+          const pending = await brainService.getPendingProposals(taskService.getSupabase());
+          statsText += `\nPending proposals: ${pending.length}`;
+        } catch { /* table may not exist yet */ }
+      }
+
+      if (callback) await callback({
+        text: `**Brain Loop**\n\nEnabled: ${config.enabled ? 'YES' : 'NO'}\nInterval: ${config.intervalMs / 60000}min\nMax proposals/cycle: ${config.maxProposalsPerCycle}\nDaily budget limit: ${config.dailyBudgetLimit} LLM calls${statsText}`,
+      });
+      return { success: true };
+    }
+
+    if (sub === 'on') {
+      brainService.updateConfig({ enabled: true });
+      if (callback) await callback({ text: 'Brain loop ENABLED. It will run on the next cycle.' });
+      return { success: true };
+    }
+
+    if (sub === 'off') {
+      brainService.updateConfig({ enabled: false });
+      if (callback) await callback({ text: 'Brain loop DISABLED.' });
+      return { success: true };
+    }
+
+    // /brain config <key> <value>
+    if (sub.startsWith('config ')) {
+      const parts = sub.substring('config '.length).trim().split(/\s+/);
+      if (parts.length < 2) {
+        if (callback) await callback({ text: 'Usage: /brain config interval|budget|max <value>' });
+        return { success: true };
+      }
+      const [key, value] = parts;
+      const num = parseInt(value, 10);
+      if (isNaN(num) || num <= 0) {
+        if (callback) await callback({ text: `Invalid value: ${value}. Must be a positive number.` });
+        return { success: true };
+      }
+
+      if (key === 'interval') {
+        brainService.updateConfig({ intervalMs: num * 60000 });
+        if (callback) await callback({ text: `Brain loop interval set to ${num} minutes.` });
+      } else if (key === 'budget') {
+        brainService.updateConfig({ dailyBudgetLimit: num });
+        if (callback) await callback({ text: `Daily budget limit set to ${num} LLM calls.` });
+      } else if (key === 'max') {
+        brainService.updateConfig({ maxProposalsPerCycle: num });
+        if (callback) await callback({ text: `Max proposals per cycle set to ${num}.` });
+      } else {
+        if (callback) await callback({ text: `Unknown config key: ${key}. Use: interval, budget, max` });
+      }
+      return { success: true };
+    }
+
+    if (callback) await callback({ text: 'Usage: /brain [status|on|off|config interval|budget|max <value>]' });
+    return { success: true };
+  } catch (error) {
+    if (callback) await callback({ text: `Brain command failed: ${error instanceof Error ? error.message : String(error)}` });
+    return { success: false, error: String(error) };
+  }
+}
+
 async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   const help = `**Tasks**
   /task <name> — Interactive task creation (pick machine, repo, describe)
@@ -1810,6 +1962,10 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   /closealltopics — Close (archive) ALL topics
   /deletetopics done|failed|cancelled|all — Permanently delete topics
   /deletetopic — Pick a topic to delete (shows buttons)
+
+**System**
+  /health — System health check (Supabase, machines, tasks)
+  /brain — Brain loop status + control (on/off/config)
 
 **Other**
   /help — Show this message`;

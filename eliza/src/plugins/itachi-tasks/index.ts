@@ -36,6 +36,8 @@ export { taskDispatcherWorker, registerTaskDispatcherTask } from './workers/task
 export { githubRepoSyncWorker, registerGithubRepoSyncTask } from './workers/github-repo-sync.js';
 export { reminderPollerWorker, registerReminderPollerTask } from './workers/reminder-poller.js';
 export { proactiveMonitorWorker, registerProactiveMonitorTask } from './workers/proactive-monitor.js';
+export { healthMonitorWorker, registerHealthMonitorTask } from './workers/health-monitor.js';
+export { brainLoopWorker, registerBrainLoopTask } from './workers/brain-loop.js';
 
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',
@@ -89,6 +91,8 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'deletetopics', description: 'Delete topics — /deletetopics done|failed|all' },
         { command: 'spawn', description: 'Spawn subagent — /spawn <profile> <task>' },
         { command: 'agents', description: 'Subagents — /agents [msg <id> <message>]' },
+        { command: 'health', description: 'System health check' },
+        { command: 'brain', description: 'Brain loop status + control' },
         { command: 'help', description: 'Show all commands' },
       ];
       try {

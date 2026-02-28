@@ -1,5 +1,6 @@
 import { type TaskWorker, type IAgentRuntime, ModelType } from '@elizaos/core';
 import { CodeIntelService } from '../services/code-intel-service.js';
+import type { MemoryService, ItachiMemory } from '../../itachi-memory/services/memory-service.js';
 
 /**
  * Cross-project correlator: runs weekly, finds patterns across all projects.
@@ -99,6 +100,90 @@ Respond as a JSON array. No markdown code blocks.`;
         } catch (err: unknown) {
           runtime.logger.error(`[cross-project] Failed to store insight "${insight.title}":`, err instanceof Error ? err.message : String(err));
         }
+      }
+
+      // ── Promote shared patterns to project='_general' ──────────────
+      // Query project_rule and task_lesson across all projects.
+      // If similar patterns appear in 3+ projects, promote to _general.
+      try {
+        const memoryService = runtime.getService<MemoryService>('itachi-memory');
+        if (memoryService) {
+          const supabase = memoryService.getSupabase();
+          const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+          const { data: rules } = await supabase
+            .from('itachi_memories')
+            .select('id, project, summary, category, embedding')
+            .in('category', ['project_rule', 'task_lesson'])
+            .neq('project', '_general')
+            .gte('created_at', thirtyDaysAgo)
+            .order('created_at', { ascending: false })
+            .limit(100);
+
+          if (rules && rules.length >= 3) {
+            // Group by similarity clusters — find patterns that appear in 3+ different projects
+            const promoted = new Set<string>();
+            for (const rule of rules) {
+              if (promoted.has(rule.id) || !rule.summary || rule.summary.length < 20) continue;
+
+              // Find similar rules across projects
+              const { data: similar } = await supabase.rpc('match_memories', {
+                query_embedding: rule.embedding,
+                match_project: null,
+                match_category: rule.category,
+                match_branch: null,
+                match_metadata_outcome: null,
+                match_limit: 10,
+              });
+
+              if (!similar || similar.length < 3) continue;
+
+              // Count distinct projects
+              const projects = new Set((similar as ItachiMemory[]).filter(s => s.similarity! > 0.85).map(s => s.project));
+              if (projects.size < 3) continue;
+
+              // Check if already promoted to _general
+              const { data: existingGeneral } = await supabase.rpc('match_memories', {
+                query_embedding: rule.embedding,
+                match_project: '_general',
+                match_category: rule.category,
+                match_branch: null,
+                match_metadata_outcome: null,
+                match_limit: 1,
+              });
+
+              if (existingGeneral?.length > 0 && existingGeneral[0].similarity > 0.9) {
+                continue; // Already promoted
+              }
+
+              // Promote: store as _general
+              await memoryService.storeMemory({
+                project: '_general',
+                category: rule.category,
+                content: rule.summary,
+                summary: `[universal] ${rule.summary}`,
+                files: [],
+                metadata: {
+                  source: 'cross-project-promotion',
+                  source_projects: [...projects],
+                  promoted_at: new Date().toISOString(),
+                },
+              });
+
+              promoted.add(rule.id);
+              for (const s of similar as ItachiMemory[]) promoted.add(s.id);
+              runtime.logger.info(`[cross-project] Promoted to _general: "${rule.summary.substring(0, 60)}" (${projects.size} projects)`);
+
+              if (promoted.size > 20) break; // Cap promotions per cycle
+            }
+
+            if (promoted.size > 0) {
+              runtime.logger.info(`[cross-project] Promoted ${promoted.size} patterns to _general`);
+            }
+          }
+        }
+      } catch (err: unknown) {
+        runtime.logger.warn('[cross-project] Promotion phase error:', err instanceof Error ? err.message : String(err));
       }
 
       lastCrossProjectRun = Date.now();

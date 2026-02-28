@@ -145,6 +145,37 @@ export class MemoryService extends Service {
 
     const embedding = await this.getEmbedding(contextText);
 
+    // Dedup: check if a very similar memory already exists (cosine > 0.92)
+    // Skip dedup for low-value categories where volume is expected
+    const dedupCategories = new Set([
+      'synthesized_insight', 'project_rule', 'task_lesson', 'error_recovery',
+      'personality_trait', 'strategy_document',
+    ]);
+    if (dedupCategories.has(params.category)) {
+      try {
+        const { data: existing } = await this.supabase.rpc('match_memories', {
+          query_embedding: embedding,
+          match_project: params.project || null,
+          match_category: params.category,
+          match_branch: null,
+          match_metadata_outcome: null,
+          match_limit: 1,
+        });
+        if (existing?.length > 0 && existing[0].similarity > 0.92) {
+          this.runtime.logger.info(
+            `[memory] Dedup: skipping duplicate ${params.category} (similarity=${existing[0].similarity.toFixed(3)}): ${params.summary.substring(0, 60)}`
+          );
+          // Reinforce the existing memory instead
+          try {
+            await this.reinforceMemory(existing[0].id, params.metadata || {});
+          } catch { /* non-critical */ }
+          return existing[0] as ItachiMemory;
+        }
+      } catch {
+        // Dedup check failed — proceed with insert (non-critical)
+      }
+    }
+
     const insertObj: Record<string, unknown> = {
       project: params.project || 'default',
       category: params.category || 'code_change',

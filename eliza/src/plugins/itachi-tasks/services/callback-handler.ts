@@ -369,6 +369,12 @@ async function handleCallback(runtime: IAgentRuntime, ctx: any): Promise<void> {
     return;
   }
 
+  // bp:a:<shortId> or bp:r:<shortId> — brain proposal approve/reject
+  if (data.startsWith('bp:')) {
+    await handleBrainProposalCallback(runtime, data, chatId, messageId);
+    return;
+  }
+
   const decoded = decodeCallback(data);
   if (!decoded) return;
 
@@ -1019,6 +1025,104 @@ async function handleDeleteTopicCallback(
   } else {
     if (messageId) {
       await topicsService.editMessageWithKeyboard(chatId, messageId, `\u274c Failed to delete topic ${topicId}. May not exist or is the General topic.`, []);
+    }
+  }
+}
+
+/**
+ * Handle brain proposal callbacks: bp:a:<shortId> (approve) or bp:r:<shortId> (reject)
+ */
+async function handleBrainProposalCallback(
+  runtime: IAgentRuntime,
+  data: string,
+  chatId: number,
+  messageId?: number,
+): Promise<void> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  if (!topicsService || !taskService) return;
+
+  // Parse: bp:a:abc12345 or bp:r:abc12345
+  const parts = data.split(':');
+  if (parts.length < 3) return;
+
+  const action = parts[1]; // 'a' or 'r'
+  const shortId = parts[2];
+
+  const supabase = taskService.getSupabase();
+
+  // Look up proposal by UUID prefix
+  const { data: proposals, error } = await supabase
+    .from('itachi_brain_proposals')
+    .select('*')
+    .eq('status', 'proposed')
+    .ilike('id', `${shortId}%`)
+    .limit(1);
+
+  if (error || !proposals || proposals.length === 0) {
+    if (messageId) {
+      await topicsService.editMessageWithKeyboard(chatId, messageId, 'Proposal not found or already decided.', []);
+    }
+    return;
+  }
+
+  const proposal = proposals[0];
+
+  if (action === 'a') {
+    // Approve: create task from proposal
+    try {
+      const { approveProposal } = await import('./brain-loop-service.js');
+
+      const task = await taskService.createTask({
+        description: proposal.description,
+        project: proposal.project,
+        telegram_chat_id: chatId,
+        telegram_user_id: 0,
+        assigned_machine: proposal.target_machine || undefined,
+      });
+
+      await approveProposal(supabase, proposal.id, task.id);
+
+      // Create topic for the task
+      if (topicsService) {
+        topicsService.createTopicForTask(task).catch(() => {});
+      }
+
+      if (messageId) {
+        const taskShortId = task.id.substring(0, 8);
+        await topicsService.editMessageWithKeyboard(
+          chatId,
+          messageId,
+          `[APPROVED] ${proposal.title}\n\nTask ${taskShortId} created for ${proposal.project}.`,
+          [],
+        );
+      }
+
+      runtime.logger.info(`[brain-loop] Proposal ${shortId} approved → task ${task.id.substring(0, 8)}`);
+    } catch (err) {
+      runtime.logger.error(`[brain-loop] Failed to approve proposal: ${err instanceof Error ? err.message : String(err)}`);
+      if (messageId) {
+        await topicsService.editMessageWithKeyboard(chatId, messageId, `Failed to approve: ${err instanceof Error ? err.message : String(err)}`, []);
+      }
+    }
+  } else if (action === 'r') {
+    // Reject
+    try {
+      const { rejectProposal } = await import('./brain-loop-service.js');
+      await rejectProposal(supabase, proposal.id);
+
+      if (messageId) {
+        await topicsService.editMessageWithKeyboard(
+          chatId,
+          messageId,
+          `[REJECTED] ${proposal.title}`,
+          [],
+        );
+      }
+
+      runtime.logger.info(`[brain-loop] Proposal ${shortId} rejected`);
+    } catch (err) {
+      runtime.logger.error(`[brain-loop] Failed to reject proposal: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

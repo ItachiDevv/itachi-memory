@@ -63,6 +63,50 @@ export const memoryRoutes: Route[] = [
     },
   },
   {
+    type: 'POST',
+    path: '/api/memory/session-insight',
+    public: true,
+    handler: async (req, res, runtime) => {
+      try {
+        const rt = runtime as IAgentRuntime;
+        if (!checkAuth(req as any, res, rt)) return;
+
+        const body = req.body as Record<string, unknown>;
+        const { summary, project, metadata, content } = body as any;
+        if (!summary) {
+          res.status(400).json({ error: 'Summary required' });
+          return;
+        }
+
+        const memoryService = rt.getService<MemoryService>('itachi-memory');
+        if (!memoryService) {
+          res.status(503).json({ error: 'Memory service not available' });
+          return;
+        }
+
+        const safeSummary = truncate(summary, MAX_LENGTHS.summary);
+        const safeProject = truncate(project, MAX_LENGTHS.project) || '_general';
+        const safeContent = truncate(content || summary, MAX_LENGTHS.diff);
+
+        const data = await memoryService.storeMemory({
+          project: safeProject,
+          category: 'synthesized_insight',
+          content: safeContent,
+          summary: safeSummary,
+          files: [],
+          metadata: metadata || undefined,
+        });
+
+        rt.logger.info(`Stored session insight: ${safeSummary.substring(0, 60)} (project: ${safeProject})`);
+        res.json({ success: true, memoryId: data.id });
+      } catch (error) {
+        const rt = runtime as IAgentRuntime;
+        rt.logger.error('Session insight store error:', error instanceof Error ? error.message : String(error));
+        res.status(500).json({ error: sanitizeError(error) });
+      }
+    },
+  },
+  {
     type: 'GET',
     path: '/api/memory/search',
     public: true,

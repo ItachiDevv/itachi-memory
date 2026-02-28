@@ -252,7 +252,29 @@ export class TaskExecutorService extends Service {
       }
 
       if (staleTasks.length > 0) {
-        runtime.logger.info(`[executor] Recovered ${staleTasks.length} stale task(s)`);
+        runtime.logger.info(`[executor] Recovered ${staleTasks.length} stale claimed/running task(s)`);
+      }
+
+      // Also recover tasks stuck in 'queued' for >30min with no machine assigned
+      const queuedThreshold = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const { data: staleQueued, error: queuedError } = await supabase
+        .from('itachi_tasks')
+        .select('id, description, project, created_at')
+        .eq('status', 'queued')
+        .is('assigned_machine', null)
+        .lt('created_at', queuedThreshold)
+        .limit(20);
+
+      if (!queuedError && staleQueued && staleQueued.length > 0) {
+        for (const task of staleQueued) {
+          runtime.logger.warn(`[executor] Queued task ${task.id.substring(0, 8)} (${task.project}) stuck >30min with no machine`);
+          await taskService.updateTask(task.id, {
+            status: 'failed',
+            error_message: 'No machine available for 30+ minutes. Re-queue with /task when machines are online.',
+            completed_at: new Date().toISOString(),
+          });
+        }
+        runtime.logger.info(`[executor] Failed ${staleQueued.length} stale queued task(s) (no machine for 30+ min)`);
       }
     } catch (err) {
       runtime.logger.error(`[executor] recoverStaleTasks error: ${err instanceof Error ? err.message : String(err)}`);

@@ -323,10 +323,26 @@ export const createTaskAction: Action = {
 
           const queuedCount = await taskService.getQueuedCount();
           const machineLabel = targetMachine || 'auto-dispatch';
+
+          // Check machine availability for multi-task path
+          let multiAvailNote = '';
+          if (!targetMachine) {
+            try {
+              const machineReg = runtime.getService<MachineRegistryService>('machine-registry');
+              if (machineReg) {
+                const allM = await machineReg.getAllMachines();
+                const onlineM = allM.filter(m => m.status === 'online');
+                if (onlineM.length === 0) {
+                  multiAvailNote = '\n\nNo machines are currently online. Tasks will wait until a machine comes online.';
+                }
+              }
+            } catch { /* non-critical */ }
+          }
+
           if (callback) {
             const lines = results.map((r, i) => `${i + 1}. [${r.id}] ${r.title} — ${r.project}: ${r.description}`);
             await callback({
-              text: `${results.length} tasks QUEUED (not started yet).\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nThese tasks are waiting in the queue. I'll notify you as they actually complete.${warningText}`,
+              text: `${results.length} tasks QUEUED (not started yet).\n\n${lines.join('\n')}\n\nMachine: ${machineLabel}\nQueue depth: ${queuedCount}\nThese tasks are waiting in the queue. I'll notify you as they actually complete.${multiAvailNote}${warningText}`,
             });
           }
 
@@ -415,9 +431,27 @@ export const createTaskAction: Action = {
         });
       }
 
+      // Check machine availability for honest status
+      let availabilityNote = '';
+      if (!targetMachine) {
+        try {
+          const machineReg = runtime.getService<MachineRegistryService>('machine-registry');
+          if (machineReg) {
+            const allMachines = await machineReg.getAllMachines();
+            const onlineMachines = allMachines.filter(m => m.status === 'online');
+            if (onlineMachines.length === 0) {
+              availabilityNote = '\n\nNo machines are currently online. Task will wait until a machine comes online.';
+            } else {
+              const names = onlineMachines.map(m => m.display_name || m.machine_id).join(', ');
+              availabilityNote = `\nAvailable machines: ${names}`;
+            }
+          }
+        } catch { /* non-critical */ }
+      }
+
       if (callback) {
         await callback({
-          text: `Task QUEUED (not started yet).\n\nID: ${shortId} (${title})\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.${warningText}`,
+          text: `Task QUEUED (not started yet).\n\nID: ${shortId} (${title})\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.${availabilityNote}${warningText}`,
         });
       }
 

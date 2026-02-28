@@ -1,6 +1,10 @@
 import { type TaskWorker, type IAgentRuntime } from '@elizaos/core';
 import { MachineRegistryService } from '../services/machine-registry.js';
 import { TaskService } from '../services/task-service.js';
+import { TelegramTopicsService } from '../services/telegram-topics.js';
+
+// Track tasks we've already alerted about to avoid spam
+const alertedStuckTasks = new Set<string>();
 
 /**
  * Task dispatcher: runs every 10 seconds.
@@ -68,6 +72,48 @@ export const taskDispatcherWorker: TaskWorker = {
         await registry.assignTask(task.id, machine.machine_id);
         const shortId = task.id.substring(0, 8);
         runtime.logger.info(`[dispatcher] Assigned task ${shortId} (${task.project}) to ${machine.machine_id}`);
+      }
+
+      // 4. Alert on tasks stuck queued >5min with no machine
+      try {
+        const stuckThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: stuckTasks } = await supabase
+          .from('itachi_tasks')
+          .select('id, project, description, created_at')
+          .eq('status', 'queued')
+          .is('assigned_machine', null)
+          .lt('created_at', stuckThreshold)
+          .limit(5);
+
+        if (stuckTasks && stuckTasks.length > 0) {
+          const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+          for (const task of stuckTasks) {
+            if (alertedStuckTasks.has(task.id)) continue;
+            alertedStuckTasks.add(task.id);
+
+            const shortId = task.id.substring(0, 8);
+            runtime.logger.warn(`[dispatcher] Task ${shortId} has no available machine for project ${task.project}`);
+
+            if (topicsService) {
+              try {
+                await topicsService.sendMessageWithKeyboard(
+                  `Task ${shortId} (${task.project}) has been queued for 5+ minutes with no available machine.\n\nDescription: ${(task.description || '').substring(0, 100)}`,
+                  [],
+                );
+              } catch { /* non-critical */ }
+            }
+          }
+        }
+
+        // Cleanup old alerted IDs (prevent memory leak)
+        if (alertedStuckTasks.size > 100) {
+          const toKeep = stuckTasks?.map(t => t.id) || [];
+          for (const id of alertedStuckTasks) {
+            if (!toKeep.includes(id)) alertedStuckTasks.delete(id);
+          }
+        }
+      } catch (err) {
+        runtime.logger.warn('[dispatcher] Stuck task alert error:', err instanceof Error ? err.message : String(err));
       }
 
       lastTaskDispatcherRun = Date.now();

@@ -1,7 +1,7 @@
 import type { Project, ProjectAgent, IAgentRuntime } from '@elizaos/core';
 import { character } from './character.js';
 import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
-import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask, proactiveMonitorWorker, registerProactiveMonitorTask } from './plugins/itachi-tasks/index.js';
+import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask, proactiveMonitorWorker, registerProactiveMonitorTask, healthMonitorWorker, registerHealthMonitorTask, brainLoopWorker, registerBrainLoopTask } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
 import { itachiCodexPlugin } from './plugins/plugin-codex/index.js';
@@ -91,6 +91,8 @@ const agent: ProjectAgent = {
       { worker: githubRepoSyncWorker, register: registerGithubRepoSyncTask, name: 'github-repo-sync' },
       { worker: reminderPollerWorker, register: registerReminderPollerTask, name: 'reminder-poller' },
       { worker: proactiveMonitorWorker, register: registerProactiveMonitorTask, name: 'proactive-monitor' },
+      { worker: healthMonitorWorker, register: registerHealthMonitorTask, name: 'health-monitor' },
+      { worker: brainLoopWorker, register: registerBrainLoopTask, name: 'brain-loop' },
       { worker: subagentLifecycleWorker, register: registerSubagentLifecycleTask, name: 'subagent-lifecycle' },
     ];
 
@@ -150,6 +152,13 @@ const agent: ProjectAgent = {
       // Agents: subagent lifecycle (30s, start after 20s)
       { name: 'subagent-lifecycle', intervalMs: 30_000, delayMs: 20_000,
         execute: (rt) => subagentLifecycleWorker.execute(rt, {}, { name: 'ITACHI_SUBAGENT_LIFECYCLE', tags: [], description: '' }) },
+      // Health monitor (60s, start after 25s)
+      { name: 'health-monitor', intervalMs: 60_000, delayMs: 25_000,
+        execute: (rt) => healthMonitorWorker.execute(rt, {}, { name: 'ITACHI_HEALTH_MONITOR', tags: [], description: '' }) },
+      // Brain loop (10min, start after 2min)
+      { name: 'brain-loop', intervalMs: 600_000, delayMs: 120_000,
+        validate: (rt) => brainLoopWorker.validate!(rt, {} as any, {} as any),
+        execute: (rt) => brainLoopWorker.execute(rt, {}, { name: 'ITACHI_BRAIN_LOOP', tags: [], description: '' }) },
     ]);
   },
 };
