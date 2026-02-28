@@ -973,8 +973,26 @@ export class TaskExecutorService extends Service {
       this.runtime.logger.error(`[executor] Post-completion git ops failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // 4. Update task status
-    const finalStatus = exitCode === 0 ? 'completed' : 'failed';
+    // 4. Validate actual work was done (exit code 0 doesn't mean work happened)
+    const hasToolUsage = transcript && transcript.some(t =>
+      t.content.includes('[TOOL_USE]') || t.content.includes('tool_use') ||
+      t.content.includes('Edit') || t.content.includes('Write') ||
+      t.content.includes('Bash') || t.content.includes('committed'),
+    );
+
+    let finalStatus: string;
+    let workWarning = '';
+    if (exitCode !== 0) {
+      finalStatus = 'failed';
+    } else if (filesChanged.length === 0 && !hasToolUsage) {
+      // Exit 0 but no files changed and no tool usage detected
+      finalStatus = 'completed';
+      workWarning = 'Warning: Session completed with exit code 0 but no file changes detected. The agent may not have performed actual work.';
+      this.runtime.logger.warn(`[executor] Task ${shortId} completed with no file changes — possible hallucination`);
+    } else {
+      finalStatus = 'completed';
+    }
+
     const updatePayload: Record<string, unknown> = {
       status: finalStatus,
       completed_at: new Date().toISOString(),
@@ -989,7 +1007,9 @@ export class TaskExecutorService extends Service {
         .map(t => t.content)
         .join('\n')
         .substring(0, 4000); // DB column limit
-      updatePayload.result_summary = summary;
+      updatePayload.result_summary = workWarning ? `${workWarning}\n\n${summary}` : summary;
+    } else if (workWarning) {
+      updatePayload.result_summary = workWarning;
     }
 
     await taskService.updateTask(task.id, updatePayload);
@@ -997,8 +1017,10 @@ export class TaskExecutorService extends Service {
     // 5. Send result to Telegram
     if (topicId && topicsService) {
       const lines: string[] = [];
-      if (exitCode === 0) {
+      if (exitCode === 0 && !workWarning) {
         lines.push(`Task ${shortId} completed successfully.`);
+      } else if (exitCode === 0 && workWarning) {
+        lines.push(`Task ${shortId} completed but NO file changes detected. The agent may not have done actual work.`);
       } else {
         lines.push(`Task ${shortId} finished with exit code ${exitCode}.`);
       }

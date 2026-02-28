@@ -402,6 +402,21 @@ export class TelegramTopicsService extends Service {
         });
       }
 
+      // Update topic registry to 'closed' so orphan recovery doesn't
+      // flag this topic after a container restart
+      if (result.ok) {
+        try {
+          const taskService = this.runtime.getService('itachi-tasks') as TaskService | null;
+          if (taskService) {
+            const supabase = taskService.getSupabase();
+            await supabase
+              .from('itachi_topic_registry')
+              .update({ status: 'closed', updated_at: new Date().toISOString() })
+              .eq('topic_id', topicId);
+          }
+        } catch { /* best-effort */ }
+      }
+
       return result.ok;
     } catch (error) {
       this.runtime.logger.error('closeTopic error:', error instanceof Error ? error.message : String(error));
