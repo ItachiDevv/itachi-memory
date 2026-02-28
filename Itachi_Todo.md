@@ -48,7 +48,7 @@
 - [ ] **Use the Itachi MCP for handoffs** *(if applicable)*  
   Potentially use the Itachi MCP we built to orchestrate the model swap + context handoff.
 
----
+<!-- ---
 
 ## 5) Telegram hook: add item to todo list
 
@@ -61,7 +61,7 @@
 - [ ] Auto switch models when out of usage  
   Example: switch to **Gemini 3** when **3.1 Pro** runs out of usage.
 
----
+--- -->
 
 ## 7) Mid-session commands (Telegram)
 

@@ -1,9 +1,11 @@
 import { type TaskWorker, type IAgentRuntime, ModelType } from '@elizaos/core';
 import { CodeIntelService } from '../services/code-intel-service.js';
+import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 
 /**
  * Session synthesizer: queue-based worker that enriches session summaries with LLM.
  * Triggered when a session completes (finds unsummarized sessions).
+ * Also bridges synthesis output → itachi_memories so context providers can use it.
  */
 let lastSessionSynthesizerRun = 0;
 const SESSION_SYNTHESIZER_INTERVAL_MS = 1_800_000; // 30 minutes
@@ -143,6 +145,76 @@ Be specific and technical.`;
             .eq('id', session.id);
 
           runtime.logger.info(`[session-synthesizer] Enriched session ${session.session_id} for ${session.project}`);
+
+          // ── Bridge to itachi_memories so context providers can use synthesis ──
+          const memoryService = runtime.getService('itachi-memory') as MemoryService | null;
+          if (memoryService) {
+            const project = session.project || 'default';
+
+            // Store key decisions as synthesized insights
+            for (const decision of keyDecisions.slice(0, 3)) {
+              try {
+                await memoryService.storeMemory({
+                  project,
+                  category: 'synthesized_insight',
+                  content: decision,
+                  summary: `Decision: ${decision.substring(0, 120)}`,
+                  files: session.files_changed || [],
+                  metadata: {
+                    source: 'session_synthesizer',
+                    session_id: session.session_id,
+                    insight_type: 'key_decision',
+                  },
+                });
+              } catch {
+                // Non-critical: log and continue
+              }
+            }
+
+            // Store patterns as general knowledge if broadly applicable
+            for (const pattern of patternsUsed.slice(0, 3)) {
+              try {
+                // Patterns like "feature branches", "run tests before PR" are general
+                const isGeneral = /\b(always|never|every|convention|standard|best practice)\b/i.test(pattern);
+                await memoryService.storeMemory({
+                  project: isGeneral ? '_general' : project,
+                  category: isGeneral ? 'project_rule' : 'synthesized_insight',
+                  content: isGeneral ? `WHEN coding | DO ${pattern} | Pattern observed across sessions` : pattern,
+                  summary: `Pattern: ${pattern.substring(0, 120)}`,
+                  files: session.files_changed || [],
+                  metadata: {
+                    source: 'session_synthesizer',
+                    session_id: session.session_id,
+                    insight_type: 'pattern',
+                  },
+                });
+              } catch {
+                // Non-critical
+              }
+            }
+
+            // Store the full synthesis summary
+            try {
+              await memoryService.storeMemory({
+                project,
+                category: 'synthesized_insight',
+                content: `Session summary: ${summaryText}\n\nDecisions: ${keyDecisions.join('; ')}\nPatterns: ${patternsUsed.join('; ')}`,
+                summary: summaryText.substring(0, 200),
+                files: session.files_changed || [],
+                metadata: {
+                  source: 'session_synthesizer',
+                  session_id: session.session_id,
+                  insight_type: 'session_synthesis',
+                  duration_ms: session.duration_ms,
+                  exit_reason: session.exit_reason,
+                },
+              });
+            } catch {
+              // Non-critical
+            }
+
+            runtime.logger.info(`[session-synthesizer] Bridged ${keyDecisions.length} decisions + ${patternsUsed.length} patterns to itachi_memories`);
+          }
         } catch (sessionErr: unknown) {
           runtime.logger.error(`[session-synthesizer] Error processing session ${session.session_id}:`, sessionErr instanceof Error ? sessionErr.message : String(sessionErr));
         }
