@@ -38,7 +38,7 @@ try {
         try {
             $remoteUrl = git remote get-url origin 2>$null
             if ($remoteUrl) {
-                $project = ($remoteUrl -replace '\.git$','') -replace '.*/','.'
+                $project = ($remoteUrl -replace '\.git$','') -replace '.*/',''
                 $project = ($project -split '[/:]')[-1]
             }
         } catch {}
