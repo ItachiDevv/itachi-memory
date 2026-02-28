@@ -35,8 +35,8 @@ function New-HandoffFileName {
 function Get-EncodedCwd {
     param([string]$Path)
     if (-not $Path) { $Path = (Get-Location).Path }
-    # Claude Code encodes: remove drive letter colon, replace \ and / with --, strip leading dashes
-    $encoded = $Path -replace ':', '' -replace '[\\/]', '--' -replace '^-+', ''
+    # Claude Code encodes: colon -> dash, backslash/slash -> dash (producing C-- for C:\)
+    $encoded = $Path -replace ':', '-' -replace '[\\/]', '-'
     return $encoded
 }
 
@@ -181,6 +181,52 @@ function Get-EnginePriority {
     }
 
     return @('claude', 'codex', 'gemini')
+}
+
+# -- Session usage tracking (for proactive limit detection) ---------------
+
+function Read-SessionUsage {
+    param(
+        [string]$Client,
+        [int]$MaxLines = 5000
+    )
+    if (-not $Client) { $Client = $env:ITACHI_CLIENT }
+    if (-not $Client) { $Client = 'claude' }
+
+    $result = @{
+        turns = 0
+        outputTokens = 0
+        rateLimitCount = 0
+    }
+
+    $lines = Read-LatestTranscript -MaxLines $MaxLines -Client $Client
+    if (-not $lines -or $lines.Count -eq 0) { return $result }
+
+    foreach ($line in $lines) {
+        if (-not $line) { continue }
+        try {
+            $entry = $line | ConvertFrom-Json -ErrorAction Stop
+
+            # Count assistant turns
+            if ($entry.type -eq 'assistant') {
+                $result.turns++
+                # Sum output tokens from usage field
+                if ($entry.message -and $entry.message.usage -and $entry.message.usage.output_tokens) {
+                    $result.outputTokens += [int]$entry.message.usage.output_tokens
+                }
+            }
+
+            # Count rate limit events
+            if ($entry.type -eq 'rate_limit_event' -or
+                ($entry.type -eq 'system' -and $entry.error -and $entry.error -match 'rate_limit')) {
+                $result.rateLimitCount++
+            }
+        } catch {
+            # Skip malformed lines
+        }
+    }
+
+    return $result
 }
 
 # -- Handoff cleanup --------------------------------------------------
