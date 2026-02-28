@@ -46,8 +46,38 @@ export const pendingQuestions = new Map<number, {
  * Prevents messages from leaking to TOPIC_REPLY or the LLM during the async
  * SSH connect + topic creation window where the threadId is in neither
  * browsingSessionMap nor activeSessions.
+ *
+ * Entries auto-expire after SPAWNING_TIMEOUT_MS as a safety net in case
+ * spawnSessionInTopic hangs (SSH connect stall, etc.).
  */
-export const spawningTopics = new Set<number>();
+const _spawningTopicsMap = new Map<number, number>(); // topicId → addedAt timestamp
+const SPAWNING_TIMEOUT_MS = 60_000; // 60 seconds max
+
+/** Proxy Set that auto-expires entries after SPAWNING_TIMEOUT_MS */
+export const spawningTopics = {
+  add(topicId: number): void {
+    _spawningTopicsMap.set(topicId, Date.now());
+  },
+  delete(topicId: number): boolean {
+    return _spawningTopicsMap.delete(topicId);
+  },
+  has(topicId: number): boolean {
+    const addedAt = _spawningTopicsMap.get(topicId);
+    if (addedAt === undefined) return false;
+    if (Date.now() - addedAt > SPAWNING_TIMEOUT_MS) {
+      _spawningTopicsMap.delete(topicId);
+      return false;
+    }
+    return true;
+  },
+  get size(): number {
+    // Prune expired during size check
+    for (const [id, addedAt] of _spawningTopicsMap) {
+      if (Date.now() - addedAt > SPAWNING_TIMEOUT_MS) _spawningTopicsMap.delete(id);
+    }
+    return _spawningTopicsMap.size;
+  },
+};
 
 /**
  * Recently closed sessions — used by chatter suppression to block delayed LLM

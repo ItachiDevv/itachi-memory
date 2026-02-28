@@ -944,23 +944,57 @@ async function recoverOrphanedSessions(runtime: IAgentRuntime): Promise<void> {
     const supabase = taskService.getSupabase();
     const { data, error } = await supabase
       .from('itachi_topic_registry')
-      .select('topic_id, title')
+      .select('topic_id, title, task_id')
       .eq('status', 'active')
       .eq('chat_id', topicsService.chatId);
 
     if (error || !data || data.length === 0) return;
 
     let orphanCount = 0;
-    for (const row of data as Array<{ topic_id: number; title: string }>) {
+    for (const row of data as Array<{ topic_id: number; title: string; task_id: string | null }>) {
       // If this topic has an active in-memory session, it's not orphaned
       if (activeSessions.has(row.topic_id)) continue;
 
       orphanCount++;
+
+      // Look up associated task for more context
+      let taskContext = '';
+      if (row.task_id) {
+        try {
+          const { data: taskData } = await supabase
+            .from('itachi_tasks')
+            .select('status, project, description')
+            .eq('id', row.task_id)
+            .single();
+          if (taskData) {
+            const desc = (taskData.description || '').substring(0, 80);
+            taskContext = `\nTask: ${taskData.project} — ${desc}\nLast status: ${taskData.status}`;
+            // If the task was already completed/failed before restart, just mark topic as closed
+            if (taskData.status === 'completed' || taskData.status === 'failed') {
+              runtime.logger.info(`[callback-handler] Orphaned topic ${row.topic_id} has ${taskData.status} task — marking closed`);
+              await supabase
+                .from('itachi_topic_registry')
+                .update({ status: 'closed', updated_at: new Date().toISOString() })
+                .eq('topic_id', row.topic_id);
+              continue; // Don't send "session lost" for already-finished tasks
+            }
+            // If the task was running, mark it as failed due to restart
+            if (taskData.status === 'running' || taskData.status === 'claimed') {
+              await taskService.updateTask(row.task_id, {
+                status: 'failed',
+                error_message: 'Bot restarted during execution',
+                completed_at: new Date().toISOString(),
+              });
+            }
+          }
+        } catch { /* best-effort task lookup */ }
+      }
+
       runtime.logger.info(`[callback-handler] Orphaned session topic ${row.topic_id} (${row.title}) — notifying user`);
       try {
         await topicsService.sendToTopic(
           row.topic_id,
-          'Session was lost due to bot restart. Use /close to clean up, or start a new session with /session.',
+          `Session was lost due to bot restart.${taskContext}\n\nUse /close to clean up, or start a new session with /session.`,
         );
       } catch (sendErr: any) {
         runtime.logger.warn(`[callback-handler] Failed to notify orphaned topic ${row.topic_id}: ${sendErr?.message}`);
