@@ -145,7 +145,16 @@ export const telegramCommandsAction: Action = {
     if (taskMatch && !taskMatch[1].includes(' ')) return true;
 
     // /session (no args or with machine arg) → interactive flow
-    if (text === '/session' || text.startsWith('/session ')) return true;
+    // Suppress LLM chatter in General BEFORE it's generated. validate() runs before
+    // the LLM generates text, so this is the right place to set the flag.
+    if (text === '/session' || text.startsWith('/session ')) {
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      if (topicsService?.chatId) {
+        suppressNextLLMMessage(topicsService.chatId, 1);   // General topic (threadId=1)
+        suppressNextLLMMessage(topicsService.chatId, null); // fallback (no threadId)
+      }
+      return true;
+    }
 
     // /delete command (replaces /close for topic cleanup)
     if (text === '/delete' || text.startsWith('/delete ')) return true;
@@ -267,14 +276,6 @@ export const telegramCommandsAction: Action = {
       // preventing duplicate topic creation. Must be set AFTER so the delegation call
       // itself doesn't see the flag and bail out immediately.
       if (text.startsWith('/session ')) {
-        // Suppress the LLM-generated text that ElizaOS sends before the handler runs.
-        // The handler sends its own response via callback — the LLM's text is duplicate chatter.
-        const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
-        if (topicsService?.chatId) {
-          // Suppress in General (threadId=1) and also the main chat (no threadId)
-          suppressNextLLMMessage(topicsService.chatId, 1);
-          suppressNextLLMMessage(topicsService.chatId, null);
-        }
         const result = await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
         (message.content as Record<string, unknown>)._sessionSpawned = true;
         return result ?? { success: true };
