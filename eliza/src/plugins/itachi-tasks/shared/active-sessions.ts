@@ -105,19 +105,31 @@ export function markSessionClosed(topicId: number): void {
  * but the LLM also generates a duplicate response that needs suppression.
  * Entries auto-expire after 15 seconds as a safety net.
  */
-const _suppressLLMMap = new Map<string, number>(); // chatId:threadId → timestamp
+// Use globalThis to guarantee the Map is shared across module instances.
+// ESM/CJS dual-loading can create separate module caches, causing
+// suppressNextLLMMessage and shouldSuppressLLMMessage to use different Maps.
+const _globalKey = '__itachi_suppressLLMMap';
+if (!(globalThis as any)[_globalKey]) {
+  (globalThis as any)[_globalKey] = new Map<string, number>();
+  (globalThis as any).__itachi_suppressMapId = Math.random().toString(36).substring(2, 8);
+}
+const _suppressLLMMap: Map<string, number> = (globalThis as any)[_globalKey];
 const SUPPRESS_TTL_MS = 15_000;
 
 /** Mark that the next LLM-generated sendMessage to this chat/thread should be suppressed. */
 export function suppressNextLLMMessage(chatId: number, threadId?: number | null): void {
   const key = `${chatId}:${threadId ?? 'main'}`;
   _suppressLLMMap.set(key, Date.now());
+  // eslint-disable-next-line no-console
+  console.log(`[suppress-debug] SET key=${key} mapSize=${_suppressLLMMap.size} mapId=${(globalThis as any).__itachi_suppressMapId}`);
 }
 
 /** Check (and consume) if the next sendMessage to this chat/thread should be suppressed. */
 export function shouldSuppressLLMMessage(chatId: number, threadId?: number | null): boolean {
   const key = `${chatId}:${threadId ?? 'main'}`;
   const ts = _suppressLLMMap.get(key);
+  // eslint-disable-next-line no-console
+  console.log(`[suppress-debug] CHECK key=${key} found=${ts !== undefined} mapSize=${_suppressLLMMap.size} mapId=${(globalThis as any).__itachi_suppressMapId}`);
   if (ts === undefined) return false;
   _suppressLLMMap.delete(key);
   if (Date.now() - ts > SUPPRESS_TTL_MS) return false;
