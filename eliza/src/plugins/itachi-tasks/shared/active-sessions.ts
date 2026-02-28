@@ -111,7 +111,6 @@ export function markSessionClosed(topicId: number): void {
 const _globalKey = '__itachi_suppressLLMMap';
 if (!(globalThis as any)[_globalKey]) {
   (globalThis as any)[_globalKey] = new Map<string, number>();
-  (globalThis as any).__itachi_suppressMapId = Math.random().toString(36).substring(2, 8);
 }
 const _suppressLLMMap: Map<string, number> = (globalThis as any)[_globalKey];
 const SUPPRESS_TTL_MS = 60_000; // 60s — LLM generation can take 15-30s
@@ -120,16 +119,12 @@ const SUPPRESS_TTL_MS = 60_000; // 60s — LLM generation can take 15-30s
 export function suppressNextLLMMessage(chatId: number, threadId?: number | null): void {
   const key = `${chatId}:${threadId ?? 'main'}`;
   _suppressLLMMap.set(key, Date.now());
-  // eslint-disable-next-line no-console
-  console.log(`[suppress-debug] SET key=${key} mapSize=${_suppressLLMMap.size} mapId=${(globalThis as any).__itachi_suppressMapId}`);
 }
 
 /** Check (and consume) if the next sendMessage to this chat/thread should be suppressed. */
 export function shouldSuppressLLMMessage(chatId: number, threadId?: number | null): boolean {
   const key = `${chatId}:${threadId ?? 'main'}`;
   const ts = _suppressLLMMap.get(key);
-  // eslint-disable-next-line no-console
-  console.log(`[suppress-debug] CHECK key=${key} found=${ts !== undefined} mapSize=${_suppressLLMMap.size} mapId=${(globalThis as any).__itachi_suppressMapId}`);
   if (ts === undefined) return false;
   _suppressLLMMap.delete(key);
   if (Date.now() - ts > SUPPRESS_TTL_MS) return false;
