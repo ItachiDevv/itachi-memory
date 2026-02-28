@@ -257,18 +257,27 @@ function httpPost(url, body) {
             try {
                 const entry = JSON.parse(line);
                 if (entry.type === 'assistant' && entry.message && entry.message.content) {
-                    const textParts = Array.isArray(entry.message.content)
-                        ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
-                        : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                    const parts = Array.isArray(entry.message.content) ? entry.message.content : [];
+                    const textParts = parts.filter(c => c.type === 'text').map(c => c.text).join(' ');
                     if (textParts.length > 50) {
                         conversationParts.push('[ASSISTANT] ' + textParts);
                     }
+                    // Capture tool calls (what the assistant decided to do)
+                    for (const p of parts.filter(c => c.type === 'tool_use')) {
+                        const inputStr = typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {}).substring(0, 300);
+                        conversationParts.push('[TOOL_USE] ' + p.name + ': ' + inputStr);
+                    }
                 } else if (entry.type === 'human' && entry.message && entry.message.content) {
-                    const textParts = Array.isArray(entry.message.content)
-                        ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
-                        : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                    const parts = Array.isArray(entry.message.content) ? entry.message.content : [];
+                    const textParts = parts.filter(c => c.type === 'text').map(c => c.text).join(' ');
                     if (textParts.length > 10) {
                         conversationParts.push('[USER] ' + textParts);
+                    }
+                    // Capture tool results (what happened when tools ran)
+                    for (const p of parts.filter(c => c.type === 'tool_result')) {
+                        const content = Array.isArray(p.content) ? p.content.map(c => c.text || '').join(' ') : (typeof p.content === 'string' ? p.content : '');
+                        const prefix = p.is_error ? '[TOOL_ERROR]' : '[TOOL_RESULT]';
+                        if (content.length > 20) conversationParts.push(prefix + ' ' + content.substring(0, 500));
                     }
                 }
             } catch {}
@@ -276,8 +285,7 @@ function httpPost(url, body) {
 
         if (conversationParts.length === 0) return;
 
-        // Concatenate and truncate to 6000 chars (increased to capture user+assistant)
-        const conversationText = conversationParts.join('\n---\n').substring(0, 6000);
+        const conversationText = conversationParts.join('\n---\n').substring(0, 8000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,

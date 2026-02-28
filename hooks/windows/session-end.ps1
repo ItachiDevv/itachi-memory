@@ -327,15 +327,25 @@ function extractClaudeTexts(lines) {
         try {
             const entry = JSON.parse(line);
             if (entry.type === 'assistant' && entry.message && entry.message.content) {
-                const textParts = Array.isArray(entry.message.content)
-                    ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
-                    : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                const parts = Array.isArray(entry.message.content) ? entry.message.content : [];
+                const textParts = parts.filter(c => c.type === 'text').map(c => c.text).join(' ');
                 if (textParts.length > 50) texts.push('[ASSISTANT] ' + textParts);
+                // Capture tool calls (what the assistant decided to do)
+                for (const p of parts.filter(c => c.type === 'tool_use')) {
+                    const inputStr = typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {}).substring(0, 300);
+                    texts.push('[TOOL_USE] ' + p.name + ': ' + inputStr);
+                }
             } else if (entry.type === 'human' && entry.message && entry.message.content) {
-                const textParts = Array.isArray(entry.message.content)
-                    ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
-                    : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                const parts = Array.isArray(entry.message.content) ? entry.message.content : [];
+                const textParts = parts.filter(c => c.type === 'text').map(c => c.text).join(' ');
                 if (textParts.length > 10) texts.push('[USER] ' + textParts);
+                // Capture tool results (what happened when tools ran)
+                for (const p of parts.filter(c => c.type === 'tool_result')) {
+                    const content = Array.isArray(p.content) ? p.content.map(c => c.text || '').join(' ') : (typeof p.content === 'string' ? p.content : '');
+                    const success = !p.is_error;
+                    const prefix = success ? '[TOOL_RESULT]' : '[TOOL_ERROR]';
+                    if (content.length > 20) texts.push(prefix + ' ' + content.substring(0, 500));
+                }
             }
         } catch {}
     }
@@ -354,6 +364,15 @@ function extractCodexTexts(lines) {
                         ? p.content.filter(c => c.type === 'output_text' || c.type === 'text').map(c => c.text).join(' ')
                         : (typeof p.content === 'string' ? p.content : '');
                     if (textParts.length > 50) texts.push('[ASSISTANT] ' + textParts);
+                }
+                // Capture Codex function calls
+                if (p.type === 'function_call') {
+                    const args = typeof p.arguments === 'string' ? p.arguments.substring(0, 300) : JSON.stringify(p.arguments || {}).substring(0, 300);
+                    texts.push('[TOOL_USE] ' + (p.name || 'unknown') + ': ' + args);
+                }
+                if (p.type === 'function_call_output') {
+                    const output = (typeof p.output === 'string' ? p.output : JSON.stringify(p.output || '')).substring(0, 500);
+                    texts.push('[TOOL_RESULT] ' + output);
                 }
             }
             if (entry.type === 'event_msg' && entry.payload && entry.payload.agent_reasoning) {
@@ -386,7 +405,7 @@ function extractCodexTexts(lines) {
 
         if (assistantTexts.length === 0) return;
 
-        const conversationText = assistantTexts.join('\n---\n').substring(0, 6000);
+        const conversationText = assistantTexts.join('\n---\n').substring(0, 8000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,
