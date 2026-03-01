@@ -233,6 +233,34 @@ The only RLM feedback from local sessions comes through the `extract-insights` A
 
 ---
 
+## Updates Since Initial Evaluation (Feb 27 - Mar 1, 2026)
+
+### Reinforcement Loop — NOW ACTIVE
+- `reinforceLessonsForTask()` adjusts confidence: success += 0.10 (cap 0.99), failure -= 0.15 (floor 0.05)
+- `reinforceLessonsForSegments()` handles per-segment outcome tracking
+- Automatic reinforcement on task completion (no longer depends on `/feedback`)
+
+### Tool Call Capture
+- `extractClaudeTexts()` and `extractCodexTexts()` now capture `[TOOL_USE]`, `[TOOL_RESULT]`, `[TOOL_ERROR]` entries
+- Gives extract-insights full context about what actions were taken during sessions
+
+### Outcome Metadata
+- All 3 engines (claude/codex/gemini) add `metadata.outcome` and `metadata.exit_reason` to session-end hooks
+- `user-prompt-submit.ps1` shows `[category|outcome]` with `AVOID:` prefix for failure-tagged memories
+
+### Category-Aware Reranking
+- Memory search results reranked by category: `project_rule` x1.25, `task_lesson` x1.20, `error_recovery` x1.15, `code_change` x0.85, `session` x0.80
+- Ensures actionable lessons surface above raw session logs
+
+### Conversation Text Limit
+- Unified 8000-char limit across all engines (up from 4000-6000)
+
+### Silent Catch Fixes
+- 16 empty `catch {}` blocks in critical RLM paths now log warnings
+- Previously, lesson reinforcement failures, memory dedup errors, and health alerts were silently swallowed
+
+---
+
 ## Conclusion
 
 The RLM pipeline is **architecturally complete** and now **operationally functional across both Telegram and local sessions**:

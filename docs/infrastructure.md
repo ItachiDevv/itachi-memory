@@ -1,4 +1,4 @@
-# Itachi Memory — Infrastructure & Architecture (Feb 2026)
+# Itachi Memory — Infrastructure & Architecture (Mar 2026)
 
 ## System Overview
 
@@ -30,7 +30,8 @@ Itachi Memory is a self-learning task orchestration system built on ElizaOS. It 
 │  │  WORKERS (setInterval scheduler):                             │  │
 │  │  ├─ task-dispatcher (10s)     reminder-poller (60s)           │  │
 │  │  ├─ subagent-lifecycle (30s)  edit-analyzer (15m)             │  │
-│  │  ├─ session-synthesizer (30m) github-sync (24h)               │  │
+│  │  ├─ health-monitor (60s)      session-synthesizer (30m)       │  │
+│  │  ├─ brain-loop (10m)          github-sync (24h)               │  │
 │  │  ├─ repo-expertise (24h)      style-extractor (weekly)        │  │
 │  │  ├─ cross-project (weekly)    reflection (weekly)             │  │
 │  │  └─ cleanup (weekly)          effectiveness-decay (weekly)    │  │
@@ -253,8 +254,8 @@ User: /session windows show me git status
 
 | Plugin | Services | Actions | Evaluators | Providers | Workers |
 |--------|----------|---------|------------|-----------|---------|
-| **itachi-tasks** | TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService | 11 actions (session, task, commands, ssh, coolify) | topicInputRelay | activeTasks, repos, machineStatus, topicContext, sshCapabilities, commandSuppressor | taskDispatcher, githubSync, reminderPoller, proactiveMonitor |
-| **itachi-memory** | MemoryService | STORE_MEMORY | conversationMemory | recentMemories, memoryStats, factsContext, conversationContext | transcriptIndexer |
+| **itachi-tasks** | TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService, CallbackHandlerService, BrainLoopService | 11 actions (session, task, commands, ssh, coolify) | topicInputRelay | activeTasks, repos, machineStatus, topicContext, sshCapabilities, commandSuppressor | taskDispatcher, githubSync, reminderPoller, proactiveMonitor, healthMonitor, brainLoop |
+| **itachi-memory** | MemoryService | STORE_MEMORY | conversationMemory | recentMemories, memoryStats, factsContext, conversationContext, brainStateProvider | transcriptIndexer |
 | **itachi-code-intel** | CodeIntelService | — | — | sessionBriefing, repoExpertise, crossProjectInsights | editAnalyzer, sessionSynthesizer, repoExpertise, styleExtractor, crossProject, cleanup |
 | **itachi-self-improve** | RLMService | — | lessonExtractor, personalityExtractor | lessonsProvider, personalityProvider | reflection, effectivenessDecay |
 | **itachi-agents** | AgentProfileService, SubagentService, AgentMessageService, AgentCronService | spawnSubagent, listSubagents, messageSubagent, manageCron | subagentLesson, preCompactionFlush | agentStatus, agentMail | subagentLifecycle |
@@ -318,6 +319,8 @@ Evaluators run post-response:
 | `itachi_subagent_runs` | Spawned agent sessions + lifecycle |
 | `itachi_agent_messages` | Inter-agent messaging queue |
 | `itachi_agent_cron` | Self-scheduled recurring tasks |
+| `itachi_topic_registry` | Persistent topic tracking (topic_id, chat_id, title, status) |
+| `itachi_brain_proposals` | Brain loop proposals (project, title, priority, status) |
 
 ### Memory Categories
 | Category | Source | Used By |
@@ -351,8 +354,8 @@ Lessons stored (itachi_memories: category='task_lesson')
 Next decision → lessonsProvider injects top lessons (weighted ranking)
   ↓
 Reinforcement on outcome:
-  ├─ Success → confidence × 1.05 (max 0.99)
-  ├─ Failure → confidence × 0.85 (floor 0.1)
+  ├─ Success → confidence += 0.10 (max 0.99)
+  ├─ Failure → confidence -= 0.15 (floor 0.05)
   └─ User /feedback → ±0.1 adjustment
   ↓
 Weekly: reflection worker synthesizes strategy docs
@@ -441,6 +444,70 @@ All `.env` and sensitive `.md` files are synced between machines via the REST AP
 | `/agents` | List active subagent runs |
 | `/remind <time> <msg>` | Set reminder |
 | `/deploy` / `/update` / `/restart-bot` / `/logs` | Coolify operations |
+
+---
+
+## Engine Auto-Switch
+
+When a session hits rate limits, the system automatically switches to the next available engine.
+
+**Flow**: rate_limit_event detected → auto-fallback.ps1 → generate-handoff.ps1 → launch next engine
+
+**Engine priority**: Stored in `machine_registry.engine_priority` per machine (e.g. `['claude','codex','gemini']`).
+
+**Wrappers**: `itachi` (claude), `itachic` (codex), `itachig` (gemini)
+
+**Session picker**: 6-button inline keyboard in Telegram: {itachi, itachic, itachig} × {--ds, --cds}
+
+**Guard**: `ITACHI_FALLBACK_ACTIVE=1` prevents infinite fallback loops.
+
+---
+
+## Chatter Suppression
+
+Prevents the LLM from generating duplicate responses when command handlers already send output.
+
+**Root cause**: Telegraf creates a new `Telegram` instance per update. Instance-level patches never work.
+
+**Fix**: Patch `Telegram.prototype.sendMessage` + `globalThis.__itachi_suppressLLMMap` (shared across ESM/CJS).
+
+**TTL**: 60 seconds (LLM generation takes 15-30s).
+
+**Usage**: `suppressNextLLMMessage(chatId, topicId)` called in `validate()` before handler runs.
+
+---
+
+## Central Brain Loop
+
+OODA-cycle worker (`brain-loop.ts`) running every 10 minutes:
+
+1. **Observe**: Poll tasks (failed/stale), machines (offline), memories (error patterns)
+2. **Orient**: Single Gemini Flash call to rank observations by urgency
+3. **Decide**: Dedup against existing proposals/tasks, check budget
+4. **Act**: Create proposals in `itachi_brain_proposals`, send Telegram with [Approve]/[Reject] buttons
+
+**Commands**: `/brain` (status), `/brain on|off` (toggle), `/brain config interval|budget|max`
+
+**Safety**: Daily LLM budget limit, max 3 proposals/cycle, 24h auto-expiry, kill switch.
+
+**Auto-restart**: Health monitor triggers Coolify API restart after 3 consecutive critical failures.
+
+---
+
+## Test Coverage
+
+997 tests across 27 files, 0 failures (as of March 2026).
+
+Key test files:
+- `central-brain.test.ts` (63 tests) — brain loop phases
+- `telegram-commands.test.ts` (95 tests) — all 20+ commands
+- `topic-fixes.test.ts` (265 tests) — topic routing
+- `interactive-session.test.ts` (40 tests) — NDJSON parsing
+- `memory-service.test.ts` (39 tests) — embeddings, search, dedup
+- `ssh-service.test.ts` (30 tests) — targets, exec, spawn
+- `telegram-topics.test.ts` (36 tests) — topic lifecycle
+- `callback-handler.test.ts` (39 tests) — callback routing
+- `task-executor-service.test.ts` (41 tests) — task dispatch
 
 ---
 

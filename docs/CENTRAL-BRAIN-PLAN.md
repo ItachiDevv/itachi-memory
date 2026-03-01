@@ -19,16 +19,16 @@ The goal: make the deployed ElizaOS the **single source of truth** that all itac
 |-------|--------|--------|
 | 1A | DONE | c6f3575 — session-synthesizer → itachi_memories bridge |
 | 1B | DONE | 133149a — reflection-worker → project_rule memories |
-| 1C | DONE | (pending commit) — brain-state-provider.ts |
-| 1D | DONE | Enhanced memory routes (session-insight endpoint) |
-| 1E | DONE | Memory dedup (cosine >0.92) + cross-project promotion |
-| 2A-C | DONE | Task execution honesty + reliability |
-| 2D | DONE | Health monitor worker (60s) |
-| 3A-B | DONE | Health enhancements + Coolify auto-restart on 3x critical failures |
-| 3C | DONE | /brain and /health commands |
-| 3D | DONE | Brain loop worker (OODA cycle) |
-| 4A | DONE | Callback handler for brain proposals (bp: prefix) |
-| 4B | DONE | Full_Autonomy.md roadmap doc |
+| 1C | DONE | feccbf2 — brain-state-provider.ts |
+| 1D | DONE | feccbf2 — Enhanced memory routes (session-insight endpoint) |
+| 1E | DONE | feccbf2 — Memory dedup (cosine >0.92) + cross-project promotion |
+| 2A-C | DONE | feccbf2 — Task execution honesty + reliability |
+| 2D | DONE | feccbf2 — Health monitor worker (60s) |
+| 3A-B | DONE | feccbf2 — Health enhancements + Coolify auto-restart on 3x critical failures |
+| 3C | DONE | feccbf2 — /brain and /health commands |
+| 3D | DONE | feccbf2 — Brain loop worker (OODA cycle) |
+| 4A | DONE | feccbf2 — Callback handler for brain proposals (bp: prefix) |
+| 4B | DONE | feccbf2 — Full_Autonomy.md roadmap doc |
 | 4C | TODO | Confidence scoring (future — Stage 3) |
 
 ---
@@ -375,7 +375,7 @@ Phase 3A-B (self-management) → Phase 3C (/brain + /health)
                           Phase 4C (confidence scoring - future)
 ```
 
-**Next up**: Phase 1D + 1E (can be parallelized), then Phase 2A-C.
+**All phases through 4B are DONE.** Remaining: Phase 4C (confidence scoring — future).
 
 ---
 
