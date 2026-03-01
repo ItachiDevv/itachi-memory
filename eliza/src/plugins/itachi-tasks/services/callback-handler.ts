@@ -413,7 +413,7 @@ async function handleBrowseCallback(
     pendingBrowseEngine.set(threadId, {
       target: session.target,
       path: session.currentPath,
-      prompt: session.prompt || `Work in ${session.currentPath}`,
+      prompt: session.prompt || `You are in the ${session.currentPath.split('/').pop() || 'project'} project at ${session.currentPath}. Briefly describe what you see and wait for instructions.`,
       project: projectName,
     });
     browsingSessionMap.delete(threadId);
@@ -908,7 +908,8 @@ async function handleSessionFlowCallback(
       dsFlag = value === 'cds' ? '--cds' : '--ds';
     }
 
-    const prompt = `Work in ${repoPath}`;
+    const projectName = flow.project || repoPath.split('/').pop() || 'session';
+    const prompt = `You are in the ${projectName} project at ${repoPath}. Briefly describe what you see and wait for instructions.`;
 
     // Remove keyboard, show summary
     await topicsService.editMessageWithKeyboard(
@@ -920,7 +921,6 @@ async function handleSessionFlowCallback(
     clearFlow(chatId, userId);
 
     // Create a forum topic for this session
-    const projectName = flow.project || repoPath.split('/').pop() || 'session';
     const topicName = `Session: ${projectName} | ${sshTarget}`;
     const topicCreateResult = await (topicsService as any).apiCall('createForumTopic', {
       chat_id: (topicsService as any).groupChatId,

@@ -5,7 +5,7 @@ import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { pendingInputs } from '../routes/task-stream.js';
 import { getTopicThreadId, stripBotMention } from '../utils/telegram.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { activeSessions, markSessionClosed, spawningTopics } from '../shared/active-sessions.js';
+import { activeSessions, markSessionClosed, spawningTopics, getClosedSessionMeta, suppressNextLLMMessage } from '../shared/active-sessions.js';
 import { spawnSessionInTopic, wrapStreamJsonInput, handleEngineHandoff } from '../actions/interactive-session.js';
 import { cleanupStaleFlows } from '../shared/conversation-flows.js';
 import {
@@ -166,6 +166,19 @@ export const topicInputRelayEvaluator: Evaluator = {
         content._topicRelayQueued = true;
         handleBrowsingInput(runtime, browsing, fullText, threadId)
           .catch(err => runtime.logger.error(`[topic-relay] Browsing error in validate: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    }
+
+    // Auto-respawn: follow-up message in a session topic where the session has exited.
+    // Spawn a new session with the user's message as the prompt (same target/engine/project).
+    if (!content._topicRelayQueued && fullText && !fullText.startsWith('/')) {
+      const closedMeta = getClosedSessionMeta(threadId);
+      if (closedMeta && !activeSessions.has(threadId) && !browsingSessionMap.has(threadId) && !spawningTopics.has(threadId)) {
+        content._topicRelayQueued = true;
+        const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+        suppressNextLLMMessage(chatId, threadId);
+        respawnSessionFromMeta(runtime, closedMeta, fullText, threadId)
+          .catch(err => runtime.logger.error(`[topic-relay] Respawn error: ${err instanceof Error ? err.message : String(err)}`));
       }
     }
 
@@ -444,5 +457,36 @@ async function handleCloseInValidate(
   await topicsService.sendToTopic(threadId, 'Closing topic...');
   await topicsService.closeTopic(threadId, statusName);
   runtime.logger.info(`[topic-relay] /close (validate) closed topic ${threadId}`);
+}
+
+/**
+ * Respawn a session in a topic using stored metadata from the previous session.
+ * Called when a user sends a follow-up message in a session topic after the session exited.
+ */
+async function respawnSessionFromMeta(
+  runtime: IAgentRuntime,
+  meta: { target: string; project: string; engineCommand: string; repoPath: string },
+  prompt: string,
+  threadId: number,
+): Promise<void> {
+  const sshService = runtime.getService<SSHService>('ssh');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!sshService || !topicsService) {
+    runtime.logger.error(`[topic-relay] Cannot respawn: missing services`);
+    return;
+  }
+
+  runtime.logger.info(`[topic-relay] Respawning session in topic ${threadId}: target=${meta.target} project=${meta.project}`);
+  spawningTopics.add(threadId);
+  try {
+    await spawnSessionInTopic(
+      runtime, sshService, topicsService,
+      meta.target, meta.repoPath,
+      prompt, meta.engineCommand, threadId,
+      meta.project,
+    );
+  } finally {
+    spawningTopics.delete(threadId);
+  }
 }
 

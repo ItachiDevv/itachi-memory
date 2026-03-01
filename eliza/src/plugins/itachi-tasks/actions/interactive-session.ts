@@ -403,10 +403,10 @@ export async function spawnSessionInTopic(
 
   let sshCommand: string;
   if (mode === 'stream-json') {
-    // --verbose required with -p + --output-format stream-json. Stdin stays open for multi-turn.
+    // Multi-turn stream-json: no -p (single-turn) or --verbose. Stdin stays open for follow-ups.
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json`;
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --output-format stream-json --input-format stream-json`;
   } else {
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     sshCommand = hasFlag
@@ -461,9 +461,15 @@ export async function spawnSessionInTopic(
         }
       }
 
+      // In multi-turn mode, Claude sends `result` after each turn but the process stays alive.
+      // Suppress these per-turn results — the onExit handler sends the session-ended message.
+      if (chunk.kind === 'result') {
+        runtime.logger.info(`[session] Suppressing per-turn result: ${chunk.subtype} cost=${chunk.cost} duration=${chunk.duration}`);
+        return;
+      }
+
       const content = chunk.kind === 'text' ? chunk.text :
                       chunk.kind === 'hook_response' ? chunk.text :
-                      chunk.kind === 'result' ? `Session ${chunk.subtype}` :
                       chunk.kind === 'ask_user' ? `[AskUser] ${chunk.question}` :
                       chunk.kind === 'passthrough' ? chunk.text : '';
       if (content) sessionTranscript.push({ type: 'text', content, timestamp: Date.now() });
@@ -536,7 +542,13 @@ export async function spawnSessionInTopic(
     }
 
     activeSessions.delete(topicId);
-    markSessionClosed(topicId);
+    markSessionClosed(topicId, {
+      target,
+      project: project || 'unknown',
+      engineCommand,
+      repoPath,
+      mode,
+    });
     runtime.logger.info(`[session] ${sessionId} exited with code ${code}`);
   };
 
@@ -654,8 +666,15 @@ export async function handleEngineHandoff(
     session.handle.write('\x04'); // Send EOF
     session.handle.kill();
   } catch { /* ignore close errors */ }
+  const repoPath = session.workspace || DEFAULT_REPO_PATHS[session.target] || '~';
   activeSessions.delete(topicId);
-  markSessionClosed(topicId);
+  markSessionClosed(topicId, {
+    target: session.target,
+    project: session.project,
+    engineCommand: nextWrapper,
+    repoPath,
+    mode: 'stream-json',
+  });
 
   await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -665,8 +684,6 @@ export async function handleEngineHandoff(
     await topicsService.sendToTopic(topicId, 'SSH service unavailable. Cannot respawn session.');
     return;
   }
-
-  const repoPath = session.workspace || DEFAULT_REPO_PATHS[session.target] || '~';
 
   const newSessionId = await spawnSessionInTopic(
     runtime, sshService, topicsService,

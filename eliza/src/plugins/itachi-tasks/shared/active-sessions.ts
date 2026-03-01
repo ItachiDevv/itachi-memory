@@ -88,15 +88,51 @@ export const recentlyClosedSessions = new Map<number, number>(); // topicId → 
 
 const RECENTLY_CLOSED_TTL_MS = 30_000;
 
-/** Mark a session as recently closed (for chatter suppression). */
-export function markSessionClosed(topicId: number): void {
+/**
+ * Metadata from closed sessions — used to respawn sessions when users send
+ * follow-up messages in session topics after the session has exited.
+ * Entries auto-expire after 1 hour.
+ */
+export interface ClosedSessionMeta {
+  target: string;
+  project: string;
+  engineCommand: string;
+  repoPath: string;
+  mode: SessionMode;
+  closedAt: number;
+}
+
+const CLOSED_META_TTL_MS = 3_600_000; // 1 hour
+export const closedSessionMeta = new Map<number, ClosedSessionMeta>();
+
+/** Mark a session as recently closed (for chatter suppression + respawn metadata). */
+export function markSessionClosed(topicId: number, meta?: Omit<ClosedSessionMeta, 'closedAt'>): void {
   recentlyClosedSessions.set(topicId, Date.now());
+  if (meta) {
+    closedSessionMeta.set(topicId, { ...meta, closedAt: Date.now() });
+  }
   // Prune old entries
   for (const [id, closedAt] of recentlyClosedSessions) {
     if (Date.now() - closedAt > RECENTLY_CLOSED_TTL_MS) {
       recentlyClosedSessions.delete(id);
     }
   }
+  for (const [id, m] of closedSessionMeta) {
+    if (Date.now() - m.closedAt > CLOSED_META_TTL_MS) {
+      closedSessionMeta.delete(id);
+    }
+  }
+}
+
+/** Get closed session metadata for respawning. Returns null if expired or not found. */
+export function getClosedSessionMeta(topicId: number): ClosedSessionMeta | null {
+  const meta = closedSessionMeta.get(topicId);
+  if (!meta) return null;
+  if (Date.now() - meta.closedAt > CLOSED_META_TTL_MS) {
+    closedSessionMeta.delete(topicId);
+    return null;
+  }
+  return meta;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, mock } from 'bun:test';
 
 // ============================================================
 // Tests for stream-json parsing utilities in interactive-session.ts
@@ -460,5 +460,190 @@ describe('createNdjsonParser', () => {
     expect(chunks[0].kind).toBe('passthrough');
     expect(chunks[1].kind).toBe('hook_response');
     expect(chunks[2].kind).toBe('passthrough');
+  });
+});
+
+// ── Bug fix regression tests ────────────────────────────────────────
+
+describe('spawnSessionInTopic — SSH command construction', () => {
+  let spawnSessionInTopic: typeof import('../plugins/itachi-tasks/actions/interactive-session.js').spawnSessionInTopic;
+
+  beforeEach(async () => {
+    const mod = await import('../plugins/itachi-tasks/actions/interactive-session.js');
+    spawnSessionInTopic = mod.spawnSessionInTopic;
+  });
+
+  it('should NOT include -p flag in stream-json SSH command', async () => {
+    // Capture the SSH command passed to spawnInteractiveSession
+    let capturedCommand = '';
+    const mockSshService = {
+      spawnInteractiveSession: (target: string, command: string, ..._args: any[]) => {
+        capturedCommand = command;
+        // Return a mock handle
+        return { write: () => {}, kill: () => {}, pid: 12345 };
+      },
+    };
+    const mockTopicsService = {
+      sendToTopic: async () => {},
+      receiveTypedChunk: async () => {},
+      receiveChunk: async () => {},
+      finalFlush: async () => {},
+    };
+    const mockRuntime = {
+      logger: { info: () => {}, error: () => {}, warn: () => {}, debug: () => {} },
+      getService: () => null,
+    };
+
+    await spawnSessionInTopic(
+      mockRuntime as any,
+      mockSshService as any,
+      mockTopicsService as any,
+      'windows',
+      '~/Documents/Crypto/elizapets',
+      'Test prompt',
+      'itachi',
+      99999,
+      'elizapets',
+    );
+
+    // The SSH command should NOT contain -p (single-turn) or --verbose
+    expect(capturedCommand).not.toContain(' -p ');
+    expect(capturedCommand).not.toContain(' -p\n');
+    expect(capturedCommand).not.toMatch(/-p\b/);
+    expect(capturedCommand).not.toContain('--verbose');
+
+    // It SHOULD contain stream-json flags
+    expect(capturedCommand).toContain('--output-format stream-json');
+    expect(capturedCommand).toContain('--input-format stream-json');
+  });
+
+  it('should include --ds flag when engine command lacks it', async () => {
+    let capturedCommand = '';
+    const mockSshService = {
+      spawnInteractiveSession: (_t: string, command: string, ..._args: any[]) => {
+        capturedCommand = command;
+        return { write: () => {}, kill: () => {}, pid: 12345 };
+      },
+    };
+    const mockTopicsService = {
+      sendToTopic: async () => {},
+      receiveTypedChunk: async () => {},
+      receiveChunk: async () => {},
+      finalFlush: async () => {},
+    };
+    const mockRuntime = {
+      logger: { info: () => {}, error: () => {}, warn: () => {}, debug: () => {} },
+      getService: () => null,
+    };
+
+    await spawnSessionInTopic(
+      mockRuntime as any,
+      mockSshService as any,
+      mockTopicsService as any,
+      'windows',
+      '~/test',
+      'prompt',
+      'itachi',
+      99998,
+    );
+
+    expect(capturedCommand).toContain(' --ds ');
+  });
+});
+
+describe('stream-json result chunk suppression', () => {
+  it('should NOT forward result chunks to Telegram (multi-turn per-turn results)', async () => {
+    const mod = await import('../plugins/itachi-tasks/actions/interactive-session.js');
+    const { spawnSessionInTopic } = mod;
+
+    const receivedChunks: any[] = [];
+    let stdoutHandler: ((data: string) => void) | null = null;
+
+    const mockSshService = {
+      spawnInteractiveSession: (_t: string, _cmd: string, onStdout: any, ..._args: any[]) => {
+        stdoutHandler = onStdout;
+        return { write: () => {}, kill: () => {}, pid: 12345 };
+      },
+    };
+    const mockTopicsService = {
+      sendToTopic: async () => {},
+      receiveTypedChunk: async (_sid: string, _tid: number, chunk: any) => {
+        receivedChunks.push(chunk);
+      },
+      receiveChunk: async () => {},
+      finalFlush: async () => {},
+    };
+    const mockRuntime = {
+      logger: { info: () => {}, error: () => {}, warn: () => {}, debug: () => {} },
+      getService: () => null,
+    };
+
+    await spawnSessionInTopic(
+      mockRuntime as any,
+      mockSshService as any,
+      mockTopicsService as any,
+      'windows',
+      '~/test',
+      'prompt',
+      'itachi',
+      99997,
+    );
+
+    expect(stdoutHandler).not.toBeNull();
+
+    // Simulate Claude sending a text response then a per-turn result
+    const textMsg = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Here is what I see in the project.' }] },
+    }) + '\n';
+    const resultMsg = JSON.stringify({
+      type: 'result',
+      total_cost_usd: 0.05,
+      duration_ms: 9000,
+      subtype: 'success',
+    }) + '\n';
+
+    stdoutHandler!(textMsg);
+    stdoutHandler!(resultMsg);
+
+    // Only the text chunk should have been forwarded — result is suppressed
+    expect(receivedChunks).toHaveLength(1);
+    expect(receivedChunks[0].kind).toBe('text');
+    expect(receivedChunks[0].text).toBe('Here is what I see in the project.');
+  });
+});
+
+describe('closedSessionMeta respawn safety net', () => {
+  it('should store and retrieve closed session metadata', async () => {
+    const { markSessionClosed, getClosedSessionMeta, activeSessions } = await import(
+      '../plugins/itachi-tasks/shared/active-sessions.js'
+    );
+
+    const topicId = 88888;
+    // Ensure no active session
+    activeSessions.delete(topicId);
+
+    markSessionClosed(topicId, {
+      target: 'windows',
+      project: 'elizapets',
+      engineCommand: 'itachi',
+      repoPath: '~/Documents/Crypto/elizapets',
+      mode: 'stream-json',
+    });
+
+    const meta = getClosedSessionMeta(topicId);
+    expect(meta).not.toBeNull();
+    expect(meta!.target).toBe('windows');
+    expect(meta!.project).toBe('elizapets');
+    expect(meta!.repoPath).toBe('~/Documents/Crypto/elizapets');
+  });
+
+  it('should return null for unknown topic IDs', async () => {
+    const { getClosedSessionMeta } = await import(
+      '../plugins/itachi-tasks/shared/active-sessions.js'
+    );
+
+    const meta = getClosedSessionMeta(77777);
+    expect(meta).toBeNull();
   });
 });
