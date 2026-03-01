@@ -87,8 +87,7 @@ export function parseStreamJsonLine(line: string): ParsedChunk[] {
             });
           }
         }
-        // All other tools — silently skip. User only wants responses, not tool noise.
-        // Tool calls (Read, Edit, Bash, Grep, etc.) are internal work.
+        // All other tools — skip (internal work, not user-facing).
       }
     }
     return chunks;
@@ -140,7 +139,6 @@ export function createNdjsonParser(onChunk: (chunk: ParsedChunk) => void): (data
   return (data: string) => {
     buffer += data;
     const lines = buffer.split('\n');
-    // Keep the last element (might be incomplete)
     buffer = lines.pop() || '';
     for (const line of lines) {
       const chunks = parseStreamJsonLine(line);
@@ -190,11 +188,6 @@ function stripAnsi(text: string): string {
     .trim();
 }
 
-/**
- * Filter out TUI chrome/noise from Claude Code and similar CLI tools.
- * Keeps meaningful output (tool results, agent responses, errors) and
- * drops spinners, box borders, status lines, and progress indicators.
- */
 /**
  * Filter out TUI chrome/noise from Claude Code and similar CLI tools.
  *
@@ -377,8 +370,6 @@ function extractPrompt(text: string, matchedAlias: string): string {
   return prompt || 'Start an interactive development session';
 }
 
-// resolveRepoPath is now imported from shared/repo-utils.ts
-
 /**
  * Generate a short title for the session topic from the prompt.
  */
@@ -407,24 +398,16 @@ export async function spawnSessionInTopic(
 ): Promise<string | null> {
   const escapedPrompt = prompt.replace(/'/g, "'\\''");
 
-  // Determine session mode: stream-json (default for all platforms), tui (legacy)
   const envMode = process.env.ITACHI_SESSION_MODE?.toLowerCase();
   const mode: SessionMode = envMode === 'tui' ? 'tui' : 'stream-json';
 
   let sshCommand: string;
   if (mode === 'stream-json') {
-    // Stream-JSON mode: structured NDJSON I/O, multi-turn via stdin.
-    // -p + --input-format stream-json = multi-turn pipe session.
-    // Claude Code keeps reading JSON messages from stdin until EOF.
-    // --output-format stream-json: clean NDJSON on stdout (no TUI noise).
-    // --verbose is required when combining -p with --output-format stream-json.
-    // Initial prompt is sent via stdin AFTER spawn, not as a CLI argument.
-    // CRITICAL: Do NOT close stdin — that would end the session after one turn.
+    // --verbose required with -p + --output-format stream-json. Stdin stays open for multi-turn.
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
     sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json`;
   } else {
-    // Legacy TUI mode (fallback)
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     sshCommand = hasFlag
       ? `cd ${repoPath} && ${engineCommand} '${escapedPrompt}'`
@@ -478,7 +461,6 @@ export async function spawnSessionInTopic(
         }
       }
 
-      // Record in transcript
       const content = chunk.kind === 'text' ? chunk.text :
                       chunk.kind === 'hook_response' ? chunk.text :
                       chunk.kind === 'result' ? `Session ${chunk.subtype}` :
@@ -675,7 +657,6 @@ export async function handleEngineHandoff(
   activeSessions.delete(topicId);
   markSessionClosed(topicId);
 
-  // Small delay for cleanup
   await new Promise(resolve => setTimeout(resolve, 2000));
 
   // Respawn with new engine
