@@ -59,6 +59,7 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
       info: () => {},
       warn: () => {},
       error: () => {},
+      debug: () => {},
     },
     ...overrides,
   };
@@ -484,8 +485,8 @@ describe('Fix 4: lessonsProvider graceful embedding failure', () => {
 describe('Fix 5: CREATE_TASK — validate()', () => {
   it('30. validate accepts /task command', async () => {
     const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
-    const runtime = createMockRuntime();
-    const msg = { content: { text: '/task my-app Fix login bug' } };
+    const runtime = createMockRuntime({ agentId: 'bot-agent' });
+    const msg = { userId: 'human-user', content: { text: '/task my-app Fix login bug' } };
     expect(await createTaskAction.validate(runtime as any, msg as any)).toBe(true);
   });
 
@@ -494,9 +495,10 @@ describe('Fix 5: CREATE_TASK — validate()', () => {
     // This has zero task keywords — but task service is running, so LLM should decide
     const { createTaskAction } = await import('../plugins/itachi-tasks/actions/create-task.js');
     const runtime = createMockRuntime({
+      agentId: 'bot-agent',
       getService: (name: string) => name === 'itachi-tasks' ? { fake: true } : null,
     });
-    const msg = { content: { text: 'Yeah that would be great, can you do that?' } };
+    const msg = { userId: 'human-user', content: { text: 'Yeah that would be great, can you do that?' } };
     expect(await createTaskAction.validate(runtime as any, msg as any)).toBe(true);
   });
 

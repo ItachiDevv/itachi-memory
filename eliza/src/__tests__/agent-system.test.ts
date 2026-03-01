@@ -991,9 +991,10 @@ describe('spawnSubagentAction', () => {
   it('name is SPAWN_SUBAGENT', () => { expect(spawnSubagentAction.name).toBe('SPAWN_SUBAGENT'); });
   it('has examples', () => { expect(spawnSubagentAction.examples!.length).toBeGreaterThan(0); });
 
-  it('validate: true when service exists', async () => {
+  it('validate: true when service exists and delegation intent present', async () => {
     const { runtime } = makeMockRuntime({ 'itachi-subagents': {} });
-    expect(await spawnSubagentAction.validate(runtime, {} as any, {} as any)).toBe(true);
+    const msg = { content: { text: 'delegate this research task to an agent' } } as any;
+    expect(await spawnSubagentAction.validate(runtime, msg, {} as any)).toBe(true);
   });
 
   it('validate: false when service missing', async () => {

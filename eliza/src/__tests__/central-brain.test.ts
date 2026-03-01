@@ -113,7 +113,7 @@ describe('Brain Loop Service — Config', () => {
 // ============================================================
 
 describe('Brain Loop Service — Budget', () => {
-  let canAffordLLMCall: any, recordLLMCall: any, getBudgetUsage: any, updateConfig: any, resetDailyBudgetIfNeeded: any;
+  let canAffordLLMCall: any, recordLLMCall: any, getBudgetUsage: any, updateConfig: any, resetDailyBudgetIfNeeded: any, resetBudget: any;
 
   beforeEach(async () => {
     const mod = await import('../plugins/itachi-tasks/services/brain-loop-service.js');
@@ -122,10 +122,10 @@ describe('Brain Loop Service — Budget', () => {
     getBudgetUsage = mod.getBudgetUsage;
     updateConfig = mod.updateConfig;
     resetDailyBudgetIfNeeded = mod.resetDailyBudgetIfNeeded;
-    // Reset budget
+    resetBudget = mod.resetBudget;
+    // Reset budget counter to zero
+    resetBudget();
     updateConfig({ dailyBudgetLimit: 3, enabled: false, intervalMs: 600_000, maxProposalsPerCycle: 3 });
-    // Force reset by calling with large limit first
-    resetDailyBudgetIfNeeded();
   });
 
   it('should allow calls within budget', () => {

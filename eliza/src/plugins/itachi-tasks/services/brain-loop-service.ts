@@ -86,6 +86,12 @@ export function getBudgetUsage(): { used: number; limit: number } {
   return { used: dailyLLMCalls, limit: config.dailyBudgetLimit };
 }
 
+/** Test-only: reset budget counter to zero */
+export function resetBudget(): void {
+  dailyLLMCalls = 0;
+  lastBudgetReset = Date.now();
+}
+
 // ── Proposal CRUD ───────────────────────────────────────────────────
 
 export interface BrainProposal {

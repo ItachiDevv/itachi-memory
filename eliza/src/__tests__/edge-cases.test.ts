@@ -73,17 +73,19 @@ describe('Hybrid Search Edge Cases', () => {
   });
 
   it('should safely handle SQL injection attempts in query', async () => {
-    let receivedParams: any = null;
+    const rpcCalls: Array<{ fn: string; params: any }> = [];
     const supabase = makeBasicSupabase((fn: string, params: any) => {
-      receivedParams = params;
+      rpcCalls.push({ fn, params });
       return Promise.resolve({ data: [], error: null });
     });
     const service = createService(supabase);
 
     const malicious = "'; DROP TABLE itachi_memories; --";
     await service.searchMemories(malicious, 'proj');
-    // The query is passed as a parameter, not interpolated
-    expect(receivedParams.query_text).toBe(malicious);
+    // The query is passed as a parameter to the hybrid RPC, not interpolated
+    const hybridCall = rpcCalls.find(c => c.fn === 'match_memories_hybrid');
+    expect(hybridCall).toBeTruthy();
+    expect(hybridCall!.params.query_text).toBe(malicious);
   });
 
   it('should fall through to vector search when hybrid returns data: null', async () => {
@@ -104,7 +106,7 @@ describe('Hybrid Search Edge Cases', () => {
     expect(results[0].id).toBe('fallback');
   });
 
-  it('should return empty array when hybrid returns data: [] (valid empty result)', async () => {
+  it('should fall through to vector search when hybrid returns empty array', async () => {
     const rpcCalls: Array<{ fn: string }> = [];
     const supabase = makeBasicSupabase((fn: string) => {
       rpcCalls.push({ fn });
@@ -113,9 +115,10 @@ describe('Hybrid Search Edge Cases', () => {
     const service = createService(supabase);
 
     const results = await service.searchMemories('no matches');
-    // Hybrid returned empty array — this IS a valid result, should NOT fall through
-    expect(rpcCalls).toHaveLength(1);
+    // Empty array from hybrid has length 0 → falls through to vector-only fallback
+    expect(rpcCalls).toHaveLength(2);
     expect(rpcCalls[0].fn).toBe('match_memories_hybrid');
+    expect(rpcCalls[1].fn).toBe('match_memories');
     expect(results).toEqual([]);
   });
 

@@ -338,10 +338,9 @@ describe('MANAGEMENT_LESSONS provider', () => {
     const result = await lessonsProvider.get(runtime, { content: { text: 'create a task for auth module' } } as any);
 
     expect(result.text).toContain('Past Management Lessons');
-    expect(result.text).toContain('task-estimation');
-    expect(result.text).toContain('tool-selection');
-    expect(result.text).toContain('confidence: 0.8');
-    expect(result.text).toContain('relevance: 0.85');
+    expect(result.text).toContain('APPLY:');
+    expect(result.text).toContain('Auth tasks need targeted tests');
+    expect(result.text).toContain('confidence: 0.80');
     expect(result.values!.lessonCount).toBe('2');
   });
 
@@ -366,7 +365,7 @@ describe('MANAGEMENT_LESSONS provider', () => {
 
     expect(result.text).toContain('Current Strategy');
     expect(result.text).toContain('Always verify before deploy');
-    expect(callCount).toBe(2); // lesson search + strategy search
+    expect(callCount).toBe(4); // task_lesson + project_rule + task_segment + strategy_document
   });
 
   it('handles MemoryService unavailable gracefully', async () => {
@@ -736,8 +735,8 @@ describe('RL Pipeline — full cycle integration', () => {
 
     // Step 3: Verify lesson appears in context
     expect(result.text).toContain('Past Management Lessons');
-    expect(result.text).toContain('error-handling');
-    expect(result.text).toContain('confidence: 0.85');
+    expect(result.text).toContain('APPLY:');
+    expect(result.text).toContain('SSH tasks need env var validation');
     expect(result.values!.lessonCount).toBe('1');
   });
 

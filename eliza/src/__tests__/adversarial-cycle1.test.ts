@@ -325,7 +325,7 @@ describe('TaskService — adversarial inputs', () => {
     const service = new TaskService(runtime as any);
 
     const result = await service.createTask({
-      description: 'test task',
+      description: 'test task for budget validation',
       project: 'test',
       max_budget_usd: -100,
     });

@@ -68,8 +68,9 @@ describe('Transcript Indexer', () => {
     };
 
     // Should not throw — will either find real dirs or skip gracefully
+    // Note: scans real ~/.claude/projects/ so needs generous timeout on large machines
     await worker.execute(mockRuntime as any);
-  });
+  }, 30_000);
 
   it('registerTranscriptIndexerTask should not create duplicate tasks', async () => {
     const mod = await import('../plugins/itachi-memory/workers/transcript-indexer.js');

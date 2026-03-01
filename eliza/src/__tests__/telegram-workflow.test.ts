@@ -569,7 +569,7 @@ describe('TOPIC_REPLY action', () => {
       expect(pendingInputsMap.get(runningTask.id)![0].text).toBe('test input');
     });
 
-    it('handles completed task — offers follow-up', async () => {
+    it('handles completed task — creates follow-up for substantive message', async () => {
       const completedTask = { ...runningTask, status: 'completed' };
       const taskService = makeMockTaskService([completedTask]);
       const { runtime } = makeMockRuntime({
@@ -583,9 +583,9 @@ describe('TOPIC_REPLY action', () => {
       const msg = makeMessage('I need more work done', 'room1');
       const result = await topicReplyAction.handler(runtime, msg as any, undefined, undefined, callback);
 
-      expect(result).toEqual({ success: true, data: { taskId: runningTask.id, action: 'offered_follow_up' } });
-      expect(callbackText).toContain('already completed');
-      expect(callbackText).toContain('follow up:');
+      // 5 words (>= 3) → auto-creates follow-up task
+      expect((result as any).data.action).toBe('follow_up_created');
+      expect(callbackText).toContain('Follow-up task created');
     });
 
     it('creates follow-up task when "follow up:" prefix used', async () => {
@@ -658,7 +658,7 @@ describe('TOPIC_REPLY action', () => {
       const result = await topicReplyAction.handler(runtime, makeMessage('what happened?', 'room1') as any, undefined, undefined, async (msg: any) => { callbackText = msg.text; });
 
       expect((result as any).data.action).toBe('offered_follow_up');
-      expect(callbackText).toContain('follow up:');
+      expect(callbackText).toContain('Describe the follow-up');
     });
 
     it('handles waiting_input task — acknowledges relay', async () => {

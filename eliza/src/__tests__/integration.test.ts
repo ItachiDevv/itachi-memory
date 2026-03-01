@@ -239,7 +239,7 @@ describe('TaskService integration', () => {
 
     await expect(
       service.createTask({
-        description: 'test',
+        description: 'test task with enough length for validation',
         project: 'test',
         telegram_chat_id: 123,
         telegram_user_id: 456,
