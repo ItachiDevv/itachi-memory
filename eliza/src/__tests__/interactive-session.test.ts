@@ -473,7 +473,7 @@ describe('spawnSessionInTopic — SSH command construction', () => {
     spawnSessionInTopic = mod.spawnSessionInTopic;
   });
 
-  it('should NOT include -p flag in stream-json SSH command', async () => {
+  it('should include -p --verbose with stream-json flags in SSH command', async () => {
     // Capture the SSH command passed to spawnInteractiveSession
     let capturedCommand = '';
     const mockSshService = {
@@ -506,13 +506,9 @@ describe('spawnSessionInTopic — SSH command construction', () => {
       'elizapets',
     );
 
-    // The SSH command should NOT contain -p (single-turn) or --verbose
-    expect(capturedCommand).not.toContain(' -p ');
-    expect(capturedCommand).not.toContain(' -p\n');
-    expect(capturedCommand).not.toMatch(/-p\b/);
-    expect(capturedCommand).not.toContain('--verbose');
-
-    // It SHOULD contain stream-json flags
+    // -p and --verbose are required for --output-format stream-json
+    expect(capturedCommand).toMatch(/-p\b/);
+    expect(capturedCommand).toContain('--verbose');
     expect(capturedCommand).toContain('--output-format stream-json');
     expect(capturedCommand).toContain('--input-format stream-json');
   });

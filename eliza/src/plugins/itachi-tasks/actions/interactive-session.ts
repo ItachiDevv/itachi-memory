@@ -403,10 +403,11 @@ export async function spawnSessionInTopic(
 
   let sshCommand: string;
   if (mode === 'stream-json') {
-    // Multi-turn stream-json: no -p (single-turn) or --verbose. Stdin stays open for follow-ups.
+    // -p + --verbose required for --output-format stream-json. Stdin stays open for multi-turn
+    // via --input-format stream-json (Claude reads additional JSON messages from stdin).
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} --output-format stream-json --input-format stream-json`;
+    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json`;
   } else {
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     sshCommand = hasFlag
