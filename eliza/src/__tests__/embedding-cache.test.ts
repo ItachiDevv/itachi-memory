@@ -56,7 +56,7 @@ const mockRuntime = {
     modelCalls++;
     return MOCK_EMBEDDING;
   },
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
+  logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   getSetting: (key: string) => {
     if (key === 'SUPABASE_URL') return 'https://test.supabase.co';
     if (key === 'SUPABASE_SERVICE_ROLE_KEY') return 'test-key';

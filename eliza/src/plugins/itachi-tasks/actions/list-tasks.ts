@@ -2,6 +2,8 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import type { ItachiTask } from '../services/task-service.js';
 import { TaskService, generateTaskTitle } from '../services/task-service.js';
 import { stripBotMention } from '../utils/telegram.js';
+import { suppressNextLLMMessage } from '../shared/active-sessions.js';
+import { TelegramTopicsService } from '../services/telegram-topics.js';
 
 /** Format a single task into a readable Telegram message */
 function formatTaskDetail(task: ItachiTask): string {
@@ -62,9 +64,17 @@ export const listTasksAction: Action = {
     ],
   ],
 
-  validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+  validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = stripBotMention(message.content?.text?.toLowerCase() || '');
-    if (text.startsWith('/status')) return true;
+    if (text.startsWith('/status')) {
+      // Suppress LLM chatter — the handler sends its own response
+      const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+      if (topicsService?.chatId) {
+        suppressNextLLMMessage(topicsService.chatId, 1);
+        suppressNextLLMMessage(topicsService.chatId, null);
+      }
+      return true;
+    }
 
     // Direct keyword matches
     if (

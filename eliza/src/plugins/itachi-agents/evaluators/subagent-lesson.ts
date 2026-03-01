@@ -71,7 +71,9 @@ export const subagentLessonEvaluator: Evaluator = {
                   },
                 });
               }
-            } catch {}
+            } catch (err) {
+              runtime.logger.warn(`[subagent-lesson] cross-agent lesson share failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
 
             extractedCount++;
           }

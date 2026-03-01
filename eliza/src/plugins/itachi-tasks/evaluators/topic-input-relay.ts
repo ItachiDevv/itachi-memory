@@ -109,7 +109,7 @@ export const topicInputRelayEvaluator: Evaluator = {
       if (!targetEngine) {
         // No engine specified
         if (topicsService) {
-          topicsService.sendToTopic(threadId, 'Usage: /switch <engine>\nValid engines: claude, codex, gemini').catch(() => {});
+          topicsService.sendToTopic(threadId, 'Usage: /switch <engine>\nValid engines: claude, codex, gemini').catch((err: unknown) => { runtime.logger.debug(`[topic-relay] sendToTopic failed: ${err instanceof Error ? err.message : String(err)}`); });
         }
         return true;
       }
@@ -117,7 +117,7 @@ export const topicInputRelayEvaluator: Evaluator = {
       if (!validEngines.includes(targetEngine)) {
         // Invalid engine name
         if (topicsService) {
-          topicsService.sendToTopic(threadId, `Unknown engine "${targetEngine}". Valid engines: claude, codex, gemini`).catch(() => {});
+          topicsService.sendToTopic(threadId, `Unknown engine "${targetEngine}". Valid engines: claude, codex, gemini`).catch((err: unknown) => { runtime.logger.debug(`[topic-relay] sendToTopic failed: ${err instanceof Error ? err.message : String(err)}`); });
         }
         return true;
       }
@@ -126,7 +126,7 @@ export const topicInputRelayEvaluator: Evaluator = {
       if (!session) {
         // No active session in this topic
         if (topicsService) {
-          topicsService.sendToTopic(threadId, 'No active session in this topic. Start one with /session first.').catch(() => {});
+          topicsService.sendToTopic(threadId, 'No active session in this topic. Start one with /session first.').catch((err: unknown) => { runtime.logger.debug(`[topic-relay] sendToTopic failed: ${err instanceof Error ? err.message : String(err)}`); });
         }
         return true;
       }
@@ -152,7 +152,7 @@ export const topicInputRelayEvaluator: Evaluator = {
           // Send feedback to user
           const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
           if (topicsService) {
-            topicsService.sendToTopic(threadId, `Sent ${ctrl.label}`).catch(() => {});
+            topicsService.sendToTopic(threadId, `Sent ${ctrl.label}`).catch((err: unknown) => { runtime.logger.debug(`[topic-relay] sendToTopic failed: ${err instanceof Error ? err.message : String(err)}`); });
           }
           return true;
         }
@@ -297,7 +297,7 @@ export const topicInputRelayEvaluator: Evaluator = {
         // Detect user corrections/feedback and extract lessons
         const correctionPattern = /\b(that'?s wrong|bad|incorrect|try again|don'?t do that|wrong approach|not what I|revert|undo|shouldn'?t have|mistake)\b|\bno\b(?=[,.\s!?]|$)/i;
         if (correctionPattern.test(text)) {
-          extractCorrectionLesson(runtime, task, text).catch(() => {});
+          extractCorrectionLesson(runtime, task, text).catch((err: unknown) => { runtime.logger.warn(`[topic-relay] extractCorrectionLesson failed: ${err instanceof Error ? err.message : String(err)}`); });
         }
       }
     } catch (error) {

@@ -91,10 +91,13 @@ export class RLMService extends Service {
             });
           }
           reinforced++;
-        } catch {}
+        } catch (err) {
+          this.runtime.logger.warn(`[rlm] reinforce lesson ${lesson.id} failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
       return reinforced;
-    } catch {
+    } catch (err) {
+      this.runtime.logger.warn(`[rlm] reinforceLessonsForTask error: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
     }
   }
@@ -144,7 +147,9 @@ export class RLMService extends Service {
               });
             }
             reinforced++;
-          } catch {}
+          } catch (err) {
+            this.runtime.logger.warn(`[rlm] reinforce segment lesson failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         // Also reinforce related task_segment memories (proven/disproven patterns)
@@ -167,7 +172,9 @@ export class RLMService extends Service {
                 pattern_confirmed: true,
               });
               reinforced++;
-            } catch {}
+            } catch (err) {
+              this.runtime.logger.warn(`[rlm] reinforce segment pattern failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         }
 

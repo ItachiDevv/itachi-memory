@@ -104,7 +104,9 @@ Respond ONLY with valid JSON array, no markdown fences.`;
             });
             continue;
           }
-        } catch {}
+        } catch (err) {
+          runtime.logger.warn(`[personality] trait dedup search failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
 
         try {
           await memoryService.storeMemory({

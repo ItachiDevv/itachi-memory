@@ -82,7 +82,7 @@ export class MemoryService extends Service {
               .update({ last_used: new Date().toISOString() })
               .eq('content_hash', hash)
               .then(() => {})
-          ).catch(() => {});
+          ).catch((err: unknown) => { this.runtime.logger.debug(`[memory] cache last_used update failed: ${err instanceof Error ? err.message : String(err)}`); });
           return cached.embedding as unknown as number[];
         }
         // Bad cached embedding — delete and regenerate
@@ -92,10 +92,10 @@ export class MemoryService extends Service {
             .delete()
             .eq('content_hash', hash)
             .then(() => {})
-        ).catch(() => {});
+        ).catch((err: unknown) => { this.runtime.logger.debug(`[memory] cache delete failed: ${err instanceof Error ? err.message : String(err)}`); });
       }
-    } catch {
-      // Cache miss or table doesn't exist — fall through to model call
+    } catch (err) {
+      this.runtime.logger.debug(`[memory] cache lookup failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     const result = await this.runtime.useModel(ModelType.TEXT_EMBEDDING, {
@@ -121,9 +121,9 @@ export class MemoryService extends Service {
           .from('itachi_embedding_cache')
           .upsert({ content_hash: hash, embedding, model_id: 'text-embedding', last_used: new Date().toISOString() })
           .then(() => {})
-      ).catch(() => {});
-    } catch {
-      // Cache write failure is non-critical
+      ).catch((err: unknown) => { this.runtime.logger.debug(`[memory] cache upsert failed: ${err instanceof Error ? err.message : String(err)}`); });
+    } catch (err) {
+      this.runtime.logger.debug(`[memory] cache write failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     return embedding;
@@ -168,11 +168,13 @@ export class MemoryService extends Service {
           // Reinforce the existing memory instead
           try {
             await this.reinforceMemory(existing[0].id, params.metadata || {});
-          } catch { /* non-critical */ }
+          } catch (err) {
+            this.runtime.logger.debug(`[memory] dedup reinforce failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
           return existing[0] as ItachiMemory;
         }
-      } catch {
-        // Dedup check failed — proceed with insert (non-critical)
+      } catch (err) {
+        this.runtime.logger.warn(`[memory] dedup check failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 

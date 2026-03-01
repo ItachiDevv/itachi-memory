@@ -69,7 +69,7 @@ export const healthMonitorWorker: TaskWorker = {
               await topicsService.sendMessageWithKeyboard(
                 `[Health Alert] Supabase connectivity issue: ${error.message}`,
                 [],
-              ).catch(() => {});
+              ).catch((err: unknown) => { runtime.logger.debug(`[health] alert send failed: ${err instanceof Error ? err.message : String(err)}`); });
             }
           }
         } catch (err) {
@@ -91,7 +91,7 @@ export const healthMonitorWorker: TaskWorker = {
               await topicsService.sendMessageWithKeyboard(
                 `[Health Alert] No machines are currently online (${status.machines.total} registered, 0 online).`,
                 [],
-              ).catch(() => {});
+              ).catch((err: unknown) => { runtime.logger.debug(`[health] alert send failed: ${err instanceof Error ? err.message : String(err)}`); });
             }
           }
         } catch (err) {
@@ -121,7 +121,7 @@ export const healthMonitorWorker: TaskWorker = {
               await topicsService.sendMessageWithKeyboard(
                 `[Health Alert] ${status.staleTasks} task(s) appear stuck (running >10min):\n${taskList}`,
                 [],
-              ).catch(() => {});
+              ).catch((err: unknown) => { runtime.logger.debug(`[health] alert send failed: ${err instanceof Error ? err.message : String(err)}`); });
             }
           }
         } catch (err) {

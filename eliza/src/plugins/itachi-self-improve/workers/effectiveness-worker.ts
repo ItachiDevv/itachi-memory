@@ -74,7 +74,9 @@ export const effectivenessWorker: TaskWorker = {
                 },
               })
               .eq('id', lesson.id);
-          } catch {}
+          } catch (err) {
+            runtime.logger.warn(`[effectiveness] confidence update failed for ${lesson.id}: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
       }
 
