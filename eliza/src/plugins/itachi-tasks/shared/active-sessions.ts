@@ -202,13 +202,18 @@ export function suppressNextLLMMessage(chatId: number, threadId?: number | null)
   _suppressLLMMap.set(key, Date.now());
 }
 
-/** Check (and consume) if the next sendMessage to this chat/thread should be suppressed. */
+/** Check if sendMessage to this chat/thread should be suppressed.
+ *  Non-consuming: blocks ALL sendMessage calls within the TTL window,
+ *  not just the first one. ElizaOS can make multiple LLM calls per
+ *  user message, and each can generate a separate sendMessage call. */
 export function shouldSuppressLLMMessage(chatId: number, threadId?: number | null): boolean {
   const key = `${chatId}:${threadId ?? 'main'}`;
   const ts = _suppressLLMMap.get(key);
   if (ts === undefined) return false;
-  _suppressLLMMap.delete(key);
-  if (Date.now() - ts > SUPPRESS_TTL_MS) return false;
+  if (Date.now() - ts > SUPPRESS_TTL_MS) {
+    _suppressLLMMap.delete(key);
+    return false;
+  }
   return true;
 }
 
