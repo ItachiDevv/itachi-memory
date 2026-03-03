@@ -216,6 +216,25 @@ export const topicInputRelayEvaluator: Evaluator = {
       }
     }
 
+    // Pipe follow-up messages to active sessions directly from validate() and
+    // suppress LLM chatter. Without this, the LLM personality also responds to
+    // messages intended for the SSH session (the handler() path doesn't suppress).
+    if (!content._topicRelayQueued && fullText && !fullText.startsWith('/')) {
+      const session = activeSessions.get(threadId);
+      if (session) {
+        content._topicRelayQueued = true;
+        const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+        suppressNextLLMMessage(chatId, threadId);
+        if (session.mode === 'stream-json') {
+          session.handle.write(wrapStreamJsonInput(fullText));
+        } else {
+          session.handle.write(fullText + '\r');
+        }
+        session.transcript.push({ type: 'user_input', content: fullText, timestamp: Date.now() });
+        runtime.logger.info(`[topic-relay] validate: Piped input (${session.mode}) to session ${session.sessionId}: "${fullText.substring(0, 40)}"`);
+      }
+    }
+
     // Auto-respawn: follow-up message in a session topic where the session has exited.
     // Spawn a new session with the user's message as the prompt (same target/engine/project).
     if (!content._topicRelayQueued && fullText && !fullText.startsWith('/')) {
