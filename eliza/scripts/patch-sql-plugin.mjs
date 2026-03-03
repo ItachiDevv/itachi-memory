@@ -92,3 +92,40 @@ if (patched > 0) {
 } else {
   console.warn('[patch] No patches applied — the plugin may already be patched or the code structure changed');
 }
+
+// ── Patch 3: plugin-openai — fix falsy empty-string check in embedding handler ──
+// Bug: `params.text` is falsy when text is "" (empty string), causing
+// "Invalid input format for embedding" warning on every startup.
+// Fix: use `"text" in params` instead of `params.text`.
+const openaiPath = join(__dirname, '..', 'node_modules', '@elizaos', 'plugin-openai', 'dist', 'node', 'index.node.js');
+if (existsSync(openaiPath)) {
+  let openaiCode = readFileSync(openaiPath, 'utf8');
+  const openaiCjsPath = join(__dirname, '..', 'node_modules', '@elizaos', 'plugin-openai', 'dist', 'cjs', 'index.node.cjs');
+
+  const buggyCheck = 'typeof params === "object" && params.text';
+  const fixedCheck = 'typeof params === "object" && "text" in params';
+
+  let openaiPatched = 0;
+  if (openaiCode.includes(buggyCheck)) {
+    openaiCode = openaiCode.replace(buggyCheck, fixedCheck);
+    writeFileSync(openaiPath, openaiCode, 'utf8');
+    openaiPatched++;
+    console.log('[patch] Patched plugin-openai ESM — fixed empty-string embedding check');
+  }
+
+  if (existsSync(openaiCjsPath)) {
+    let cjsCode = readFileSync(openaiCjsPath, 'utf8');
+    if (cjsCode.includes(buggyCheck)) {
+      cjsCode = cjsCode.replace(buggyCheck, fixedCheck);
+      writeFileSync(openaiCjsPath, cjsCode, 'utf8');
+      openaiPatched++;
+      console.log('[patch] Patched plugin-openai CJS — fixed empty-string embedding check');
+    }
+  }
+
+  if (openaiPatched === 0) {
+    console.log('[patch] plugin-openai already patched or pattern changed — skipping');
+  }
+} else {
+  console.log('[patch] plugin-openai not found — skipping');
+}

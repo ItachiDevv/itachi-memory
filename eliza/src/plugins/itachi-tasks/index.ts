@@ -61,6 +61,26 @@ export const itachiTasksPlugin: Plugin = {
       runtime.logger.warn('itachi-tasks: failed to register callback handler:', err instanceof Error ? err.message : String(err));
     });
 
+    // Graceful shutdown: stop Telegram polling on SIGTERM so rolling deploys
+    // don't cause 409 Conflict (two bots polling simultaneously).
+    const shutdown = async (signal: string) => {
+      runtime.logger.info(`[itachi-tasks] ${signal} received, stopping Telegram polling...`);
+      try {
+        const telegramService = runtime.getService('telegram') as any;
+        const bot = telegramService?.messageManager?.bot;
+        if (bot) {
+          bot.stop(signal);
+          runtime.logger.info('[itachi-tasks] Telegram bot stopped gracefully');
+        }
+      } catch (err) {
+        runtime.logger.warn(`[itachi-tasks] Graceful shutdown error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // Give a moment for cleanup, then let Docker finish the kill
+      setTimeout(() => process.exit(0), 2_000);
+    };
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    process.once('SIGINT', () => shutdown('SIGINT'));
+
     // Register Telegram bot command menu
     const botToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
     if (botToken) {
@@ -93,6 +113,7 @@ export const itachiTasksPlugin: Plugin = {
         { command: 'agents', description: 'Subagents — /agents [msg <id> <message>]' },
         { command: 'health', description: 'System health check' },
         { command: 'brain', description: 'Brain loop status + control' },
+        { command: 'self', description: 'Bot self-inspection (status, env, executor)' },
         { command: 'help', description: 'Show all commands' },
       ];
       try {

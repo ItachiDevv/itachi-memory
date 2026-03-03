@@ -1934,6 +1934,9 @@ async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
 **System**
   /health — System health check (Supabase, machines, tasks)
   /brain — Brain loop status + control (on/off/config)
+  /self — Bot self-inspection (executor, SSH targets, uptime, memory)
+  /self env — Show bot environment variables (filtered, no secrets)
+  /self test-exec — Test executor pipeline (SSH connectivity + CLI check)
 
 **Other**
   /help — Show this message`;

@@ -6,6 +6,7 @@ import { DEFAULT_REPO_BASES } from '../shared/repo-utils.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { activeSessions } from '../shared/active-sessions.js';
 import { browsingSessionMap } from '../utils/directory-browser.js';
+import { getConfig as getBrainConfig } from '../services/brain-loop-service.js';
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -272,8 +273,8 @@ export const coolifyControlAction: Action = {
     const text = stripBotMention(message.content?.text || '');
     if (!text.trim()) return false;
 
-    // Always match explicit slash commands (including /ops and /exec aliases)
-    if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test|ops|exec)\b/.test(text)) {
+    // Always match explicit slash commands (including /ops, /exec, /self aliases)
+    if (/^\/(ssh|deploy|update|logs|containers|restart[-_]bot|ssh[-_]targets|ssh[-_]test|ops|exec|self)\b/.test(text)) {
       runtime.logger.debug(`[COOLIFY_CONTROL] validate: slash command "${text.substring(0, 40)}" → true`);
       return true;
     }
@@ -363,6 +364,13 @@ export const coolifyControlAction: Action = {
       // ── Natural language handling ───────────────────────────────
       let target = extractTarget(text, sshService);
       let intent = detectIntent(text);
+
+      // ── Self-referential variable/status/env queries → self-inspection ──
+      // Intercept BEFORE target resolution to prevent SSH hallucination
+      if (isSelfReferential(text) && /\b(var(?:iable)?s?|env(?:ironment)?|config|settings?|status|health|info|self)\b/i.test(text)) {
+        runtime.logger.info(`[coolify-control] Self-referential status query → self-inspection`);
+        return handleSelfInspection(runtime, text, sshService, callback);
+      }
 
       // Fallback 1: self-referential queries about the bot → coolify
       if (!target && isSelfReferential(text) && sshService.getTarget('coolify')) {
@@ -527,6 +535,11 @@ async function handleSlashCommand(
     // Re-route as the original slash command
     const rewritten = `/${sub}`;
     return await handleSlashCommand(rewritten, sshService, runtime, callback);
+  }
+
+  // /self — bot self-inspection (no SSH needed)
+  if (text.startsWith('/self')) {
+    return handleSelfInspection(runtime, text, sshService, callback);
   }
 
   // /exec @target <cmd> — alias for /ssh <target> <cmd>
@@ -716,4 +729,106 @@ async function handleSelfUpdate(
     if (callback) await callback({ text: `Update response:\n\`\`\`\n${output.substring(0, 1000)}\n\`\`\`` });
     return { success: result.success, data: { output } };
   }
+}
+
+// ── Self-inspection handler ─────────────────────────────────────────
+
+function formatSelfStatus(info: Record<string, unknown>): string {
+  const lines = [
+    '**Bot Self-Inspection**',
+    '',
+    `**Executor**: ${info.executor_enabled === 'true' ? 'ENABLED' : 'DISABLED'}`,
+    `**Executor ID**: ${info.executor_id}`,
+    `**Executor Targets**: ${info.executor_targets}`,
+    `**SSH Targets**: ${(info.ssh_targets as string[])?.join(', ') || '(none)'}`,
+    `**Active Sessions**: ${info.active_sessions}`,
+    `**Brain Loop**: ${info.brain_loop}`,
+    `**Uptime**: ${formatUptime(info.uptime as number)}`,
+    `**Node**: ${info.node_version}`,
+    `**Memory**: ${info.memory_mb} MB heap`,
+  ];
+  return lines.join('\n');
+}
+
+function formatUptime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+async function handleSelfInspection(
+  runtime: IAgentRuntime,
+  text: string,
+  sshService: SSHService,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  const subCommand = text.replace(/^\/self\s*/, '').trim().toLowerCase();
+
+  // /self env — show filtered environment variables
+  if (subCommand === 'env' || /\b(var(?:iable)?s?|env(?:ironment)?)\b/i.test(text)) {
+    const vars = Object.entries(process.env)
+      .filter(([k]) => k.startsWith('ITACHI_') || k.startsWith('COOLIFY_SSH') || k === 'NODE_ENV')
+      .filter(([k]) => !k.includes('KEY') && !k.includes('SECRET') && !k.includes('TOKEN') && !k.includes('PASSWORD'))
+      .map(([k, v]) => `${k}=${v}`)
+      .sort();
+    if (callback) await callback({
+      text: `**Bot Environment** (${vars.length} vars):\n\`\`\`\n${vars.join('\n') || '(no matching vars found)'}\n\`\`\``,
+    });
+    return { success: true, data: { vars } };
+  }
+
+  // /self test-exec — dry-run executor pipeline check
+  if (subCommand === 'test-exec' || subCommand === 'test exec') {
+    const results: string[] = [];
+    const executorEnabled = (process.env.ITACHI_EXECUTOR_ENABLED || '').toLowerCase() === 'true';
+    results.push(`Executor enabled: ${executorEnabled ? 'YES' : 'NO'}`);
+    results.push(`Executor ID: ${process.env.ITACHI_EXECUTOR_ID || 'eliza-executor'}`);
+    results.push(`Max concurrent: ${process.env.ITACHI_EXECUTOR_MAX_CONCURRENT || '3'}`);
+    results.push(`Executor targets: ${process.env.ITACHI_EXECUTOR_TARGETS || '(default: all SSH targets)'}`);
+
+    // Check SSH target connectivity
+    const targets = sshService.getTargets();
+    results.push(`\nSSH targets (${targets.size}):`);
+    for (const [name] of targets) {
+      const start = Date.now();
+      const result = await sshService.exec(name, 'echo ok', 10_000);
+      const elapsed = Date.now() - start;
+      if (result.success && result.stdout.includes('ok')) {
+        results.push(`  ${name}: connected (${elapsed}ms)`);
+        // Check for itachi CLI
+        const cliCheck = await sshService.exec(name, 'which itachi 2>/dev/null || echo "not found"', 10_000);
+        const cliPath = (cliCheck.stdout || '').trim();
+        results.push(`    itachi CLI: ${cliPath === 'not found' ? 'NOT FOUND' : cliPath}`);
+      } else {
+        results.push(`  ${name}: FAILED (${elapsed}ms) — ${(result.stderr || '').substring(0, 80)}`);
+      }
+    }
+
+    if (!executorEnabled) {
+      results.push('\nTo enable the executor, set ITACHI_EXECUTOR_ENABLED=true in your environment.');
+    }
+
+    if (callback) await callback({ text: `**Executor Pipeline Test**\n\`\`\`\n${results.join('\n')}\n\`\`\`` });
+    return { success: true, data: { executorEnabled, targets: targets.size } };
+  }
+
+  // Default: /self — full status overview
+  const brainConfig = getBrainConfig();
+  const info = {
+    executor_enabled: process.env.ITACHI_EXECUTOR_ENABLED || 'false',
+    executor_targets: process.env.ITACHI_EXECUTOR_TARGETS || '(default: all SSH targets)',
+    executor_id: process.env.ITACHI_EXECUTOR_ID || 'eliza-executor',
+    ssh_targets: [...sshService.getTargets().keys()],
+    active_sessions: activeSessions.size,
+    brain_loop: brainConfig.enabled ? 'on' : 'off',
+    uptime: process.uptime(),
+    node_version: process.version,
+    memory_mb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+  };
+
+  if (callback) await callback({ text: formatSelfStatus(info) });
+  return { success: true, data: info };
 }
