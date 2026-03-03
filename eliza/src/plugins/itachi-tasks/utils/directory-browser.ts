@@ -15,8 +15,11 @@ export interface BrowsingSession {
   lastDirListing: string[]; // Cached for numeric selection validation
 }
 
-/** Global map of browsing sessions, keyed by topicId */
-export const browsingSessionMap = new Map<number, BrowsingSession>();
+/** Global map of browsing sessions, keyed by topicId.
+ *  On globalThis so ESM/CJS dual-loading sees the same Map. */
+const _gk = '__itachi_browsingSessionMap';
+if (!(globalThis as any)[_gk]) (globalThis as any)[_gk] = new Map<number, BrowsingSession>();
+export const browsingSessionMap: Map<number, BrowsingSession> = (globalThis as any)[_gk];
 
 // ── SSH directory listing ───────────────────────────────────────────
 export async function listRemoteDirectory(

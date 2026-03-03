@@ -28,30 +28,28 @@ export interface ActiveSession {
   lastUsageCheckTime?: number;
 }
 
-// ── globalThis-backed topic ID sets ─────────────────────────────────
+// ── globalThis-backed shared state ───────────────────────────────────
 // ESM/CJS dual-loading can create separate module caches, causing
 // different parts of the codebase to see different Map instances.
-// These globalThis Sets mirror the keys so cross-module checks
-// (like the chatter-patch in callback-handler.ts) always work.
-const _gkActive = '__itachi_activeTopicIds';
-if (!(globalThis as any)[_gkActive]) (globalThis as any)[_gkActive] = new Set<number>();
-const _activeTopicIds: Set<number> = (globalThis as any)[_gkActive];
+// ALL shared Maps/Sets live on globalThis so every module copy sees
+// the same data. This is critical for the relay→suppress→patch chain.
 
-const _gkSpawning = '__itachi_spawningTopicIds';
-if (!(globalThis as any)[_gkSpawning]) (globalThis as any)[_gkSpawning] = new Set<number>();
-const _spawningTopicIds: Set<number> = (globalThis as any)[_gkSpawning];
+function gGet<T>(key: string, factory: () => T): T {
+  if (!(globalThis as any)[key]) (globalThis as any)[key] = factory();
+  return (globalThis as any)[key] as T;
+}
 
-const _gkClosed = '__itachi_closedTopicIds';
-if (!(globalThis as any)[_gkClosed]) (globalThis as any)[_gkClosed] = new Set<number>();
-const _closedTopicIds: Set<number> = (globalThis as any)[_gkClosed];
+const _activeTopicIds = gGet('__itachi_activeTopicIds', () => new Set<number>());
+const _spawningTopicIds = gGet('__itachi_spawningTopicIds', () => new Set<number>());
+const _closedTopicIds = gGet('__itachi_closedTopicIds', () => new Set<number>());
 
 /**
  * Global map of active sessions, keyed by Telegram topicId for fast lookup.
  * Shared between interactive-session action and TaskExecutorService.
  * The topic-input-relay evaluator checks this to pipe Telegram replies to SSH stdin.
  *
- * Subclassed to auto-maintain a globalThis-backed Set of topic IDs
- * so cross-module checks (chatter patch) survive ESM/CJS dual-loading.
+ * Lives on globalThis so ALL module instances (ESM+CJS) share the same Map.
+ * TrackedSessionMap auto-maintains a globalThis Set of topic IDs as well.
  */
 class TrackedSessionMap extends Map<number, ActiveSession> {
   override set(key: number, value: ActiveSession): this {
@@ -67,13 +65,20 @@ class TrackedSessionMap extends Map<number, ActiveSession> {
     super.clear();
   }
 }
-export const activeSessions: Map<number, ActiveSession> = new TrackedSessionMap();
+
+// The Map itself lives on globalThis — not just the topic ID set.
+// This ensures relay's activeSessions.get(topicId) finds sessions
+// added by interactive-session.ts even under ESM/CJS dual-loading.
+export const activeSessions: Map<number, ActiveSession> = gGet(
+  '__itachi_activeSessions',
+  () => new TrackedSessionMap(),
+);
 
 /** Pending AskUserQuestion prompts waiting for Telegram callback. Key: topicId */
-export const pendingQuestions = new Map<number, {
-  toolId: string;
-  options: string[];
-}>();
+export const pendingQuestions = gGet(
+  '__itachi_pendingQuestions',
+  () => new Map<number, { toolId: string; options: string[] }>(),
+);
 
 /**
  * Topics currently spawning a session (browsing→session transition).
@@ -84,7 +89,7 @@ export const pendingQuestions = new Map<number, {
  * Entries auto-expire after SPAWNING_TIMEOUT_MS as a safety net in case
  * spawnSessionInTopic hangs (SSH connect stall, etc.).
  */
-const _spawningTopicsMap = new Map<number, number>(); // topicId → addedAt timestamp
+const _spawningTopicsMap = gGet('__itachi_spawningTopicsMap', () => new Map<number, number>());
 const SPAWNING_TIMEOUT_MS = 60_000; // 60 seconds max
 
 /** Proxy Set that auto-expires entries after SPAWNING_TIMEOUT_MS */
@@ -127,7 +132,7 @@ export const spawningTopics = {
  * responses that arrive after the session has already been removed from activeSessions.
  * Entries auto-expire after 30 seconds.
  */
-export const recentlyClosedSessions = new Map<number, number>(); // topicId → closedAt timestamp
+export const recentlyClosedSessions = gGet('__itachi_recentlyClosedSessions', () => new Map<number, number>());
 
 const RECENTLY_CLOSED_TTL_MS = 30_000;
 
@@ -146,7 +151,7 @@ export interface ClosedSessionMeta {
 }
 
 const CLOSED_META_TTL_MS = 3_600_000; // 1 hour
-export const closedSessionMeta = new Map<number, ClosedSessionMeta>();
+export const closedSessionMeta = gGet('__itachi_closedSessionMeta', () => new Map<number, ClosedSessionMeta>());
 
 /** Mark a session as recently closed (for chatter suppression + respawn metadata). */
 export function markSessionClosed(topicId: number, meta?: Omit<ClosedSessionMeta, 'closedAt'>): void {
@@ -181,19 +186,12 @@ export function getClosedSessionMeta(topicId: number): ClosedSessionMeta | null 
 }
 
 /**
- * Suppress next LLM-generated message to a specific threadId (General topic = 1).
- * Used when /session commands are processed — the handler sends its own callback text,
- * but the LLM also generates a duplicate response that needs suppression.
- * Entries auto-expire after 15 seconds as a safety net.
+ * Suppress LLM-generated messages to a specific chat/thread.
+ * Set by topic-input-relay when piping messages to SSH sessions — prevents
+ * ElizaOS from also generating an LLM personality response for the same input.
+ * Non-consuming: blocks ALL sendMessage calls within the TTL window.
  */
-// Use globalThis to guarantee the Map is shared across module instances.
-// ESM/CJS dual-loading can create separate module caches, causing
-// suppressNextLLMMessage and shouldSuppressLLMMessage to use different Maps.
-const _globalKey = '__itachi_suppressLLMMap';
-if (!(globalThis as any)[_globalKey]) {
-  (globalThis as any)[_globalKey] = new Map<string, number>();
-}
-const _suppressLLMMap: Map<string, number> = (globalThis as any)[_globalKey];
+const _suppressLLMMap = gGet('__itachi_suppressLLMMap', () => new Map<string, number>());
 const SUPPRESS_TTL_MS = 180_000; // 180s — LLM generation can take 60-120s under load
 
 /** Mark that the next LLM-generated sendMessage to this chat/thread should be suppressed. */
