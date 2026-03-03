@@ -224,7 +224,11 @@ export const topicInputRelayEvaluator: Evaluator = {
       if (session) {
         content._topicRelayQueued = true;
         const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+        // Suppress chatter in BOTH the session topic AND General — the ElizaOS
+        // Telegram plugin sometimes routes LLM responses to General (threadId=undefined)
+        // instead of the session topic where the user's message originated.
         suppressNextLLMMessage(chatId, threadId);
+        suppressNextLLMMessage(chatId, null);
         if (session.mode === 'stream-json') {
           session.handle.write(wrapStreamJsonInput(fullText));
         } else {

@@ -149,7 +149,7 @@ if (!(globalThis as any)[_globalKey]) {
   (globalThis as any)[_globalKey] = new Map<string, number>();
 }
 const _suppressLLMMap: Map<string, number> = (globalThis as any)[_globalKey];
-const SUPPRESS_TTL_MS = 60_000; // 60s — LLM generation can take 15-30s
+const SUPPRESS_TTL_MS = 180_000; // 180s — LLM generation can take 60-120s under load
 
 /** Mark that the next LLM-generated sendMessage to this chat/thread should be suppressed. */
 export function suppressNextLLMMessage(chatId: number, threadId?: number | null): void {
