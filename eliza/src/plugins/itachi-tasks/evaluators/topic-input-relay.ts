@@ -141,18 +141,31 @@ export const topicInputRelayEvaluator: Evaluator = {
 
     // Handle keyboard control commands in active sessions (validate path for reliability)
     if (!content._topicRelayQueued) {
-      const session = activeSessions.get(threadId);
-      if (session) {
-        const ctrl = resolveControlCommand(fullText);
-        if (ctrl) {
+      const ctrl = resolveControlCommand(fullText);
+      if (ctrl) {
+        // Try exact topic match first, then fallback to any active session
+        // (handles /exit sent from General which Telegram routes away from session topic)
+        let session = activeSessions.get(threadId);
+        if (!session && activeSessions.size > 0) {
+          // Find most recently started session
+          for (const s of activeSessions.values()) {
+            if (!session || s.startedAt > session.startedAt) session = s;
+          }
+          runtime.logger.info(`[topic-relay] Routing ${ctrl.label} from threadId=${threadId} to session in topic ${session!.topicId}`);
+        }
+        if (session) {
           content._topicRelayQueued = true;
           session.handle.write(ctrl.bytes);
           session.transcript.push({ type: 'user_input', content: ctrl.label, timestamp: Date.now() });
           runtime.logger.info(`[topic-relay] Sent ${ctrl.label} to session ${session.sessionId}`);
-          // Send feedback to user
           const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
           if (topicsService) {
-            topicsService.sendToTopic(threadId, `Sent ${ctrl.label}`).catch((err: unknown) => { runtime.logger.debug(`[topic-relay] sendToTopic failed: ${err instanceof Error ? err.message : String(err)}`); });
+            topicsService.sendToTopic(session.topicId, `Sent ${ctrl.label}`).catch((err: unknown) => { runtime.logger.debug(`[topic-relay] sendToTopic failed: ${err instanceof Error ? err.message : String(err)}`); });
+            // Suppress LLM chatter in source thread if routed from different topic
+            if (session.topicId !== threadId) {
+              const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+              suppressNextLLMMessage(chatId, threadId);
+            }
           }
           return true;
         }
