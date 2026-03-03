@@ -21,10 +21,12 @@ import {
 /**
  * Map of Telegram text commands → raw bytes to send to the SSH session's stdin.
  * Users type these in the topic chat to send terminal control signals.
+ * Commands with `killSession: true` will kill the SSH process instead of
+ * writing bytes (needed for stream-json mode where raw Ctrl+D doesn't work).
  */
-const CONTROL_COMMANDS: Record<string, { bytes: string; label: string }> = {
+const CONTROL_COMMANDS: Record<string, { bytes: string; label: string; killSession?: boolean }> = {
   '/ctrl+c':  { bytes: '\x03',   label: 'Ctrl+C (interrupt)' },
-  '/ctrl+d':  { bytes: '\x04',   label: 'Ctrl+D (EOF/exit)' },
+  '/ctrl+d':  { bytes: '\x04',   label: 'Ctrl+D (EOF/exit)', killSession: true },
   '/ctrl+z':  { bytes: '\x1a',   label: 'Ctrl+Z (suspend)' },
   '/ctrl+\\': { bytes: '\x1c',   label: 'Ctrl+\\ (SIGQUIT)' },
   '/esc':     { bytes: '\x1b',   label: 'Escape' },
@@ -35,11 +37,16 @@ const CONTROL_COMMANDS: Record<string, { bytes: string; label: string }> = {
   // Aliases
   '/interrupt': { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
   '/kill':      { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
-  '/exit':      { bytes: '\x04', label: 'Ctrl+D (EOF/exit)' },
+  '/exit':      { bytes: '\x04', label: 'Ctrl+D (EOF/exit)', killSession: true },
   '/stop':      { bytes: '\x03', label: 'Ctrl+C (interrupt)' },
 };
 
-function resolveControlCommand(text: string): { bytes: string; label: string } | null {
+/** Dedup set: prevents duplicate control command execution when Telegram
+ *  delivers the same /exit to both the session topic and General. */
+const _recentControlCmds = new Map<string, number>(); // key → timestamp
+const CONTROL_DEDUP_MS = 5_000;
+
+function resolveControlCommand(text: string): { bytes: string; label: string; killSession?: boolean } | null {
   const lower = text.toLowerCase().trim();
   return CONTROL_COMMANDS[lower] || null;
 }
@@ -147,7 +154,6 @@ export const topicInputRelayEvaluator: Evaluator = {
         // (handles /exit sent from General which Telegram routes away from session topic)
         let session = activeSessions.get(threadId);
         if (!session && activeSessions.size > 0) {
-          // Find most recently started session
           for (const s of activeSessions.values()) {
             if (!session || s.startedAt > session.startedAt) session = s;
           }
@@ -155,7 +161,35 @@ export const topicInputRelayEvaluator: Evaluator = {
         }
         if (session) {
           content._topicRelayQueued = true;
-          session.handle.write(ctrl.bytes);
+
+          // Dedup: Telegram delivers /exit@botname to both session topic AND General,
+          // creating separate Memory objects. Prevent double-execution.
+          const dedupKey = `${session.sessionId}:${ctrl.label}`;
+          const lastSent = _recentControlCmds.get(dedupKey);
+          if (lastSent && Date.now() - lastSent < CONTROL_DEDUP_MS) {
+            runtime.logger.info(`[topic-relay] Skipping duplicate ${ctrl.label} for session ${session.sessionId}`);
+            // Still suppress LLM chatter on the duplicate delivery
+            if (session.topicId !== threadId) {
+              const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+              suppressNextLLMMessage(chatId, threadId);
+            }
+            return true;
+          }
+          _recentControlCmds.set(dedupKey, Date.now());
+          // Prune old entries
+          for (const [k, ts] of _recentControlCmds) {
+            if (Date.now() - ts > CONTROL_DEDUP_MS) _recentControlCmds.delete(k);
+          }
+
+          // For /exit and /ctrl+d: kill the SSH process directly.
+          // In stream-json mode, writing raw \x04 doesn't trigger EOF —
+          // Claude reads structured JSON from stdin, not raw terminal bytes.
+          if (ctrl.killSession) {
+            runtime.logger.info(`[topic-relay] Killing session ${session.sessionId} via /exit`);
+            try { session.handle.kill(); } catch { /* best-effort */ }
+          } else {
+            session.handle.write(ctrl.bytes);
+          }
           session.transcript.push({ type: 'user_input', content: ctrl.label, timestamp: Date.now() });
           runtime.logger.info(`[topic-relay] Sent ${ctrl.label} to session ${session.sessionId}`);
           const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
