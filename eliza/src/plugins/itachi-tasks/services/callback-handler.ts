@@ -406,6 +406,24 @@ async function handleBrowseCallback(
   // Refresh TTL
   session.createdAt = Date.now();
 
+  // Pagination: browse:page:N → re-render current listing at page N
+  if (action.startsWith('page:')) {
+    const page = parseInt(action.substring(5), 10);
+    if (isNaN(page) || page < 0) return;
+    const dirs = session.lastDirListing;
+    const canGoBack = session.currentPath !== '~' && session.currentPath !== '/';
+    const keyboard = buildBrowsingKeyboard(dirs, canGoBack, page);
+    await topicsService.editMessageWithKeyboard(
+      chatId, messageId,
+      formatDirectoryListing(session.currentPath, dirs, session.target, page),
+      keyboard,
+    );
+    return;
+  }
+
+  // No-op (page indicator button)
+  if (action === 'noop') return;
+
   if (action === 'start') {
     // Show engine picker instead of spawning directly.
     // Store browse context so the sf:s: handler can spawn in this topic.
@@ -692,11 +710,29 @@ async function handleTaskFlowCallback(
     return;
   }
 
-  // tf:r:<idx> — repo selected
+  // tf:r:<idx> or tf:r:pg:<page> — repo selected or pagination
   if (key === 'r') {
+    if (value === 'noop') return;
+
+    // Pagination: re-render repo list at page N
+    if (value.startsWith('pg:')) {
+      const page = parseInt(value.substring(3), 10);
+      if (isNaN(page) || page < 0) return;
+      const dirs = flow.cachedDirs || [];
+      const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+      const startDir = getStartingDir(sshTarget);
+      const keyboard = buildDirKeyboard(dirs, 'tf:r', false, page);
+      await topicsService.editMessageWithKeyboard(
+        chatId, messageId,
+        `Task: ${flow.taskName}\nMachine: ${flow.machine}\n\nSelect repo from ${startDir}:`,
+        keyboard,
+      );
+      return;
+    }
+
     const idx = parseInt(value, 10);
     const dirs = flow.cachedDirs || [];
-    if (idx < 0 || idx >= dirs.length) return;
+    if (isNaN(idx) || idx < 0 || idx >= dirs.length) return;
 
     const selected = dirs[idx];
     const sshTarget = resolveSSHTarget(flow.machine || 'mac');
@@ -810,12 +846,27 @@ async function handleSessionFlowCallback(
     return;
   }
 
-  // sf:r:<idx> or sf:r:here — repo/folder selected
+  // sf:r:<idx> or sf:r:here or sf:r:pg:<page> — repo/folder selected
   if (key === 'r') {
+    if (value === 'noop') return;
     if (!sshService) return;
 
     const sshTarget = resolveSSHTarget(flow.machine || 'mac');
     const startDir = getStartingDir(sshTarget);
+
+    // Pagination: re-render repo list at page N
+    if (value.startsWith('pg:')) {
+      const page = parseInt(value.substring(3), 10);
+      if (isNaN(page) || page < 0) return;
+      const dirs = flow.cachedDirs || [];
+      const keyboard = buildDirKeyboard(dirs, 'sf:r', true, page);
+      await topicsService.editMessageWithKeyboard(
+        chatId, messageId,
+        `Session on ${flow.machine}\n\nSelect folder from ${startDir}:`,
+        keyboard,
+      );
+      return;
+    }
 
     if (value === 'here') {
       flow.repoPath = startDir;
@@ -823,7 +874,7 @@ async function handleSessionFlowCallback(
     } else {
       const idx = parseInt(value, 10);
       const dirs = flow.cachedDirs || [];
-      if (idx < 0 || idx >= dirs.length) return;
+      if (isNaN(idx) || idx < 0 || idx >= dirs.length) return;
 
       const selected = dirs[idx];
       const selectedPath = `${startDir}/${selected}`;
@@ -836,7 +887,7 @@ async function handleSessionFlowCallback(
         flow.cachedDirs = subDirs;
         flow.step = 'select_subfolder';
 
-        const keyboard = buildDirKeyboard(subDirs, 'sf:d', true);
+        const keyboard = buildDirKeyboard(subDirs, 'sf:d', true, 0, 'sf:d:back');
         await topicsService.editMessageWithKeyboard(
           chatId, messageId,
           `Session on ${flow.machine}\nPath: ${selectedPath}\n\nSelect subfolder or start here:`,
@@ -861,16 +912,52 @@ async function handleSessionFlowCallback(
     return;
   }
 
-  // sf:d:<idx>|here — subfolder selected
+  // sf:d:<idx>|here|back|pg:<page> — subfolder selected or navigation
   if (key === 'd') {
+    if (value === 'noop') return;
     if (!sshService) return;
+
+    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+    const startDir = getStartingDir(sshTarget);
+
+    // Go back: re-list repos from startDir
+    if (value === 'back') {
+      const { dirs } = await listRemoteDirectory(sshService, sshTarget, startDir);
+      flow.cachedDirs = dirs;
+      flow.step = 'select_repo';
+      flow.repoPath = undefined as any;
+      flow.project = undefined as any;
+
+      const keyboard = buildDirKeyboard(dirs, 'sf:r', true);
+      await topicsService.editMessageWithKeyboard(
+        chatId, messageId,
+        `Session on ${flow.machine}\n\nSelect folder from ${startDir}:`,
+        keyboard,
+      );
+      setFlow(chatId, userId, flow);
+      return;
+    }
+
+    // Pagination: re-render subfolder list at page N
+    if (value.startsWith('pg:')) {
+      const page = parseInt(value.substring(3), 10);
+      if (isNaN(page) || page < 0) return;
+      const dirs = flow.cachedDirs || [];
+      const keyboard = buildDirKeyboard(dirs, 'sf:d', true, page, 'sf:d:back');
+      await topicsService.editMessageWithKeyboard(
+        chatId, messageId,
+        `Session on ${flow.machine}\nPath: ${flow.repoPath}\n\nSelect subfolder or start here:`,
+        keyboard,
+      );
+      return;
+    }
 
     if (value === 'here') {
       // Use current repoPath
     } else {
       const idx = parseInt(value, 10);
       const dirs = flow.cachedDirs || [];
-      if (idx < 0 || idx >= dirs.length) return;
+      if (isNaN(idx) || idx < 0 || idx >= dirs.length) return;
       flow.repoPath = `${flow.repoPath}/${dirs[idx]}`;
     }
 
@@ -961,21 +1048,50 @@ function buildDirKeyboard(
   dirs: string[],
   prefix: string,
   includeHere = false,
+  page = 0,
+  backCallback?: string,
 ): Array<Array<{ text: string; callback_data: string }>> {
+  const PAGE_SIZE = 16;
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
 
-  if (includeHere) {
-    rows.push([{ text: '\u2705 Start here', callback_data: `${prefix}:here` }]);
+  // Action row: Start here + optional Go back
+  if (includeHere || backCallback) {
+    const actionRow: Array<{ text: string; callback_data: string }> = [];
+    if (includeHere) {
+      actionRow.push({ text: '\u2705 Start here', callback_data: `${prefix}:here` });
+    }
+    if (backCallback) {
+      actionRow.push({ text: '\u2b06 Go back', callback_data: backCallback });
+    }
+    rows.push(actionRow);
   }
 
+  // Paginate directories
+  const totalPages = Math.ceil(dirs.length / PAGE_SIZE) || 1;
+  const start = page * PAGE_SIZE;
+  const end = Math.min(start + PAGE_SIZE, dirs.length);
+
   // 2 buttons per row
-  for (let i = 0; i < dirs.length; i += 2) {
+  for (let i = start; i < end; i += 2) {
     const row: Array<{ text: string; callback_data: string }> = [];
     row.push({ text: `\ud83d\udcc1 ${dirs[i]}`, callback_data: `${prefix}:${i}` });
-    if (i + 1 < dirs.length) {
+    if (i + 1 < end) {
       row.push({ text: `\ud83d\udcc1 ${dirs[i + 1]}`, callback_data: `${prefix}:${i + 1}` });
     }
     rows.push(row);
+  }
+
+  // Pagination row
+  if (totalPages > 1) {
+    const navRow: Array<{ text: string; callback_data: string }> = [];
+    if (page > 0) {
+      navRow.push({ text: '\u2b05 Prev', callback_data: `${prefix}:pg:${page - 1}` });
+    }
+    navRow.push({ text: `${page + 1}/${totalPages}`, callback_data: `${prefix}:noop` });
+    if (page < totalPages - 1) {
+      navRow.push({ text: 'Next \u27a1', callback_data: `${prefix}:pg:${page + 1}` });
+    }
+    rows.push(navRow);
   }
 
   return rows;

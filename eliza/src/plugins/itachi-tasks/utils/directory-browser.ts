@@ -1,5 +1,8 @@
 import type { SSHService } from '../services/ssh-service.js';
 
+/** Max directory entries per keyboard page (8 rows × 2 buttons) */
+export const DIRS_PER_PAGE = 16;
+
 // ── Browsing session state ──────────────────────────────────────────
 export interface BrowsingSession {
   topicId: number;
@@ -24,8 +27,8 @@ export async function listRemoteDirectory(
   try {
     const isWindows = sshService.isWindowsTarget(target);
     const cmd = isWindows
-      ? `Get-ChildItem -Directory -Path '${path}' -ErrorAction SilentlyContinue | Select-Object -First 30 -ExpandProperty Name`
-      : `ls -1 -p ${path} 2>/dev/null | grep '/$' | head -30`;
+      ? `Get-ChildItem -Directory -Path '${path}' -ErrorAction SilentlyContinue | Select-Object -First 50 -ExpandProperty Name`
+      : `ls -1 -p ${path} 2>/dev/null | grep '/$' | head -50`;
 
     const result = await sshService.exec(target, cmd, 10_000);
     if (!result.success && !result.stdout) {
@@ -42,7 +45,11 @@ export async function listRemoteDirectory(
 }
 
 // ── Format directory listing for Telegram ───────────────────────────
-export function formatDirectoryListing(path: string, dirs: string[], _target: string): string {
+export function formatDirectoryListing(path: string, dirs: string[], _target: string, page = 0): string {
+  const totalPages = Math.ceil(dirs.length / DIRS_PER_PAGE) || 1;
+  const start = page * DIRS_PER_PAGE;
+  const end = Math.min(start + DIRS_PER_PAGE, dirs.length);
+
   const lines: string[] = [
     `\ud83d\udcc2 ${path}`,
     '',
@@ -51,8 +58,11 @@ export function formatDirectoryListing(path: string, dirs: string[], _target: st
   if (dirs.length === 0) {
     lines.push('(no subdirectories)');
   } else {
-    for (let i = 0; i < dirs.length; i++) {
+    for (let i = start; i < end; i++) {
       lines.push(`${i + 1}. \ud83d\udcc1 ${dirs[i]}`);
+    }
+    if (totalPages > 1) {
+      lines.push('', `Page ${page + 1}/${totalPages} (${dirs.length} folders)`);
     }
   }
 
@@ -64,6 +74,7 @@ export function formatDirectoryListing(path: string, dirs: string[], _target: st
 export function buildBrowsingKeyboard(
   dirs: string[],
   canGoBack: boolean,
+  page = 0,
 ): Array<Array<{ text: string; callback_data: string }>> {
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
 
@@ -76,14 +87,32 @@ export function buildBrowsingKeyboard(
   }
   rows.push(topRow);
 
+  // Paginate directories
+  const totalPages = Math.ceil(dirs.length / DIRS_PER_PAGE) || 1;
+  const start = page * DIRS_PER_PAGE;
+  const end = Math.min(start + DIRS_PER_PAGE, dirs.length);
+
   // Directory buttons, 2 per row
-  for (let i = 0; i < dirs.length; i += 2) {
+  for (let i = start; i < end; i += 2) {
     const row: Array<{ text: string; callback_data: string }> = [];
     row.push({ text: `\ud83d\udcc1 ${dirs[i]}`, callback_data: `browse:${i}` });
-    if (i + 1 < dirs.length) {
+    if (i + 1 < end) {
       row.push({ text: `\ud83d\udcc1 ${dirs[i + 1]}`, callback_data: `browse:${i + 1}` });
     }
     rows.push(row);
+  }
+
+  // Pagination row
+  if (totalPages > 1) {
+    const navRow: Array<{ text: string; callback_data: string }> = [];
+    if (page > 0) {
+      navRow.push({ text: '\u2b05 Prev', callback_data: `browse:page:${page - 1}` });
+    }
+    navRow.push({ text: `${page + 1}/${totalPages}`, callback_data: 'browse:noop' });
+    if (page < totalPages - 1) {
+      navRow.push({ text: 'Next \u27a1', callback_data: `browse:page:${page + 1}` });
+    }
+    rows.push(navRow);
   }
 
   return rows;
