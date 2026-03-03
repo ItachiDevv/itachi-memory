@@ -166,17 +166,30 @@ function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any)
     ) {
       const threadId = extra?.message_thread_id;
       const preview = String(text).substring(0, 80).replace(/\n/g, ' ');
-      runtime.logger.info(`[chatter-patch] sendMessage: chatId=${chatId} threadId=${threadId} text="${preview}"`);
-      // Block LLM chatter in active session/browsing topics
-      if (threadId && (browsingSessionMap.has(threadId) || isSessionTopic(threadId))) {
+      const fakeResult = { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+
+      // Guard 1: Block LLM chatter when ANY session or browsing session is active.
+      // ElizaOS LLM responses go through sendMessage; our own session output uses
+      // sendToTopic() (direct HTTP) which bypasses this patch entirely.
+      // This is the primary defense — no TTL, no race conditions.
+      if (activeSessions.size > 0 || browsingSessionMap.size > 0) {
+        runtime.logger.info(`[chatter-suppression] Blocked (active=${activeSessions.size} browsing=${browsingSessionMap.size}): "${preview}"`);
+        return fakeResult;
+      }
+
+      // Guard 2: Block chatter in topics with explicit threadId (future-proofing
+      // for ElizaOS versions that may set message_thread_id).
+      if (threadId && isSessionTopic(threadId)) {
         runtime.logger.info(`[chatter-suppression] Blocked topic chatter threadId=${threadId}`);
-        return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+        return fakeResult;
       }
-      // Block one-shot LLM chatter in General (from /session commands)
+
+      // Guard 3: Block one-shot LLM chatter (from /session commands in General).
       if (shouldSuppressLLMMessage(Number(chatId), threadId ?? null)) {
-        runtime.logger.info(`[chatter-suppression] Blocked General chatter: "${preview}"`);
-        return { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
+        runtime.logger.info(`[chatter-suppression] Blocked suppress-key chatter: "${preview}"`);
+        return fakeResult;
       }
+
       return originalSendMessage.call(this, chatId, text, extra);
     };
 
