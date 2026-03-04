@@ -245,8 +245,20 @@ async function executeCustom(
 }
 
 /**
+ * Framework/generic actions that should NEVER be matched by the scheduler.
+ * These validate true for almost everything but do nothing useful for scheduled commands.
+ */
+const SKIP_ACTIONS = new Set([
+  'REPLY', 'IGNORE', 'NONE',
+  'UPDATE_ENTITY', 'FOLLOW_ROOM', 'UNFOLLOW_ROOM',
+  'MUTE_ROOM', 'UNMUTE_ROOM',
+  'SEND_MESSAGE', 'WAIT', 'CONTINUE',
+]);
+
+/**
  * Try to find a registered action whose validate() returns true for the command,
  * then call its handler directly. Fast path — no LLM needed.
+ * Skips generic framework actions that validate true for everything.
  */
 async function tryDirectActionDispatch(
   runtime: IAgentRuntime,
@@ -256,6 +268,8 @@ async function tryDirectActionDispatch(
   const actions = runtime.actions || [];
 
   for (const action of actions) {
+    if (SKIP_ACTIONS.has(action.name)) continue;
+
     try {
       const valid = await action.validate(runtime, message);
       if (valid) {
