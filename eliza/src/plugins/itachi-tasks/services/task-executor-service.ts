@@ -755,10 +755,12 @@ export class TaskExecutorService extends Service {
         `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
         // Load API keys
         `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
-        // Use cmd.exe for the pipe — PowerShell pipes don't close stdin properly
-        // for external executables via SSH, but cmd.exe `type file | exe` works.
-        // Env vars set above persist into the cmd child process.
-        `cmd /c "type ${remotePath.replace(/'/g, '')} | ${engineCmd} ${cliFlags}"`,
+        // PowerShell pipes to external exes hang via SSH (stdin never closes).
+        // Workaround: write a .cmd script that uses cmd.exe pipe (which works),
+        // then invoke it from PowerShell. Env vars persist into child process.
+        `$batFile = '${remotePath}'.Replace('.txt','.cmd')`,
+        `Set-Content -Path $batFile -Value ('type ' + '${remotePath}' + ' | ${engineCmd} ${cliFlags}') -Encoding ASCII`,
+        `cmd /c $batFile`,
       ].join('; ');
     } else {
       // Check if SSH target connects as root — if so, we need to run claude as a
@@ -968,7 +970,9 @@ export class TaskExecutorService extends Service {
           `$env:ITACHI_ENABLED='1'`,
           `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
           `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
-          `cmd /c "type ${remotePath.replace(/'/g, '')} | claude --continue --dangerously-skip-permissions -p"`,
+          `$batFile = '${remotePath}'.Replace('.txt','.cmd')`,
+          `Set-Content -Path $batFile -Value ('type ' + '${remotePath}' + ' | claude --continue --dangerously-skip-permissions -p') -Encoding ASCII`,
+          `cmd /c $batFile`,
         ].join('; ')
       : (() => {
           const resumeTarget = sshService.getTarget(sshTarget);

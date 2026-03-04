@@ -711,7 +711,7 @@ describe('Windows engine resolution', () => {
 // ============================================================
 
 describe('Windows SSH command construction', () => {
-  it('should use cmd /c type pipe with resolved engine', () => {
+  it('should write .cmd batch file and invoke via cmd /c', () => {
     const engineCmd = 'codex';
     const cliFlags = '--dangerously-bypass-approvals-and-sandbox';
     const remotePath = 'C:\\Users\\itachi\\.itachi\\prompt.txt';
@@ -721,36 +721,46 @@ describe('Windows SSH command construction', () => {
       `cd '${workspace}'`,
       `$env:ITACHI_TASK_ID='test-id'`,
       `$env:ITACHI_ENABLED='1'`,
-      `cmd /c "type ${remotePath} | ${engineCmd} ${cliFlags}"`,
+      `$batFile = '${remotePath}'.Replace('.txt','.cmd')`,
+      `Set-Content -Path $batFile -Value ('type ' + '${remotePath}' + ' | ${engineCmd} ${cliFlags}') -Encoding ASCII`,
+      `cmd /c $batFile`,
     ].join('; ');
 
-    expect(sshCommand).toContain('cmd /c');
-    expect(sshCommand).toContain('type');
+    expect(sshCommand).toContain('Set-Content');
+    expect(sshCommand).toContain('.cmd');
+    expect(sshCommand).toContain('cmd /c $batFile');
     expect(sshCommand).toContain('codex --dangerously-bypass-approvals-and-sandbox');
   });
 
-  it('should use cmd /c type pipe with gemini --yolo', () => {
+  it('should use batch file approach for gemini --yolo', () => {
     const engineCmd = 'gemini';
     const cliFlags = '--yolo';
     const remotePath = 'C:\\temp\\prompt.txt';
 
-    const sshCommand = `cmd /c "type ${remotePath} | ${engineCmd} ${cliFlags}"`;
+    const sshCommand = [
+      `$batFile = '${remotePath}'.Replace('.txt','.cmd')`,
+      `Set-Content -Path $batFile -Value ('type ' + '${remotePath}' + ' | ${engineCmd} ${cliFlags}') -Encoding ASCII`,
+      `cmd /c $batFile`,
+    ].join('; ');
 
-    expect(sshCommand).toContain('cmd /c');
     expect(sshCommand).toContain('gemini --yolo');
+    expect(sshCommand).toContain('cmd /c $batFile');
   });
 
-  it('should use cmd /c type pipe with claude flags', () => {
+  it('should avoid PowerShell pipe (which hangs via SSH)', () => {
     const engineCmd = 'claude';
     const cliFlags = '--dangerously-skip-permissions -p';
     const remotePath = 'C:\\temp\\prompt.txt';
 
-    const sshCommand = `cmd /c "type ${remotePath} | ${engineCmd} ${cliFlags}"`;
+    const sshCommand = [
+      `$batFile = '${remotePath}'.Replace('.txt','.cmd')`,
+      `Set-Content -Path $batFile -Value ('type ' + '${remotePath}' + ' | ${engineCmd} ${cliFlags}') -Encoding ASCII`,
+      `cmd /c $batFile`,
+    ].join('; ');
 
-    expect(sshCommand).toContain('cmd /c');
-    expect(sshCommand).toContain('claude --dangerously-skip-permissions -p');
-    // Uses cmd.exe pipe, NOT PowerShell pipe (which hangs)
+    // Uses cmd.exe batch file, NOT PowerShell pipe
     expect(sshCommand).not.toContain('Get-Content');
+    expect(sshCommand).toContain('claude --dangerously-skip-permissions -p');
   });
 });
 
