@@ -5,7 +5,7 @@ import { TaskService, type ItachiTask, generateTaskTitle } from './task-service.
 import { TelegramTopicsService } from './telegram-topics.js';
 import { MachineRegistryService } from './machine-registry.js';
 import { activeSessions, markSessionClosed } from '../shared/active-sessions.js';
-import { resolveRepoPathByProject, EXTRA_REPO_BASES, DEFAULT_REPO_BASES } from '../shared/repo-utils.js';
+import { resolveRepoPathByProject, EXTRA_REPO_BASES, DEFAULT_REPO_BASES, MACHINE_TO_SSH_TARGET } from '../shared/repo-utils.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
@@ -229,12 +229,17 @@ export class TaskExecutorService extends Service {
       }
     }
 
-    // Clean up stale alias entries from the old registration scheme
+    // Clean up alias entries that should not exist as separate DB rows.
+    // Any key in MACHINE_TO_SSH_TARGET that maps to a DIFFERENT value is an alias.
     try {
-      const cutoff = new Date(Date.now() - 120_000).toISOString();
-      await registry.deleteStaleEntries(cutoff);
+      const aliasIds = Object.entries(MACHINE_TO_SSH_TARGET)
+        .filter(([key, value]) => key !== value)
+        .map(([key]) => key);
+      if (aliasIds.length > 0) {
+        await registry.deleteByIds(aliasIds);
+      }
     } catch {
-      // Non-critical — stale entries will be cleaned next heartbeat
+      // Non-critical
     }
   }
 

@@ -262,6 +262,15 @@ export class MachineRegistryService extends Service {
   }
 
   /**
+   * Delete machine entries by their IDs.
+   * Used to remove alias entries that should not exist as separate rows.
+   */
+  async deleteByIds(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.supabase.from('machine_registry').delete().in('machine_id', ids);
+  }
+
+  /**
    * Update engine priority for a machine.
    */
   async updateEnginePriority(machineId: string, enginePriority: string[]): Promise<MachineRecord> {
