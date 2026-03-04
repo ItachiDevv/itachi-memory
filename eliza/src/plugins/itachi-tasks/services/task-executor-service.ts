@@ -1008,9 +1008,10 @@ export class TaskExecutorService extends Service {
 
   // ── Post-Completion Pipeline ─────────────────────────────────────────
 
-  /** Wrap a shell command with `su - itachi` when SSH target connects as root. */
+  /** Wrap a shell command with `su - itachi` when SSH target connects as root (Unix only). */
   private wrapForUser(sshTarget: string, cmd: string): string {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
+    if (sshService.isWindowsTarget(sshTarget)) return cmd;
     const target = sshService.getTarget(sshTarget);
     if (target?.user === 'root') {
       return `su - itachi -s /bin/bash -c '${cmd.replace(/'/g, "'\\''")}'`;
@@ -1036,13 +1037,23 @@ export class TaskExecutorService extends Service {
 
     try {
       // Build push command: inject GITHUB_TOKEN to avoid credential helper issues (wincredman fails via SSH)
+      const isWindowsTarget = sshService.isWindowsTarget(sshTarget);
       const buildPushCmd = (ws: string) => {
         const token = process.env.GITHUB_TOKEN;
         if (token) {
-          // Get remote URL, inject token, push
+          if (isWindowsTarget) {
+            // PowerShell: get remote URL, inject token, push
+            return `cd '${ws}'; $remote = git -c safe.directory='*' remote get-url origin 2>$null; ` +
+              `$authed = $remote -replace 'https://github.com/','https://${token}@github.com/'; ` +
+              `git -c safe.directory='*' -c credential.helper='' push $authed HEAD 2>&1`;
+          }
+          // Bash: get remote URL, inject token, push
           return `cd ${ws} && remote_url=$(git -c safe.directory='*' remote get-url origin 2>/dev/null) && ` +
             `authed_url=$(echo "$remote_url" | sed "s|https://github.com/|https://${token}@github.com/|") && ` +
             `git -c safe.directory='*' -c credential.helper='' push "$authed_url" HEAD 2>&1`;
+        }
+        if (isWindowsTarget) {
+          return `cd '${ws}'; git -c safe.directory='*' push -u origin HEAD 2>&1`;
         }
         return `cd ${ws} && git -c safe.directory='*' push -u origin HEAD 2>&1`;
       };
