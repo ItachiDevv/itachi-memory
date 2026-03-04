@@ -21,6 +21,8 @@ function stripAnsi(text: string): string {
 }
 
 // ── TUI noise filter (same as interactive-session.ts) ────────────────
+// Filters out TUI-specific noise (box drawing, spinners, progress indicators)
+// while preserving actual content (tool output, code, results).
 function filterTuiNoise(text: string): string {
   const lines = text.split('\n');
   const kept: string[] = [];
@@ -40,17 +42,32 @@ function filterTuiNoise(text: string): string {
     // Push stripped (not raw) line so box chars and whitespace are gone
     kept.push(stripped);
   }
-  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  // Debug: log when significant content is completely filtered out
+  if (!result && text.length > 50) {
+    const preview = text.substring(0, 120).replace(/\n/g, '\\n');
+    console.warn(`[executor:filter] Dropped ${text.length} chars of output. Preview: ${preview}`);
+  }
+  return result;
 }
 
 // Machine alias → SSH target imported from shared module
 import { resolveSSHTarget, getMachineIdsForTarget } from '../shared/repo-utils.js';
 
-// ── Engine wrappers ──────────────────────────────────────────────────
+// ── Engine commands ──────────────────────────────────────────────────
+// Use itachi wrappers when available (they set up hooks + env vars).
+// Fall back to direct CLI commands if wrappers aren't found.
 const ENGINE_WRAPPERS: Record<string, string> = {
   claude: 'itachi',
   codex: 'itachic',
   gemini: 'itachig',
+};
+
+// Direct CLI commands (no wrapper needed) — used as fallback
+const ENGINE_DIRECT: Record<string, string> = {
+  claude: 'claude',
+  codex: 'codex',
+  gemini: 'gemini',
 };
 
 /**
@@ -440,10 +457,10 @@ export class TaskExecutorService extends Service {
       const prompt = await this.buildPrompt(task);
 
       // 7. Resolve engine command
-      const engineCmd = await this.resolveEngineCommand(sshTarget);
+      const { cmd: engineCmd, engine } = await this.resolveEngineCommand(sshTarget);
 
       // 8. Start SSH session
-      await this.startSession(task, sshTarget, workspace, prompt, engineCmd, topicId || 0);
+      await this.startSession(task, sshTarget, workspace, prompt, engineCmd, engine, topicId || 0);
 
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
@@ -518,15 +535,15 @@ export class TaskExecutorService extends Service {
     // Create worktree directory adjacent to the repo
     const workspacePath = `${repoPath}/../workspaces/${task.project}-${slug}`;
 
-    // Fetch latest
-    await sshService.exec(sshTarget, `cd ${repoPath} && git fetch --all --prune 2>&1`, 30_000);
+    // Fetch latest (safe.directory='*' handles root running on repos owned by another user)
+    await sshService.exec(sshTarget, `cd ${repoPath} && git -c safe.directory='*' fetch --all --prune 2>&1`, 30_000);
 
     // Detect default branch if task.branch is 'main' but repo uses 'master' (or vice versa)
     if (branch === 'main' || branch === 'master') {
       const isWindows = sshService.isWindowsTarget(sshTarget);
       const checkCmd = isWindows
         ? `cd '${repoPath}'; if (git rev-parse --verify origin/${branch} 2>$null) { Write-Output 'OK' } else { Write-Output 'MISSING' }`
-        : `cd ${repoPath} && git rev-parse --verify origin/${branch} 2>/dev/null && echo OK || echo MISSING`;
+        : `cd ${repoPath} && git -c safe.directory='*' rev-parse --verify origin/${branch} 2>/dev/null && echo OK || echo MISSING`;
       const branchCheck = await sshService.exec(sshTarget, checkCmd, 5_000);
       if (branchCheck.stdout?.trim().endsWith('MISSING')) {
         const alt = branch === 'main' ? 'master' : 'main';
@@ -538,7 +555,7 @@ export class TaskExecutorService extends Service {
     // Create worktree
     const result = await sshService.exec(
       sshTarget,
-      `cd ${repoPath} && git worktree add "${workspacePath}" -b task/${slug} origin/${branch} 2>&1`,
+      `cd ${repoPath} && git -c safe.directory='*' worktree add "${workspacePath}" -b task/${slug} origin/${branch} 2>&1`,
       15_000,
     );
 
@@ -546,7 +563,7 @@ export class TaskExecutorService extends Service {
       // Worktree might already exist, or branch might exist — try without -b
       const retry = await sshService.exec(
         sshTarget,
-        `cd ${repoPath} && git worktree add "${workspacePath}" origin/${branch} 2>&1`,
+        `cd ${repoPath} && git -c safe.directory='*' worktree add "${workspacePath}" origin/${branch} 2>&1`,
         15_000,
       );
       if (!retry.success) {
@@ -616,16 +633,32 @@ export class TaskExecutorService extends Service {
 
   // ── Engine Resolution ────────────────────────────────────────────────
 
-  private async resolveEngineCommand(sshTarget: string): Promise<string> {
+  private async resolveEngineCommand(sshTarget: string): Promise<{ cmd: string; engine: string }> {
+    let engine = 'claude';
     try {
       const registry = this.runtime.getService<MachineRegistryService>('machine-registry');
-      if (!registry) return 'itachi';
-      const { machine } = await registry.resolveMachine(sshTarget);
-      if (!machine?.engine_priority?.length) return 'itachi';
-      return ENGINE_WRAPPERS[machine.engine_priority[0]] || 'itachi';
-    } catch {
-      return 'itachi';
-    }
+      if (registry) {
+        const { machine } = await registry.resolveMachine(sshTarget);
+        if (machine?.engine_priority?.length) {
+          engine = machine.engine_priority[0];
+        }
+      }
+    } catch { /* default to claude */ }
+
+    // Try wrapper first, fall back to direct CLI
+    const wrapper = ENGINE_WRAPPERS[engine] || 'itachi';
+    const direct = ENGINE_DIRECT[engine] || 'claude';
+    const sshService = this.runtime.getService<SSHService>('ssh')!;
+
+    try {
+      const check = await sshService.exec(sshTarget, `which ${wrapper} 2>/dev/null || echo MISSING`, 5_000);
+      if (!check.stdout?.includes('MISSING') && check.stdout?.trim()) {
+        return { cmd: wrapper, engine };
+      }
+    } catch { /* fallback */ }
+
+    this.runtime.logger.info(`[executor] Wrapper "${wrapper}" not found on ${sshTarget}, using direct CLI "${direct}"`);
+    return { cmd: direct, engine };
   }
 
   // ── Session Execution ────────────────────────────────────────────────
@@ -636,6 +669,7 @@ export class TaskExecutorService extends Service {
     workspace: string,
     prompt: string,
     engineCmd: string,
+    engine: string,
     topicId: number,
   ): Promise<void> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
@@ -645,7 +679,22 @@ export class TaskExecutorService extends Service {
     // Write prompt to remote temp file via base64 (avoids shell escaping issues)
     const remotePath = await this.writeRemotePrompt(sshTarget, task.id, prompt);
 
-    // Build SSH command: cd to workspace, pipe prompt to claude -p
+    // Build CLI flags based on engine and whether we're using wrapper or direct CLI
+    const isWrapper = engineCmd !== (ENGINE_DIRECT[engine] || 'claude');
+    let cliFlags: string;
+    if (isWrapper) {
+      // Wrapper handles flag mapping: --dp → --dangerously-skip-permissions -p
+      cliFlags = '--dp';
+    } else {
+      // Direct CLI — use full flags
+      switch (engine) {
+        case 'codex': cliFlags = '--dangerously-bypass-approvals-and-sandbox'; break;
+        case 'gemini': cliFlags = '--yolo'; break;
+        default: cliFlags = '--dangerously-skip-permissions -p'; break;
+      }
+    }
+
+    // Build SSH command: cd to workspace, pipe prompt to engine
     // Print mode reads prompt from stdin, outputs clean text, exits when done.
     const isWindows = sshService.isWindowsTarget(sshTarget);
     let sshCommand: string;
@@ -668,11 +717,11 @@ export class TaskExecutorService extends Service {
       // non-root user because --dangerously-skip-permissions is blocked for root.
       const target = sshService.getTarget(sshTarget);
       const isRoot = target?.user === 'root';
-      const coreCmd = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp`;
+      const coreCmd = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}`;
       if (isRoot) {
         // Use su to switch to 'itachi' user; -l gives login shell with PATH
         // -c wraps the command; -s /bin/bash ensures bash shell
-        sshCommand = `su - itachi -s /bin/bash -c 'cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --dp'`;
+        sshCommand = `su - itachi -s /bin/bash -c 'cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}'`;
       } else {
         sshCommand = coreCmd;
       }
@@ -684,6 +733,10 @@ export class TaskExecutorService extends Service {
 
     const sessionId = `executor-${shortId}-${Date.now()}`;
     const sessionTranscript: TranscriptEntry[] = [];
+    let chunkCount = 0;
+    let filteredChunkCount = 0;
+
+    this.runtime.logger.info(`[executor] Session ${sessionId} starting. topicId=${topicId}, hasTopicsService=${!!topicsService}`);
 
     // Task heartbeat: update updated_at every 60s so recoverStaleTasks knows we're alive
     let taskHeartbeat: ReturnType<typeof setInterval> | null = null;
@@ -704,8 +757,9 @@ export class TaskExecutorService extends Service {
       sshCommand,
       // stdout
       (chunk: string) => {
+        chunkCount++;
         const clean = filterTuiNoise(stripAnsi(chunk));
-        if (!clean) return;
+        if (!clean) { filteredChunkCount++; return; }
         sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
         if (topicId && topicsService) {
           topicsService.receiveChunk(sessionId, topicId, clean).catch((err) => {
@@ -715,8 +769,9 @@ export class TaskExecutorService extends Service {
       },
       // stderr
       (chunk: string) => {
+        chunkCount++;
         const clean = filterTuiNoise(stripAnsi(chunk));
-        if (!clean) return;
+        if (!clean) { filteredChunkCount++; return; }
         sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
         if (topicId && topicsService) {
           topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch((err) => {
@@ -763,7 +818,7 @@ export class TaskExecutorService extends Service {
           this.runtime.logger.error(`[executor] Post-completion error: ${err instanceof Error ? err.message : String(err)}`);
         });
 
-        this.runtime.logger.info(`[executor] Session ${sessionId} exited with code ${code}`);
+        this.runtime.logger.info(`[executor] Session ${sessionId} exited with code ${code}. Chunks: ${chunkCount} total, ${filteredChunkCount} filtered, ${sessionTranscript.length} in transcript`);
       },
       600_000, // 10 minute timeout
     );
@@ -855,7 +910,7 @@ export class TaskExecutorService extends Service {
     const remotePath = await this.writeRemotePrompt(sshTarget, `${shortId}-resume`, input);
 
     // Resume with continue + dangerously skip + print mode
-    const engineCmd = await this.resolveEngineCommand(sshTarget);
+    const { cmd: engineCmd } = await this.resolveEngineCommand(sshTarget);
     const isWindows = sshService.isWindowsTarget(sshTarget);
     const sshCommand = isWindows
       ? [
@@ -958,8 +1013,8 @@ export class TaskExecutorService extends Service {
 
     try {
       // 1. Check for changes
-      const status = await sshService.exec(sshTarget, `cd ${workspace} && git status --porcelain`, 10_000);
-      const diffOutput = await sshService.exec(sshTarget, `cd ${workspace} && git diff --name-only HEAD 2>/dev/null`, 10_000);
+      const status = await sshService.exec(sshTarget, `cd ${workspace} && git -c safe.directory='*' status --porcelain`, 10_000);
+      const diffOutput = await sshService.exec(sshTarget, `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD 2>/dev/null`, 10_000);
 
       if (diffOutput.stdout?.trim()) {
         filesChanged = diffOutput.stdout.trim().split('\n').filter(Boolean);
@@ -970,7 +1025,7 @@ export class TaskExecutorService extends Service {
         const commitMsg = `feat: ${task.description.substring(0, 72)}`;
         const commitResult = await sshService.exec(
           sshTarget,
-          `cd ${workspace} && git add -A && git commit -m "${commitMsg.replace(/"/g, '\\"')}" 2>&1`,
+          `cd ${workspace} && git -c safe.directory='*' add -A && git -c safe.directory='*' commit -m "${commitMsg.replace(/"/g, '\\"')}" 2>&1`,
           15_000,
         );
 
@@ -980,7 +1035,7 @@ export class TaskExecutorService extends Service {
           // Push
           const pushResult = await sshService.exec(
             sshTarget,
-            `cd ${workspace} && git push -u origin HEAD 2>&1`,
+            `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`,
             30_000,
           );
 
@@ -1014,11 +1069,11 @@ export class TaskExecutorService extends Service {
           // Check if there were pushable commits
           const unpushed = await sshService.exec(
             sshTarget,
-            `cd ${workspace} && git log origin/HEAD..HEAD --oneline 2>/dev/null | head -5`,
+            `cd ${workspace} && git -c safe.directory='*' log origin/HEAD..HEAD --oneline 2>/dev/null | head -5`,
             10_000,
           );
           if (unpushed.stdout?.trim()) {
-            await sshService.exec(sshTarget, `cd ${workspace} && git push -u origin HEAD 2>&1`, 30_000);
+            await sshService.exec(sshTarget, `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`, 30_000);
           }
         }
 
@@ -1026,7 +1081,7 @@ export class TaskExecutorService extends Service {
         if (filesChanged.length === 0) {
           const commitFiles = await sshService.exec(
             sshTarget,
-            `cd ${workspace} && git diff --name-only HEAD~1 HEAD 2>/dev/null`,
+            `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD~1 HEAD 2>/dev/null`,
             10_000,
           );
           if (commitFiles.stdout?.trim()) {
