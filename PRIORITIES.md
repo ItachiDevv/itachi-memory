@@ -1,36 +1,28 @@
-# Active Priorities — March 3, 2026
+# Active Priorities — March 4, 2026
 
-## Priority 1: Fix LLM Hallucination (CRITICAL — IN PROGRESS)
+## Priority 1: Fix LLM Hallucination (CRITICAL — COMPLETE ✅)
 
-**Problem**: Bot says "Checking..." / "Fetching..." but no action handler runs. LLM picks REPLY+NONE instead of routing to the correct action handler. Confirmed with `/self` test — validate() matches but LLM ignores it.
+**Problem**: Bot says "Checking..." / "Fetching..." but no action handler runs. LLM picks REPLY+NONE instead of routing to the correct action handler.
 
-**Root cause**: ElizaOS LLM action selection decides which actions to invoke. Even when validate() returns true, the LLM can choose REPLY instead. Character prompt instructions are ignored.
+**Fix implemented**: Slash command interceptor (`services/slash-interceptor.ts`) bypasses ElizaOS entirely for `/commands`. Patches `bot.handleUpdate()` to intercept before LLM, dispatches directly to handler function, sends result via raw Telegram API.
 
-**Fix needed**: Bypass LLM action selection for slash commands — intercept before LLM and route directly to matching handler.
+**Status**: COMPLETE — 20/20 test cases pass (15 core + 5 alias edge cases)
 
-**Test cases (15)**:
-1. `/self` — should return bot status overview
-2. `/self env` — should return filtered env vars
-3. `/self test-exec` — should test executor pipeline
-4. `/health` — should return system health check
-5. `/brain` — should return brain loop status
-6. `/ssh hetzner echo hello` — should execute SSH command
-7. `/logs` — should return container logs
-8. `/status` — should show task queue
-9. `/help` — should show all commands
-10. `/recall test` — should search memories
-11. `/machines` — should show machine status
-12. `show me my coolify variables` — natural language → should route to /self env
-13. `what is my bot status` — natural language → should route to /self
-14. `/self` with extra whitespace: `  /self  ` — should still work
-15. `/nonexistent` — unknown slash command, should NOT hallucinate, should say "unknown command"
+**Bugs fixed**:
+- Iteration 1: `/help` regex `$` → `\b` so `/help@botname` works
+- Iteration 1: `/repos` handler formats output via callback
+- Iteration 2: `/ssh` handler resolves `MACHINE_ALIASES` before `getTarget()` (c8e3fa8)
+- Iteration 2: Bot mention stripping only strips `@botname` after `/command`, not elsewhere (4b47b41)
 
 ---
 
-## Priority 2: Direct Execution Mode
+## Priority 2: Direct Execution Mode (COMPLETE ✅)
 - When user says "do X", bot executes immediately (no proposal flow)
-- Verify task executor auto-dispatch speed
+- Task executor auto-dispatch working (tested on mac + windows + coolify)
 - Brain-loop proposals still use approve/reject buttons
+- **Fixed**: Windows-safe push commands (PowerShell `-replace` instead of `sed`) (4b47b41)
+- **Fixed**: Skip `su` wrapping on Windows SSH targets (4b47b41)
+- **Tested**: Natural language "run echo direct-exec-test on coolify" → task queued, dispatched, completed
 
 ## Priority 3: Update Full_Autonomy.md (Stages 3-4)
 - Replace confidence-scoring with mode-based (dry-run/confirm/armed)
@@ -50,3 +42,14 @@
 - `bun run build` must succeed before every push
 - Live Telegram testing after every deploy
 - NEVER push without tests + build
+
+## Session Progress (March 4, 2026)
+### Commits this session:
+- `25a5512` — fix: executor git safe.directory, engine fallback, and output debug logging
+- `68b83c5` — fix: executor topicId=0 race condition — re-fetch from DB before creating topic
+- `7ca2244` — fix: PR creation --head flag and task poller direct Telegram API
+- `c178a72` — fix: wrap post-completion git/gh commands with su for root SSH targets
+- `c1a1acc` — fix: push with GITHUB_TOKEN, always check unpushed commits and file changes
+- `d04ec88` — fix: slash interceptor /help regex and /repos empty output
+- `c8e3fa8` — fix: resolve MACHINE_ALIASES in /ssh slash command handler
+- `4b47b41` — fix: bot mention stripping regex + Windows-safe push/su in executor
