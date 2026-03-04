@@ -408,11 +408,23 @@ export class TaskExecutorService extends Service {
       });
 
       // 2. Ensure Telegram topic exists
+      // Race condition: task creation flow calls createTopicForTask as fire-and-forget,
+      // so telegram_topic_id might not be saved to DB yet when we claim the task.
+      // Re-fetch from DB if null, with a small delay to let the creation flow finish.
       let topicId = task.telegram_topic_id;
       if (!topicId && topicsService) {
-        const topicResult = await topicsService.createTopicForTask(task);
-        if (topicResult) {
-          topicId = topicResult.topicId;
+        // Wait briefly for the creation flow's createTopicForTask to complete
+        await new Promise(r => setTimeout(r, 2000));
+        const freshTask = await taskService.getTask(task.id);
+        if (freshTask?.telegram_topic_id) {
+          topicId = freshTask.telegram_topic_id;
+          this.runtime.logger.info(`[executor] Got topicId=${topicId} from DB re-fetch for task ${shortId}`);
+        } else {
+          // Still null — create topic ourselves
+          const topicResult = await topicsService.createTopicForTask(task);
+          if (topicResult) {
+            topicId = topicResult.topicId;
+          }
         }
       }
       if (topicId) {
