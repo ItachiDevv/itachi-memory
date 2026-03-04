@@ -15,7 +15,8 @@
       "Bash(node_modules/.bin/tsc --noEmit --pretty)",
       "Bash(git add:*)",
       "Bash(npx bun test src/__tests__/)",
-      "Bash(npx bun run build)"
+      "Bash(npx bun run build)",
+      "Bash(bun run build)"
     ]
   }
 }
