@@ -840,7 +840,7 @@ export class TaskExecutorService extends Service {
             taskId: task.id,
             target: sshTarget,
             description: task.description,
-            outcome: code === 0 ? 'completed' : `exited with code ${code}`,
+            outcome: code === 0 ? 'success' : (handle?.timedOut ? 'timeout' : 'failure'),
             durationMs: Date.now() - (activeSessions.get(topicId)?.startedAt || Date.now()),
           }).catch((err) => {
             this.runtime.logger.error(`[executor] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -855,13 +855,14 @@ export class TaskExecutorService extends Service {
         this.activeTasks.delete(task.id);
 
         // Post-completion pipeline
-        this.handleSessionComplete(task, sshTarget, workspace, code, topicId, sessionTranscript).catch((err) => {
+        const wasTimeout = handle?.timedOut || false;
+        this.handleSessionComplete(task, sshTarget, workspace, code, topicId, sessionTranscript, wasTimeout).catch((err) => {
           this.runtime.logger.error(`[executor] Post-completion error: ${err instanceof Error ? err.message : String(err)}`);
         });
 
         this.runtime.logger.info(`[executor] Session ${sessionId} exited with code ${code}. Chunks: ${chunkCount} total, ${filteredChunkCount} filtered, ${sessionTranscript.length} in transcript`);
       },
-      600_000, // 10 minute timeout
+      1_200_000, // 20 minute timeout
     );
 
     if (!handle) {
@@ -1054,6 +1055,7 @@ export class TaskExecutorService extends Service {
     exitCode: number,
     topicId: number,
     transcript?: TranscriptEntry[],
+    wasTimeout: boolean = false,
   ): Promise<void> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
     const taskService = this.runtime.getService<TaskService>('itachi-tasks')!;
@@ -1178,7 +1180,11 @@ export class TaskExecutorService extends Service {
 
     let finalStatus: string;
     let workWarning = '';
-    if (exitCode !== 0) {
+    if (wasTimeout) {
+      // Timeout is distinct from real failure — task may have done useful work before being killed
+      finalStatus = 'timeout';
+      this.runtime.logger.warn(`[executor] Task ${shortId} timed out after 20min (exit code ${exitCode})`);
+    } else if (exitCode !== 0) {
       finalStatus = 'failed';
     } else if (filesChanged.length === 0 && !hasToolUsage) {
       // Exit 0 but no files changed and no tool usage detected
@@ -1195,7 +1201,11 @@ export class TaskExecutorService extends Service {
     };
     if (prUrl) updatePayload.pr_url = prUrl;
     if (filesChanged.length > 0) updatePayload.files_changed = filesChanged;
-    if (exitCode !== 0) updatePayload.error_message = `Session exited with code ${exitCode}`;
+    if (wasTimeout) {
+      updatePayload.error_message = `Session timed out after 20 minutes (exit code ${exitCode})`;
+    } else if (exitCode !== 0) {
+      updatePayload.error_message = `Session exited with code ${exitCode}`;
+    }
 
     // Persist session transcript as result_summary
     if (transcript && transcript.length > 0) {

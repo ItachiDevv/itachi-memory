@@ -207,6 +207,7 @@ Respond ONLY with valid JSON, no markdown fences:
               last_reinforced: new Date().toISOString(),
               ...(context.taskId ? { task_id: context.taskId } : {}),
               ...(context.sessionId ? { session_id: context.sessionId } : {}),
+              ...(context.outcome ? { outcome: context.outcome } : {}),
             },
           });
           stored++;
@@ -219,6 +220,7 @@ Respond ONLY with valid JSON, no markdown fences:
           ...(context.taskId ? { task_id: context.taskId } : {}),
           ...(context.sessionId ? { session_id: context.sessionId } : {}),
           ...(context.target ? { target: context.target } : {}),
+          ...(context.outcome ? { outcome: context.outcome } : {}),
         };
 
         if (insight.category === 'workflow' && insight.steps) {

@@ -3,6 +3,7 @@ import { ReminderService, type ScheduledItem } from '../services/reminder-servic
 import { TaskService } from '../services/task-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
+import { MachineRegistryService } from '../services/machine-registry.js';
 import { syncGitHubRepos } from '../services/github-sync.js';
 
 // Deterministic UUID for the scheduler entity (used for synthetic messages)
@@ -237,15 +238,21 @@ async function executeCustom(
       });
       const project = matchedRepo?.name || 'itachi-memory';
 
+      // Resolve best machine for project so task goes to the right host
+      const registry = runtime.getService<MachineRegistryService>('machine-registry');
+      const bestMachine = registry ? await registry.getMachineForProject(project).catch(() => null) : null;
+
       const task = await taskService.createTask({
         description: command,
         project,
+        assigned_machine: bestMachine?.machine_id,
         telegram_chat_id: item.telegram_chat_id,
         telegram_user_id: item.telegram_user_id,
       });
 
+      const machineLabel = bestMachine ? ` | Machine: ${bestMachine.machine_id}` : '';
       await sendTelegram(botBaseUrl, item.telegram_chat_id,
-        `\u2705 Task queued: ${command}\nID: ${task.id.substring(0, 8)} | Project: ${project}`);
+        `\u2705 Task queued: ${command}\nID: ${task.id.substring(0, 8)} | Project: ${project}${machineLabel}`);
       return `task:${task.id.substring(0, 8)}`;
     } catch (err) {
       runtime.logger.warn(`[scheduler] Task creation failed: ${err instanceof Error ? err.message : String(err)}`);

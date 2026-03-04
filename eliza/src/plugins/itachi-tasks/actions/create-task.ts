@@ -880,15 +880,15 @@ export async function enrichWithLessons(
     const lessons = await memoryService.searchMemories(
       description,
       project,
-      3,          // top 3 lessons
+      5,          // top 5 lessons across all categories
       undefined,
-      'task_lesson',
+      undefined,  // search ALL categories — reranking boosts task_lesson (1.2x), project_rule (1.25x), error_recovery (1.15x)
     );
 
     if (lessons.length === 0) return description;
 
     const lessonBlock = lessons
-      .map((l, i) => `${i + 1}. ${l.summary}`)
+      .map((l, i) => `${i + 1}. [${l.category}] ${l.summary}`)
       .join('\n');
 
     return `${description}\n\n--- Lessons from previous tasks on this project ---\n${lessonBlock}`;

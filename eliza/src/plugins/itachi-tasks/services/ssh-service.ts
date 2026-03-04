@@ -24,6 +24,7 @@ export interface InteractiveSession {
   pid: number;
   write: (data: string) => void;
   kill: () => void;
+  timedOut: boolean;
 }
 
 export class SSHService extends Service {
@@ -230,9 +231,24 @@ export class SSHService extends Service {
       onExit(1);
     });
 
-    // Timeout safety net
-    const timer = setTimeout(() => {
+    // Session handle + timeout — session created first so timeout can set timedOut flag.
+    // Timer declared with let so session.kill() can reference it via closure.
+    let timer: ReturnType<typeof setTimeout>;
+    const session: InteractiveSession = {
+      pid: proc.pid || 0,
+      write: (data: string) => { proc.stdin?.write(data); },
+      kill: () => {
+        clearTimeout(timer);
+        try { proc.kill('SIGTERM'); } catch { /* best-effort */ }
+        this.activeSessions.delete(sessionId);
+      },
+      timedOut: false,
+    };
+
+    // Timeout safety net — sets timedOut on session BEFORE killing process
+    timer = setTimeout(() => {
       if (this.activeSessions.has(sessionId)) {
+        session.timedOut = true;
         this.runtime.logger.warn(`SSH session ${sessionId} timed out after ${timeoutMs}ms`);
         try { proc.kill('SIGTERM'); } catch { /* best-effort */ }
       }
@@ -243,15 +259,7 @@ export class SSHService extends Service {
 
     this.runtime.logger.info(`Spawned interactive session ${sessionId}: ssh ${target.user}@${target.host}`);
 
-    return {
-      pid: proc.pid || 0,
-      write: (data: string) => { proc.stdin?.write(data); },
-      kill: () => {
-        clearTimeout(timer);
-        try { proc.kill('SIGTERM'); } catch { /* best-effort */ }
-        this.activeSessions.delete(sessionId);
-      },
-    };
+    return session;
   }
 
   /** Execute on a specific target config */
