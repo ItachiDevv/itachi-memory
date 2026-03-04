@@ -1,4 +1,5 @@
 import type { IAgentRuntime } from '@elizaos/core';
+import { registerSlashInterceptor } from './slash-interceptor.js';
 import { SSHService } from './ssh-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import { TaskService } from './task-service.js';
@@ -119,6 +120,11 @@ export async function registerCallbackHandler(runtime: IAgentRuntime): Promise<v
 
         // Start polling health monitor — recovers from 409 Conflict kills
         startPollingHealthMonitor(runtime, bot);
+
+        // Intercept /slash commands BEFORE ElizaOS processes them.
+        // Must be registered BEFORE chatter suppression so sendDirect (raw HTTP)
+        // bypasses all patches. Prevents LLM hallucination on slash commands.
+        registerSlashInterceptor(runtime, bot);
 
         // Monkey-patch bot.telegram.sendMessage to suppress LLM chatter in
         // browsing/session topics. Our own code uses apiCall() (direct HTTP),

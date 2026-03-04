@@ -169,7 +169,7 @@ function extractTargetFromContext(
  * Check if the user's message is self-referential (asking about the bot/our setup).
  * If so, default to coolify (where the bot runs).
  */
-function isSelfReferential(text: string): boolean {
+export function isSelfReferential(text: string): boolean {
   return SELF_REF_PATTERNS.test(text);
 }
 
@@ -516,7 +516,7 @@ export const coolifyControlAction: Action = {
 };
 
 // ── Slash command handler (unchanged logic, extracted) ──────────────
-async function handleSlashCommand(
+export async function handleSlashCommand(
   text: string,
   sshService: SSHService,
   runtime: IAgentRuntime,
@@ -759,7 +759,7 @@ function formatUptime(seconds: number): string {
   return `${s}s`;
 }
 
-async function handleSelfInspection(
+export async function handleSelfInspection(
   runtime: IAgentRuntime,
   text: string,
   sshService: SSHService,

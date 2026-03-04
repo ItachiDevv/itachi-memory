@@ -469,7 +469,7 @@ export const telegramCommandsAction: Action = {
   },
 };
 
-async function handleRecall(
+export async function handleRecall(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback
@@ -517,7 +517,7 @@ async function handleRecall(
   return { success: true, data: { memories, query, project } };
 }
 
-async function handleRepos(
+export async function handleRepos(
   runtime: IAgentRuntime,
   _callback?: HandlerCallback
 ): Promise<ActionResult> {
@@ -531,7 +531,7 @@ async function handleRepos(
   return { success: true, data: { repos } };
 }
 
-async function handleMachines(
+export async function handleMachines(
   runtime: IAgentRuntime,
   callback?: HandlerCallback
 ): Promise<ActionResult> {
@@ -564,7 +564,7 @@ async function handleMachines(
   return { success: true, data: { machines } };
 }
 
-async function handleEngines(
+export async function handleEngines(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback
@@ -627,7 +627,7 @@ async function handleEngines(
   return { success: true, data: { machine_id: machine.machine_id, engine_priority: engines } };
 }
 
-async function handleSyncRepos(
+export async function handleSyncRepos(
   runtime: IAgentRuntime,
   callback?: HandlerCallback
 ): Promise<ActionResult> {
@@ -1009,7 +1009,7 @@ async function handleDeleteTopicsAll(
   return { success: true, data: { deleted, failed, total: topicIds.size } };
 }
 
-async function handleFeedback(
+export async function handleFeedback(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback
@@ -1093,7 +1093,7 @@ async function handleFeedback(
   return { success: true, data: { taskId: task.id, sentiment, reason } };
 }
 
-async function handleLearn(
+export async function handleLearn(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback
@@ -1137,7 +1137,7 @@ async function handleLearn(
   return { success: true, data: { instruction } };
 }
 
-async function handleTeach(
+export async function handleTeach(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback
@@ -1215,7 +1215,7 @@ Respond with ONLY the category name, nothing else.`,
   return { success: true, data: { instruction, category } };
 }
 
-async function handleSpawn(
+export async function handleSpawn(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback
@@ -1266,7 +1266,7 @@ async function handleSpawn(
   }
 }
 
-async function handleAgents(
+export async function handleAgents(
   runtime: IAgentRuntime,
   callback?: HandlerCallback
 ): Promise<ActionResult> {
@@ -1304,7 +1304,7 @@ async function handleAgents(
   }
 }
 
-async function handleMsg(
+export async function handleMsg(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback
@@ -1366,7 +1366,7 @@ async function handleMsg(
   }
 }
 
-async function handleUnteach(
+export async function handleUnteach(
   runtime: IAgentRuntime,
   query: string,
   callback?: HandlerCallback
@@ -1655,7 +1655,7 @@ async function handleFlowDescription(
   return { success: true, data: { taskId: task.id, shortId, project, assignedMachine: machineLabel } };
 }
 
-async function handleTaskStatus(
+export async function handleTaskStatus(
   runtime: IAgentRuntime,
   text: string,
   callback?: HandlerCallback,
@@ -1726,7 +1726,7 @@ async function handleTaskStatus(
   return { success: true };
 }
 
-async function handleHealth(runtime: IAgentRuntime, callback?: HandlerCallback): Promise<ActionResult> {
+export async function handleHealth(runtime: IAgentRuntime, callback?: HandlerCallback): Promise<ActionResult> {
   try {
     const { lastHealthStatus } = await import('../workers/health-monitor.js');
     const taskService = runtime.getService<TaskService>('itachi-tasks');
@@ -1785,7 +1785,7 @@ async function handleHealth(runtime: IAgentRuntime, callback?: HandlerCallback):
   }
 }
 
-async function handleBrain(runtime: IAgentRuntime, text: string, callback?: HandlerCallback): Promise<ActionResult> {
+export async function handleBrain(runtime: IAgentRuntime, text: string, callback?: HandlerCallback): Promise<ActionResult> {
   const sub = text.substring('/brain'.length).trim();
 
   try {
@@ -1867,7 +1867,7 @@ async function handleBrain(runtime: IAgentRuntime, text: string, callback?: Hand
   }
 }
 
-async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
+export async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   const help = `**Tasks**
   /task <name> — Interactive task creation (pick machine, repo, describe)
   /task [@machine] <project> <description> — Quick task creation
