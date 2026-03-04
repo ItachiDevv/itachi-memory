@@ -68,12 +68,22 @@ function buildDispatch(
   const ssh = sshService!; // will only be called after null check
 
   return [
-    [/^\/help$/i, (_rt, _t, cb) => handleHelp(cb)],
+    [/^\/help\b/i, (_rt, _t, cb) => handleHelp(cb)],
     [/^\/health$/i, (rt, _t, cb) => handleHealth(rt, cb)],
     [/^\/brain\b/i, (rt, t, cb) => handleBrain(rt, t, cb)],
     [/^\/self\b/i, (rt, t, cb) => handleSelfInspection(rt, t, ssh, cb)],
     [/^\/recall\b/i, (rt, t, cb) => handleRecall(rt, t, cb)],
-    [/^\/repos$/i, (rt, _t, cb) => handleRepos(rt, cb)],
+    [/^\/repos$/i, async (rt, _t, cb) => {
+      const result = await handleRepos(rt, cb) as any;
+      if (result?.data?.repos?.length > 0) {
+        const lines = result.data.repos.map((r: any) => `- ${r.name}${r.repo_url ? ` (${r.repo_url})` : ''}`);
+        await cb({ text: `Repos (${lines.length}):\n${lines.join('\n')}` });
+      } else if (!result?.success) {
+        await cb({ text: result?.error || 'Failed to fetch repos.' });
+      } else {
+        await cb({ text: 'No repos found.' });
+      }
+    }],
     [/^\/machines$/i, (rt, _t, cb) => handleMachines(rt, cb)],
     [/^\/engines\b/i, (rt, t, cb) => handleEngines(rt, t, cb)],
     [/^\/sync[-_]?repos$/i, (rt, _t, cb) => handleSyncRepos(rt, cb)],
