@@ -214,16 +214,20 @@ async function executeCustom(
     return [];
   };
 
-  // Strategy 1: Try to match a registered action directly
-  const matched = await tryDirectActionDispatch(runtime, syntheticMessage, callback);
+  // Strategy 1: Direct dispatch for slash commands (e.g. /repos, /tasks)
+  // Slash commands map 1:1 to specific actions and don't need LLM routing.
+  // Natural language commands skip this — too many actions validate true for free text.
+  if (command.startsWith('/')) {
+    const matched = await tryDirectActionDispatch(runtime, syntheticMessage, callback);
 
-  if (matched) {
-    const resultText = responses.length > 0
-      ? responses.join('\n\n')
-      : 'Action completed (no output).';
-    await sendTelegram(botBaseUrl, item.telegram_chat_id,
-      `\u2705 Done: ${command}\n\n${resultText}`);
-    return `direct:${matched}`;
+    if (matched) {
+      const resultText = responses.length > 0
+        ? responses.join('\n\n')
+        : 'Action completed (no output).';
+      await sendTelegram(botBaseUrl, item.telegram_chat_id,
+        `\u2705 Done: ${command}\n\n${resultText}`);
+      return `direct:${matched}`;
+    }
   }
 
   // Strategy 2: Feed through the LLM message pipeline
