@@ -1035,6 +1035,18 @@ export class TaskExecutorService extends Service {
     let filesChanged: string[] = [];
 
     try {
+      // Build push command: inject GITHUB_TOKEN to avoid credential helper issues (wincredman fails via SSH)
+      const buildPushCmd = (ws: string) => {
+        const token = process.env.GITHUB_TOKEN;
+        if (token) {
+          // Get remote URL, inject token, push
+          return `cd ${ws} && remote_url=$(git -c safe.directory='*' remote get-url origin 2>/dev/null) && ` +
+            `authed_url=$(echo "$remote_url" | sed "s|https://github.com/|https://${token}@github.com/|") && ` +
+            `git -c safe.directory='*' -c credential.helper='' push "$authed_url" HEAD 2>&1`;
+        }
+        return `cd ${ws} && git -c safe.directory='*' push -u origin HEAD 2>&1`;
+      };
+
       // 1. Check for changes (git safe.directory needed for root ownership mismatch)
       const status = await sshService.exec(sshTarget, this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' status --porcelain`), 10_000);
       const diffOutput = await sshService.exec(sshTarget, this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD 2>/dev/null`), 10_000);
@@ -1055,10 +1067,10 @@ export class TaskExecutorService extends Service {
         if (commitResult.success) {
           this.runtime.logger.info(`[executor] Committed changes for task ${shortId}`);
 
-          // Push
+          // Push (with token-injected URL to avoid credential issues)
           const pushResult = await sshService.exec(
             sshTarget,
-            this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`),
+            this.wrapForUser(sshTarget, buildPushCmd(workspace)),
             30_000,
           );
 
@@ -1089,28 +1101,29 @@ export class TaskExecutorService extends Service {
         } else {
           // Nothing to commit (maybe session already committed)
           this.runtime.logger.info(`[executor] No new commit needed for task ${shortId}`);
-
-          // Check if there were pushable commits
-          const unpushed = await sshService.exec(
-            sshTarget,
-            this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' log origin/HEAD..HEAD --oneline 2>/dev/null | head -5`),
-            10_000,
-          );
-          if (unpushed.stdout?.trim()) {
-            await sshService.exec(sshTarget, this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`), 30_000);
-          }
         }
+      }
 
-        // Re-check files changed after commit
-        if (filesChanged.length === 0) {
-          const commitFiles = await sshService.exec(
-            sshTarget,
-            this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD~1 HEAD 2>/dev/null`),
-            10_000,
-          );
-          if (commitFiles.stdout?.trim()) {
-            filesChanged = commitFiles.stdout.trim().split('\n').filter(Boolean);
-          }
+      // Always check for unpushed commits (Claude may have committed during the session)
+      const unpushed = await sshService.exec(
+        sshTarget,
+        this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' log origin/HEAD..HEAD --oneline 2>/dev/null | head -5`),
+        10_000,
+      );
+      if (unpushed.stdout?.trim()) {
+        this.runtime.logger.info(`[executor] Found unpushed commits for task ${shortId}, pushing...`);
+        await sshService.exec(sshTarget, this.wrapForUser(sshTarget, buildPushCmd(workspace)), 30_000);
+      }
+
+      // Always check files from last commit (Claude may have committed during session)
+      if (filesChanged.length === 0) {
+        const commitFiles = await sshService.exec(
+          sshTarget,
+          this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD~1 HEAD 2>/dev/null`),
+          10_000,
+        );
+        if (commitFiles.stdout?.trim()) {
+          filesChanged = commitFiles.stdout.trim().split('\n').filter(Boolean);
         }
       }
     } catch (err) {
