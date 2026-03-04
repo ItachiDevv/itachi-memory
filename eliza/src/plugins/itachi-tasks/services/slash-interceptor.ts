@@ -278,7 +278,8 @@ export function registerSlashInterceptor(runtime: IAgentRuntime, bot: any): void
       const rawText = msg.text;
       if (typeof rawText !== 'string') return originalHandleUpdate(update, ...rest);
 
-      const text = rawText.trim();
+      // Strip @botname suffix that Telegram appends in groups (e.g. /help@Itachi_Mangekyou_bot → /help)
+      const text = rawText.trim().replace(/@\S+/, '');
       if (!text.startsWith('/')) return originalHandleUpdate(update, ...rest);
 
       const msgChatId = msg.chat?.id;
