@@ -37,6 +37,8 @@ export const MACHINE_TO_SSH_TARGET: Record<string, string> = {
   desktop: 'windows',
   server: 'coolify',
   vps: 'coolify',
+  production: 'coolify',
+  prod: 'coolify',
 };
 
 /** Resolve a machine identifier to an SSH target name */

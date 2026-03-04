@@ -579,7 +579,7 @@ export function extractTaskFromUserMessage(
         .trim();
       if (desc.length < 10) continue; // too short to be meaningful
       // Also check if an SSH target is mentioned alongside the project
-      const SSH_TARGETS = ['coolify', 'hetzner', 'mac', 'windows', 'server', 'vps'];
+      const SSH_TARGETS = ['coolify', 'hetzner', 'mac', 'windows', 'server', 'vps', 'production', 'prod'];
       const target = SSH_TARGETS.find(t => new RegExp(`\\b${t}\\b`, 'i').test(lower));
       console.log(`[create-task] Strategy 0: matched project "${proj}" from user message`);
       return [{ project: proj, description: desc, machine: target }];
@@ -587,7 +587,7 @@ export function extractTaskFromUserMessage(
   }
 
   // If no project matched, check for SSH target mentions → map to default project
-  const SSH_TARGET_NAMES = ['coolify', 'hetzner', 'mac', 'windows', 'server', 'vps'];
+  const SSH_TARGET_NAMES = ['coolify', 'hetzner', 'mac', 'windows', 'server', 'vps', 'production', 'prod'];
   const mentionedTarget = SSH_TARGET_NAMES.find(t =>
     new RegExp(`\\b${t}\\b`, 'i').test(lower)
   );
