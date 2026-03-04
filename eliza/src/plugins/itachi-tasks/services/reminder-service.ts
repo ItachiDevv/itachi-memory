@@ -124,28 +124,45 @@ export class ReminderService extends Service {
 
   /** Cancel by ID (full UUID or short prefix). */
   async cancelReminder(id: string): Promise<boolean> {
-    // Try exact match first
-    let { error } = await this.supabase
+    // Try exact match first (works for full UUIDs and exact IDs)
+    const { error } = await this.supabase
       .from('itachi_reminders')
       .delete()
       .eq('id', id);
 
     if (!error) return true;
 
-    // Try prefix match for short IDs
+    // Short prefix — try Supabase LIKE, then JS fallback
+    // (PostgreSQL LIKE may not work on UUID columns without text cast)
     if (id.length < 36) {
-      const { data } = await this.supabase
-        .from('itachi_reminders')
-        .select('id')
-        .is('sent_at', null)
-        .like('id', `${id}%`)
-        .limit(1)
-        .single();
+      try {
+        const { data } = await this.supabase
+          .from('itachi_reminders')
+          .select('id')
+          .is('sent_at', null)
+          .like('id', `${id}%`)
+          .limit(1)
+          .single();
 
-      if (data) {
-        const result = await this.supabase.from('itachi_reminders').delete().eq('id', data.id);
-        return !result.error;
-      }
+        if (data) {
+          const result = await this.supabase.from('itachi_reminders').delete().eq('id', data.id);
+          return !result.error;
+        }
+      } catch { /* LIKE on UUID may fail — try JS fallback */ }
+
+      // JS fallback: fetch all unsent and match prefix in-memory
+      try {
+        const { data: all } = await this.supabase
+          .from('itachi_reminders')
+          .select('id')
+          .is('sent_at', null) as { data: { id: string }[] | null };
+
+        const match = all?.find((r) => r.id.startsWith(id));
+        if (match) {
+          const result = await this.supabase.from('itachi_reminders').delete().eq('id', match.id);
+          return !result.error;
+        }
+      } catch { /* ignore */ }
     }
     return false;
   }
