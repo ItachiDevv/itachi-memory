@@ -1,4 +1,4 @@
-import { type TaskWorker, type IAgentRuntime, type Memory, type Content, type Action } from '@elizaos/core';
+import { type TaskWorker, type IAgentRuntime, type Memory, type Content } from '@elizaos/core';
 import { ReminderService, type ScheduledItem } from '../services/reminder-service.js';
 import { TaskService } from '../services/task-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
@@ -194,28 +194,21 @@ async function executeCustom(
 
   await sendTelegram(botBaseUrl, item.telegram_chat_id, startNotice);
 
-  const baseMsgContent = {
-    telegram_chat_id: item.telegram_chat_id,
-    telegram_user_id: item.telegram_user_id,
-  };
-
-  // Collect all responses from action handlers
-  const responses: string[] = [];
-  const callback = async (response: Content): Promise<Memory[]> => {
-    if (response.text) {
-      responses.push(response.text);
-    }
-    return [];
-  };
-
   // Strategy 1: Direct dispatch for slash commands (e.g. /repos, /tasks)
-  // Slash commands map 1:1 to specific actions and don't need LLM routing.
-  // Natural language commands skip this — too many actions validate true for free text.
   if (command.startsWith('/')) {
+    const responses: string[] = [];
+    const callback = async (response: Content): Promise<Memory[]> => {
+      if (response.text) responses.push(response.text);
+      return [];
+    };
     const slashMessage: Memory = {
       entityId: SCHEDULER_ENTITY_ID as any,
       roomId: SCHEDULER_ROOM_ID as any,
-      content: { text: command, ...baseMsgContent } as Content,
+      content: {
+        text: command,
+        telegram_chat_id: item.telegram_chat_id,
+        telegram_user_id: item.telegram_user_id,
+      } as Content,
     };
     const matched = await tryDirectActionDispatch(runtime, slashMessage, callback);
 
@@ -229,34 +222,39 @@ async function executeCustom(
     }
   }
 
-  // Strategy 2: Feed through the LLM message pipeline
-  // Enrich with scheduling context so the LLM executes autonomously
-  const enrichedText = [
-    `[AUTOMATED SCHEDULED ACTION — execute immediately without asking questions or requesting clarification.`,
-    `Pick the best machine automatically based on project location. Do NOT ask which machine to use.]`,
-    command,
-  ].join('\n');
+  // Strategy 2: Create a task directly — the task dispatcher handles
+  // machine routing, project detection, and Claude Code execution.
+  // This is much more reliable than the LLM pipeline for scheduled commands.
+  const taskService = runtime.getService<TaskService>('itachi-tasks');
+  if (taskService) {
+    try {
+      // Try to detect project name from command
+      const repos = await taskService.getMergedRepos().catch(() => [] as { name: string; repo_url: string | null }[]);
+      const lower = command.toLowerCase();
+      const matchedRepo = repos.find((r) => {
+        const pattern = new RegExp(`\\b${r.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        return pattern.test(lower);
+      });
+      const project = matchedRepo?.name || 'itachi-memory';
 
-  const llmMessage: Memory = {
-    entityId: SCHEDULER_ENTITY_ID as any,
-    roomId: SCHEDULER_ROOM_ID as any,
-    content: { text: enrichedText, ...baseMsgContent } as Content,
-  };
+      const task = await taskService.createTask({
+        description: command,
+        project,
+        telegram_chat_id: item.telegram_chat_id,
+        telegram_user_id: item.telegram_user_id,
+      });
 
-  const llmResult = await tryLlmPipeline(runtime, llmMessage, callback, item);
-
-  if (llmResult) {
-    const resultText = responses.length > 0
-      ? responses.join('\n\n')
-      : 'Action completed via LLM.';
-    await sendTelegram(botBaseUrl, item.telegram_chat_id,
-      `\u2705 Done: ${command}\n\n${resultText}`);
-    return `llm:${llmResult}`;
+      await sendTelegram(botBaseUrl, item.telegram_chat_id,
+        `\u2705 Task queued: ${command}\nID: ${task.id.substring(0, 8)} | Project: ${project}`);
+      return `task:${task.id.substring(0, 8)}`;
+    } catch (err) {
+      runtime.logger.warn(`[scheduler] Task creation failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // Fallback: nothing could handle it
   await sendTelegram(botBaseUrl, item.telegram_chat_id,
-    `\u26A0\uFE0F Could not execute: ${command}\nNo matching action found. Try rephrasing as a bot command.`);
+    `\u26A0\uFE0F Could not execute: ${command}\nTaskService unavailable. Try rephrasing as a bot command.`);
   return 'no-match';
 }
 
@@ -302,60 +300,6 @@ async function tryDirectActionDispatch(
   }
 
   return null;
-}
-
-/**
- * Feed the command through the full ElizaOS message pipeline.
- * The LLM will decide which action to take based on the message content.
- */
-async function tryLlmPipeline(
-  runtime: IAgentRuntime,
-  message: Memory,
-  callback: (response: Content) => Promise<Memory[]>,
-  item: ScheduledItem
-): Promise<string | null> {
-  try {
-    const messageService = runtime.messageService;
-    if (!messageService) {
-      runtime.logger.warn('[scheduler] No messageService available for LLM pipeline');
-      return null;
-    }
-
-    // Ensure the scheduler entity and room exist
-    try {
-      await runtime.ensureConnection({
-        entityId: SCHEDULER_ENTITY_ID as any,
-        roomId: SCHEDULER_ROOM_ID as any,
-        userName: 'scheduler',
-        name: 'Scheduled Actions',
-        source: 'scheduler',
-        type: 'DM' as any,
-        worldId: runtime.agentId,
-      });
-    } catch {
-      // May already exist — continue
-    }
-
-    const result = await messageService.handleMessage(
-      runtime,
-      message,
-      callback,
-      {
-        maxRetries: 1,
-        timeoutDuration: 120_000, // 2 min max for scheduled actions
-      }
-    );
-
-    if (result.didRespond) {
-      return result.mode || 'responded';
-    }
-
-    return null;
-  } catch (err) {
-    runtime.logger.error('[scheduler] LLM pipeline error:',
-      err instanceof Error ? err.message : String(err));
-    return null;
-  }
 }
 
 // ============================================================
