@@ -472,7 +472,7 @@ export const createTaskAction: Action = {
  * in a context that's clearly about the bot's own development,
  * default to 'itachi-memory'. The bot IS itachi-memory — it should know that.
  */
-function detectSelfReference(
+export function detectSelfReference(
   text: string,
   recentMessages: any[],
   knownProjects: string[],
@@ -548,7 +548,7 @@ function detectSelfReference(
  * use the full message as the description.
  * E.g. "run a code audit on itachi-memory for dead code" → project: itachi-memory
  */
-function extractTaskFromUserMessage(
+export function extractTaskFromUserMessage(
   text: string,
   knownProjects: string[]
 ): Array<{ project: string; description: string }> | null {
@@ -848,7 +848,7 @@ Rules:
  * Query memory for relevant lessons from previous tasks on this project
  * and append them to the task description so the agent can learn from past mistakes.
  */
-async function enrichWithLessons(
+export async function enrichWithLessons(
   runtime: IAgentRuntime,
   project: string,
   description: string,
