@@ -1054,10 +1054,11 @@ export class TaskExecutorService extends Service {
           if (pushResult.success) {
             this.runtime.logger.info(`[executor] Pushed branch for task ${shortId}`);
 
-            // 3. Create PR
+            // 3. Create PR (use --head to avoid worktree branch detection issues)
+            const branchName = `task/${shortId}`;
             const prResult = await sshService.exec(
               sshTarget,
-              `cd ${workspace} && gh pr create --fill 2>&1`,
+              `cd ${workspace} && gh pr create --fill --head ${branchName} 2>&1`,
               15_000,
             );
 

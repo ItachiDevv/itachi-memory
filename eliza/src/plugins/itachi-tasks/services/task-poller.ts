@@ -182,12 +182,14 @@ export class TaskPollerService extends Service {
       const msgChunks = splitMessage(msg, 4000);
 
       try {
-        // Send Telegram notification via ElizaOS message routing
-        for (const chunk of msgChunks) {
-          await this.runtime.sendMessageToTarget(
-            { source: 'telegram', channelId: String(task.telegram_chat_id) },
-            { text: chunk },
-          );
+        // Send Telegram notification via direct API (sendMessageToTarget is unreliable)
+        const topicsService = this.runtime.getService('telegram-topics') as TelegramTopicsService | null;
+        if (topicsService) {
+          for (const chunk of msgChunks) {
+            await topicsService.sendMessageWithKeyboard(chunk, []);
+          }
+        } else {
+          this.runtime.logger.warn(`[task-poller] No topics service — can't notify about task ${shortId}`);
         }
 
         // Mark as notified in DB
