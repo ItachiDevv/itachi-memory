@@ -1,3 +1,4 @@
+// Task Executor Service - handles autonomous task execution via SSH
 import { Service, type IAgentRuntime } from '@elizaos/core';
 import { SSHService } from './ssh-service.js';
 import { TaskService, type ItachiTask, generateTaskTitle } from './task-service.js';
