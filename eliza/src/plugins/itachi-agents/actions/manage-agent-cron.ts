@@ -41,9 +41,13 @@ export const manageAgentCronAction: Action = {
     ],
   ],
 
-  validate: async (runtime: IAgentRuntime): Promise<boolean> => {
+  validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const service = runtime.getService('itachi-agent-cron') as AgentCronService | undefined;
-    return !!service;
+    if (!service) return false;
+    // Don't compete with REMINDER_COMMANDS for explicit slash commands
+    const text = (message.content?.text || '').trim();
+    if (text.startsWith('/schedule') || text.startsWith('/remind') || text.startsWith('/unremind')) return false;
+    return true;
   },
 
   handler: async (
