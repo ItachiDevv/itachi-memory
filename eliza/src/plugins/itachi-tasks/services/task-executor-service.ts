@@ -1007,6 +1007,16 @@ export class TaskExecutorService extends Service {
 
   // ── Post-Completion Pipeline ─────────────────────────────────────────
 
+  /** Wrap a shell command with `su - itachi` when SSH target connects as root. */
+  private wrapForUser(sshTarget: string, cmd: string): string {
+    const sshService = this.runtime.getService<SSHService>('ssh')!;
+    const target = sshService.getTarget(sshTarget);
+    if (target?.user === 'root') {
+      return `su - itachi -s /bin/bash -c '${cmd.replace(/'/g, "'\\''")}'`;
+    }
+    return cmd;
+  }
+
   private async handleSessionComplete(
     task: ItachiTask,
     sshTarget: string,
@@ -1024,20 +1034,20 @@ export class TaskExecutorService extends Service {
     let filesChanged: string[] = [];
 
     try {
-      // 1. Check for changes
-      const status = await sshService.exec(sshTarget, `cd ${workspace} && git -c safe.directory='*' status --porcelain`, 10_000);
-      const diffOutput = await sshService.exec(sshTarget, `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD 2>/dev/null`, 10_000);
+      // 1. Check for changes (git safe.directory needed for root ownership mismatch)
+      const status = await sshService.exec(sshTarget, this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' status --porcelain`), 10_000);
+      const diffOutput = await sshService.exec(sshTarget, this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD 2>/dev/null`), 10_000);
 
       if (diffOutput.stdout?.trim()) {
         filesChanged = diffOutput.stdout.trim().split('\n').filter(Boolean);
       }
 
       if (status.stdout?.trim()) {
-        // 2. Stage, commit, push
+        // 2. Stage, commit, push (wrap with su for root targets)
         const commitMsg = `feat: ${task.description.substring(0, 72)}`;
         const commitResult = await sshService.exec(
           sshTarget,
-          `cd ${workspace} && git -c safe.directory='*' add -A && git -c safe.directory='*' commit -m "${commitMsg.replace(/"/g, '\\"')}" 2>&1`,
+          this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' add -A && git -c safe.directory='*' commit -m "${commitMsg.replace(/"/g, '\\"')}" 2>&1`),
           15_000,
         );
 
@@ -1047,7 +1057,7 @@ export class TaskExecutorService extends Service {
           // Push
           const pushResult = await sshService.exec(
             sshTarget,
-            `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`,
+            this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`),
             30_000,
           );
 
@@ -1058,7 +1068,7 @@ export class TaskExecutorService extends Service {
             const branchName = `task/${shortId}`;
             const prResult = await sshService.exec(
               sshTarget,
-              `cd ${workspace} && gh pr create --fill --head ${branchName} 2>&1`,
+              this.wrapForUser(sshTarget, `cd ${workspace} && gh pr create --fill --head ${branchName} 2>&1`),
               15_000,
             );
 
@@ -1082,11 +1092,11 @@ export class TaskExecutorService extends Service {
           // Check if there were pushable commits
           const unpushed = await sshService.exec(
             sshTarget,
-            `cd ${workspace} && git -c safe.directory='*' log origin/HEAD..HEAD --oneline 2>/dev/null | head -5`,
+            this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' log origin/HEAD..HEAD --oneline 2>/dev/null | head -5`),
             10_000,
           );
           if (unpushed.stdout?.trim()) {
-            await sshService.exec(sshTarget, `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`, 30_000);
+            await sshService.exec(sshTarget, this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' push -u origin HEAD 2>&1`), 30_000);
           }
         }
 
@@ -1094,7 +1104,7 @@ export class TaskExecutorService extends Service {
         if (filesChanged.length === 0) {
           const commitFiles = await sshService.exec(
             sshTarget,
-            `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD~1 HEAD 2>/dev/null`,
+            this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' diff --name-only HEAD~1 HEAD 2>/dev/null`),
             10_000,
           );
           if (commitFiles.stdout?.trim()) {
