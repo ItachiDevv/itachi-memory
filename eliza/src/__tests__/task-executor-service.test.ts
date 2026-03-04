@@ -711,7 +711,7 @@ describe('Windows engine resolution', () => {
 // ============================================================
 
 describe('Windows SSH command construction', () => {
-  it('should use resolved engineCmd in Windows SSH command', () => {
+  it('should use resolved engineCmd with $prompt variable (no pipe)', () => {
     const engineCmd = 'codex';
     const cliFlags = '--dangerously-bypass-approvals-and-sandbox';
     const remotePath = 'C:\\Users\\itachi\\.itachi\\prompt.txt';
@@ -721,39 +721,41 @@ describe('Windows SSH command construction', () => {
       `cd '${workspace}'`,
       `$env:ITACHI_TASK_ID='test-id'`,
       `$env:ITACHI_ENABLED='1'`,
-      `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
+      `$prompt = Get-Content '${remotePath}' -Raw`,
+      `${engineCmd} ${cliFlags} $prompt`,
     ].join('; ');
 
-    expect(sshCommand).toContain('codex --dangerously-bypass-approvals-and-sandbox');
-    expect(sshCommand).not.toContain('claude --dangerously-skip-permissions');
+    expect(sshCommand).toContain('$prompt = Get-Content');
+    expect(sshCommand).toContain('codex --dangerously-bypass-approvals-and-sandbox $prompt');
+    expect(sshCommand).not.toContain('| codex'); // No pipe!
   });
 
-  it('should use gemini with --yolo flag on Windows', () => {
+  it('should use gemini with --yolo flag on Windows (no pipe)', () => {
     const engineCmd = 'gemini';
     const cliFlags = '--yolo';
     const remotePath = 'C:\\temp\\prompt.txt';
-    const workspace = 'C:\\workspace';
 
     const sshCommand = [
-      `cd '${workspace}'`,
-      `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
+      `$prompt = Get-Content '${remotePath}' -Raw`,
+      `${engineCmd} ${cliFlags} $prompt`,
     ].join('; ');
 
-    expect(sshCommand).toContain('gemini --yolo');
+    expect(sshCommand).toContain('gemini --yolo $prompt');
+    expect(sshCommand).not.toContain('| gemini');
   });
 
-  it('should use claude with correct flags on Windows', () => {
+  it('should use claude with correct flags on Windows (no pipe)', () => {
     const engineCmd = 'claude';
     const cliFlags = '--dangerously-skip-permissions -p';
     const remotePath = 'C:\\temp\\prompt.txt';
-    const workspace = 'C:\\workspace';
 
     const sshCommand = [
-      `cd '${workspace}'`,
-      `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
+      `$prompt = Get-Content '${remotePath}' -Raw`,
+      `${engineCmd} ${cliFlags} $prompt`,
     ].join('; ');
 
-    expect(sshCommand).toContain('claude --dangerously-skip-permissions -p');
+    expect(sshCommand).toContain('claude --dangerously-skip-permissions -p $prompt');
+    expect(sshCommand).not.toContain('| claude');
   });
 });
 

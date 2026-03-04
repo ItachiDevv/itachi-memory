@@ -744,8 +744,9 @@ export class TaskExecutorService extends Service {
     const isWindows = sshService.isWindowsTarget(sshTarget);
     let sshCommand: string;
     if (isWindows) {
-      // Windows: pipe to .cmd batch files doesn't forward stdin to child processes.
-      // Load itachi env vars directly in PowerShell, then pipe to claude.
+      // Windows: PowerShell pipes to external executables don't properly close stdin,
+      // causing `Get-Content file | claude -p` to hang indefinitely via SSH.
+      // Instead, read the prompt file into a variable and pass as -p argument.
       sshCommand = [
         `cd '${workspace}'`,
         `$env:ITACHI_TASK_ID='${task.id}'`,
@@ -754,8 +755,9 @@ export class TaskExecutorService extends Service {
         `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
         // Load API keys
         `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
-        // Pipe prompt to resolved engine (bypass itachi.cmd wrapper)
-        `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
+        // Read prompt into variable and pass as argument (avoids pipe stdin hang)
+        `$prompt = Get-Content '${remotePath}' -Raw`,
+        `${engineCmd} ${cliFlags} $prompt`,
       ].join('; ');
     } else {
       // Check if SSH target connects as root — if so, we need to run claude as a
@@ -965,7 +967,8 @@ export class TaskExecutorService extends Service {
           `$env:ITACHI_ENABLED='1'`,
           `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
           `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
-          `Get-Content '${remotePath}' | claude --continue --dangerously-skip-permissions -p`,
+          `$prompt = Get-Content '${remotePath}' -Raw`,
+          `claude --continue --dangerously-skip-permissions -p $prompt`,
         ].join('; ')
       : (() => {
           const resumeTarget = sshService.getTarget(sshTarget);
