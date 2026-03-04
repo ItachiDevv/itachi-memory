@@ -85,19 +85,32 @@ export class MachineRegistryService extends Service {
    */
   async heartbeat(machineId: string, activeTasks: number): Promise<MachineRecord> {
     const status = activeTasks > 0 ? 'busy' : 'online';
+    const now = new Date().toISOString();
+
+    // Try update first (fast path for existing machines)
     const { data, error } = await this.supabase
       .from('machine_registry')
-      .update({
-        last_heartbeat: new Date().toISOString(),
-        active_tasks: activeTasks,
-        status,
-      })
+      .update({ last_heartbeat: now, active_tasks: activeTasks, status })
       .eq('machine_id', machineId)
       .select()
       .single();
 
-    if (error) throw new Error(error.message || JSON.stringify(error));
-    return data as MachineRecord;
+    if (!error && data) return data as MachineRecord;
+
+    // Machine doesn't exist — upsert to create it
+    const { data: upserted, error: upsertErr } = await this.supabase
+      .from('machine_registry')
+      .upsert({
+        machine_id: machineId,
+        last_heartbeat: now,
+        active_tasks: activeTasks,
+        status,
+      }, { onConflict: 'machine_id' })
+      .select()
+      .single();
+
+    if (upsertErr) throw new Error(upsertErr.message || JSON.stringify(upsertErr));
+    return upserted as MachineRecord;
   }
 
   /**

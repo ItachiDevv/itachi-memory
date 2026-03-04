@@ -194,15 +194,9 @@ async function executeCustom(
 
   await sendTelegram(botBaseUrl, item.telegram_chat_id, startNotice);
 
-  // Build a synthetic message as if the user typed the command in Telegram
-  const syntheticMessage: Memory = {
-    entityId: SCHEDULER_ENTITY_ID as any,
-    roomId: SCHEDULER_ROOM_ID as any,
-    content: {
-      text: command,
-      telegram_chat_id: item.telegram_chat_id,
-      telegram_user_id: item.telegram_user_id,
-    } as Content,
+  const baseMsgContent = {
+    telegram_chat_id: item.telegram_chat_id,
+    telegram_user_id: item.telegram_user_id,
   };
 
   // Collect all responses from action handlers
@@ -218,7 +212,12 @@ async function executeCustom(
   // Slash commands map 1:1 to specific actions and don't need LLM routing.
   // Natural language commands skip this — too many actions validate true for free text.
   if (command.startsWith('/')) {
-    const matched = await tryDirectActionDispatch(runtime, syntheticMessage, callback);
+    const slashMessage: Memory = {
+      entityId: SCHEDULER_ENTITY_ID as any,
+      roomId: SCHEDULER_ROOM_ID as any,
+      content: { text: command, ...baseMsgContent } as Content,
+    };
+    const matched = await tryDirectActionDispatch(runtime, slashMessage, callback);
 
     if (matched) {
       const resultText = responses.length > 0
@@ -231,7 +230,20 @@ async function executeCustom(
   }
 
   // Strategy 2: Feed through the LLM message pipeline
-  const llmResult = await tryLlmPipeline(runtime, syntheticMessage, callback, item);
+  // Enrich with scheduling context so the LLM executes autonomously
+  const enrichedText = [
+    `[AUTOMATED SCHEDULED ACTION — execute immediately without asking questions or requesting clarification.`,
+    `Pick the best machine automatically based on project location. Do NOT ask which machine to use.]`,
+    command,
+  ].join('\n');
+
+  const llmMessage: Memory = {
+    entityId: SCHEDULER_ENTITY_ID as any,
+    roomId: SCHEDULER_ROOM_ID as any,
+    content: { text: enrichedText, ...baseMsgContent } as Content,
+  };
+
+  const llmResult = await tryLlmPipeline(runtime, llmMessage, callback, item);
 
   if (llmResult) {
     const resultText = responses.length > 0

@@ -1,5 +1,6 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { MachineRegistryService } from '../services/machine-registry.js';
+import { resolveSSHTarget } from '../shared/repo-utils.js';
 
 function checkAuth(
   req: any,
@@ -42,12 +43,15 @@ export const machineRoutes: Route[] = [
         if (!registry) return;
 
         const body = req.body as Record<string, any>;
-        const { machine_id, display_name, projects, max_concurrent, os, specs, engine_priority, health_url } = body;
+        const { machine_id: rawId, display_name, projects, max_concurrent, os, specs, engine_priority, health_url } = body;
 
-        if (!machine_id || typeof machine_id !== 'string') {
+        if (!rawId || typeof rawId !== 'string') {
           res.status(400).json({ error: 'machine_id (string) required' });
           return;
         }
+
+        // Resolve alias to canonical SSH target (e.g. itachi-m1 → mac)
+        const machine_id = resolveSSHTarget(rawId);
 
         const machine = await registry.registerMachine({
           machine_id,
@@ -82,13 +86,15 @@ export const machineRoutes: Route[] = [
         if (!registry) return;
 
         const body = req.body as Record<string, any>;
-        const { machine_id, active_tasks } = body;
+        const { machine_id: rawId, active_tasks } = body;
 
-        if (!machine_id || typeof machine_id !== 'string') {
+        if (!rawId || typeof rawId !== 'string') {
           res.status(400).json({ error: 'machine_id (string) required' });
           return;
         }
 
+        // Resolve alias to canonical SSH target (e.g. windows-pc → windows)
+        const machine_id = resolveSSHTarget(rawId);
         const activeTasks = typeof active_tasks === 'number' ? active_tasks : 0;
         const machine = await registry.heartbeat(machine_id, activeTasks);
 
@@ -136,13 +142,15 @@ export const machineRoutes: Route[] = [
         if (!registry) return;
 
         const query = req.query as Record<string, string> | undefined;
-        const machineId = query?.machine_id || query?.hostname;
+        const rawId = query?.machine_id || query?.hostname;
 
-        if (!machineId) {
+        if (!rawId) {
           res.status(400).json({ error: 'machine_id or hostname query parameter required' });
           return;
         }
 
+        // Resolve alias to canonical SSH target
+        const machineId = resolveSSHTarget(rawId);
         const machine = await registry.getMachine(machineId);
         const defaultPriority = ['claude', 'codex', 'gemini'];
 
