@@ -116,6 +116,9 @@ function buildDispatch(
     [/^\/close\b/i, null],
     [/^\/cancel\b/i, null],
     [/^\/remind\b/i, null],
+    [/^\/schedule\b/i, null],
+    [/^\/unremind\b/i, null],
+    [/^\/reminders\b/i, null],
     [/^\/gh\b/i, null],
   ];
 }
