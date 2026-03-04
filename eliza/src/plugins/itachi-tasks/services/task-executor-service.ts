@@ -252,7 +252,7 @@ export class TaskExecutorService extends Service {
 
   /**
    * Recover tasks stuck in 'claimed' or 'running' state from a previous crash.
-   * If updated_at (or started_at for claimed) is older than 10 minutes, mark as failed.
+   * Recovers both this executor's tasks and orphaned tasks from the standalone orchestrator.
    */
   private async recoverStaleTasks(runtime: IAgentRuntime): Promise<void> {
     const taskService = runtime.getService<TaskService>('itachi-tasks');
@@ -262,11 +262,12 @@ export class TaskExecutorService extends Service {
     const staleThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
     try {
+      // Recover stale tasks from ANY orchestrator (not just ours) — handles
+      // tasks orphaned by the standalone orchestrator or previous executor instances.
       const { data: staleTasks, error } = await supabase
         .from('itachi_tasks')
-        .select('id, status, description, assigned_machine, started_at')
+        .select('id, status, description, assigned_machine, started_at, orchestrator_id')
         .in('status', ['claimed', 'running'])
-        .eq('orchestrator_id', this.executorId)
         .lt('started_at', staleThreshold)
         .order('created_at', { ascending: false })
         .limit(50);
@@ -278,21 +279,23 @@ export class TaskExecutorService extends Service {
 
       if (!staleTasks || staleTasks.length === 0) return;
 
+      let recovered = 0;
       for (const task of staleTasks) {
         // Skip tasks that are actively running in this process
         if (this.activeTasks.has(task.id)) continue;
 
-        runtime.logger.warn(`[executor] Recovering stale task ${task.id.substring(0, 8)} (status=${task.status}, machine=${task.assigned_machine})`);
+        runtime.logger.warn(`[executor] Recovering stale task ${task.id.substring(0, 8)} (status=${task.status}, machine=${task.assigned_machine}, orchestrator=${(task as any).orchestrator_id})`);
 
         await taskService.updateTask(task.id, {
           status: 'failed',
-          error_message: 'Executor crashed/restarted during execution',
+          error_message: 'Task stale >10min — executor/orchestrator crashed or restarted',
           completed_at: new Date().toISOString(),
         });
+        recovered++;
       }
 
-      if (staleTasks.length > 0) {
-        runtime.logger.info(`[executor] Recovered ${staleTasks.length} stale claimed/running task(s)`);
+      if (recovered > 0) {
+        runtime.logger.info(`[executor] Recovered ${recovered} stale claimed/running task(s)`);
       }
 
       // Also recover tasks stuck in 'queued' for >30min with no machine assigned

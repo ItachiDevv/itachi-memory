@@ -77,7 +77,12 @@ for i in $(seq 1 30); do
 done
 
 # --- Start Orchestrator in background ---
-if [ -n "$ITACHI_MACHINE_ID" ]; then
+# Skip standalone orchestrator when ElizaOS executor is enabled (it handles
+# task execution via SSH, so running both causes race conditions).
+if [ "${ITACHI_EXECUTOR_ENABLED,,}" = "true" ]; then
+  echo "[entrypoint] ElizaOS executor enabled — skipping standalone orchestrator (no race)"
+  ORCH_PID=""
+elif [ -n "$ITACHI_MACHINE_ID" ]; then
   echo "[entrypoint] Starting Orchestrator (machine: $ITACHI_MACHINE_ID)..."
   cd /app/orchestrator
   node dist/index.js &
