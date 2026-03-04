@@ -43,6 +43,7 @@ import {
   detectSelfReference,
   enrichWithLessons,
 } from '../actions/create-task.js';
+import { resolveSSHTarget } from '../shared/repo-utils.js';
 
 const TAG = '[slash-interceptor]';
 
@@ -276,11 +277,11 @@ async function getCachedRepoNames(runtime: IAgentRuntime): Promise<string[]> {
 async function detectDirectTask(
   runtime: IAgentRuntime,
   text: string,
-): Promise<{ project: string; description: string } | null> {
+): Promise<{ project: string; description: string; machine?: string } | null> {
   const repoNames = await getCachedRepoNames(runtime);
   if (repoNames.length === 0) return null;
 
-  // Strategy 0: action verb + known project name
+  // Strategy 0: action verb + known project name (or SSH target)
   const parsed = extractTaskFromUserMessage(text, repoNames);
   if (parsed && parsed.length > 0) return parsed[0];
 
@@ -297,7 +298,7 @@ async function detectDirectTask(
  */
 async function createAndNotifyTask(
   runtime: IAgentRuntime,
-  task: { project: string; description: string },
+  task: { project: string; description: string; machine?: string },
   chatId: number,
   threadId: number | undefined,
   botToken: string,
@@ -309,6 +310,9 @@ async function createAndNotifyTask(
   const telegramUserId = msg.from?.id || 0;
   const telegramChatId = msg.chat?.id || chatId;
 
+  // Resolve machine hint to canonical SSH target
+  const assignedMachine = task.machine ? resolveSSHTarget(task.machine) : undefined;
+
   // Enrich with lessons from previous tasks on this project
   const enrichedDesc = await enrichWithLessons(runtime, task.project, task.description);
 
@@ -317,6 +321,7 @@ async function createAndNotifyTask(
     project: task.project,
     telegram_chat_id: telegramChatId,
     telegram_user_id: telegramUserId,
+    assigned_machine: assignedMachine,
   });
 
   const shortId = created.id.substring(0, 8);
@@ -347,13 +352,15 @@ async function createAndNotifyTask(
 
   const queuedCount = await taskService.getQueuedCount();
 
+  const machineLabel = assignedMachine || 'auto-dispatch';
+
   const output = [
     'Task QUEUED (direct execution).',
     '',
     `ID: ${shortId} (${title})`,
     `Project: ${task.project}`,
     `Description: ${task.description}`,
-    `Machine: auto-dispatch`,
+    `Machine: ${machineLabel}`,
     `Queue: ${queuedCount}${availNote}`,
   ].join('\n');
 

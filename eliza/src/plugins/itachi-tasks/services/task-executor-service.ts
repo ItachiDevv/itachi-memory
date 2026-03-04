@@ -196,8 +196,6 @@ export class TaskExecutorService extends Service {
 
     for (const machineId of this.managedMachines) {
       try {
-        // Get all registry IDs for this SSH target (e.g., 'mac' → ['mac', 'itachi-m1', 'macbook'])
-        const registryIds = getMachineIdsForTarget(machineId);
         // Count active tasks on this machine
         const activeTasks = [...this.activeTasks.values()].filter(t => t.machineId === machineId).length;
 
@@ -208,30 +206,35 @@ export class TaskExecutorService extends Service {
         // Detect projects on this machine (every heartbeat, cheap SSH call)
         const projects = await this.detectProjectsOnMachine(machineId);
 
-        // Register or heartbeat each registry ID for this SSH target
-        for (const regId of registryIds) {
-          try {
-            await registry.heartbeat(regId, activeTasks);
-            // Update projects if we detected any
-            if (projects.length > 0) {
-              await registry.updateProjects(regId, projects);
-            }
-          } catch {
-            // Machine not registered yet — register it
-            await registry.registerMachine({
-              machine_id: regId,
-              display_name: regId,
-              projects,
-              max_concurrent: this.maxConcurrent,
-              os,
-              engine_priority: ['claude', 'codex', 'gemini'],
-            });
-            this.runtime.logger.info(`[executor] Registered machine "${regId}" in registry (projects: ${projects.join(', ') || 'none'})`);
+        // Register or heartbeat only the canonical SSH target (not all aliases)
+        try {
+          await registry.heartbeat(machineId, activeTasks);
+          if (projects.length > 0) {
+            await registry.updateProjects(machineId, projects);
           }
+        } catch {
+          // Machine not registered yet — register it
+          await registry.registerMachine({
+            machine_id: machineId,
+            display_name: machineId,
+            projects,
+            max_concurrent: this.maxConcurrent,
+            os,
+            engine_priority: ['claude', 'codex', 'gemini'],
+          });
+          this.runtime.logger.info(`[executor] Registered machine "${machineId}" in registry (projects: ${projects.join(', ') || 'none'})`);
         }
       } catch (err) {
         this.runtime.logger.warn(`[executor] Heartbeat failed for ${machineId}: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    // Clean up stale alias entries from the old registration scheme
+    try {
+      const cutoff = new Date(Date.now() - 120_000).toISOString();
+      await registry.deleteStaleEntries(cutoff);
+    } catch {
+      // Non-critical — stale entries will be cleaned next heartbeat
     }
   }
 
@@ -603,18 +606,38 @@ export class TaskExecutorService extends Service {
       throw new Error('Task has empty description — cannot build prompt');
     }
 
+    // Detect if this is an operational/info task vs a code-change task
+    const descLower = task.description.toLowerCase();
+    const isOperational = /\b(env\s*var|environment\s*var|logs?|disk\s*space|status|uptime|container|docker|restart|stop|start|memory\s*usage|cpu|df\b|top\b|htop|ps\b|free\b|du\b|systemctl|journalctl)\b/.test(descLower)
+      && !/\b(fix|implement|refactor|create|add|build|write|rewrite|scaffold|migrate)\b/.test(descLower);
+
     const lines: string[] = [
       `You are working on project "${task.project}".`,
       '',
       task.description,
       '',
-      'Instructions:',
-      '- Work autonomously. Make all necessary changes.',
-      '- Make minimal, focused changes.',
-      '- Commit your changes when done.',
-      '- If blocked, explain what you need and wait for input.',
-      '- Push to a feature branch and create a PR if appropriate.',
     ];
+
+    if (isOperational) {
+      lines.push(
+        'Instructions:',
+        '- This is an operational/info-gathering task, NOT a code change.',
+        '- Run the appropriate shell commands to get the requested information.',
+        '- Return the results clearly and concisely.',
+        '- Do NOT modify any code, create branches, or make commits.',
+        '- If you need to check Coolify env vars, use the Coolify API or check the .env file in the project directory.',
+        '- If blocked, explain what you need.',
+      );
+    } else {
+      lines.push(
+        'Instructions:',
+        '- Work autonomously. Make all necessary changes.',
+        '- Make minimal, focused changes.',
+        '- Commit your changes when done.',
+        '- If blocked, explain what you need and wait for input.',
+        '- Push to a feature branch and create a PR if appropriate.',
+      );
+    }
 
     // Fetch relevant memories
     try {

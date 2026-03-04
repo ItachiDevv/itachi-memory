@@ -254,6 +254,14 @@ export class MachineRegistryService extends Service {
   }
 
   /**
+   * Delete machine entries with last_heartbeat older than the given cutoff.
+   * Used to clean up stale alias entries from old registration scheme.
+   */
+  async deleteStaleEntries(cutoff: string): Promise<void> {
+    await this.supabase.from('machine_registry').delete().lt('last_heartbeat', cutoff);
+  }
+
+  /**
    * Update engine priority for a machine.
    */
   async updateEnginePriority(machineId: string, enginePriority: string[]): Promise<MachineRecord> {

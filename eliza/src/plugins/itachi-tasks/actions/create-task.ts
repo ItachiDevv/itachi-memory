@@ -551,7 +551,7 @@ export function detectSelfReference(
 export function extractTaskFromUserMessage(
   text: string,
   knownProjects: string[]
-): Array<{ project: string; description: string }> | null {
+): Array<{ project: string; description: string; machine?: string }> | null {
   const lower = text.toLowerCase();
   const trimmed = text.trim();
 
@@ -559,7 +559,7 @@ export function extractTaskFromUserMessage(
   // A "pure question" has question syntax but NO action verb
   const hasQuestionSyntax = trimmed.endsWith('?')
     || /^(what|who|where|when|why|how|is|are|was|were|does|did|has|have|had|any|show)\b/i.test(trimmed);
-  const hasActionVerb = /\b(fix|create|add|implement|build|refactor|update|remove|delete|optimize|audit|review|scaffold|deploy|migrate|test|write|rewrite|move|rename|clean|configure|set\s*up)\b/i.test(lower);
+  const hasActionVerb = /\b(fix|create|add|implement|build|refactor|update|remove|delete|optimize|audit|review|scaffold|deploy|migrate|test|write|rewrite|move|rename|clean|configure|set\s*up|get|give|fetch|show|list|check|run|execute|start|stop|restart|pull|push|install|count|find|search|scan|monitor|inspect|investigate|analyze|send|verify|validate)\b/i.test(lower);
 
   if (hasQuestionSyntax && !hasActionVerb) {
     console.log(`[create-task] Strategy 0: skipping question without action verb`);
@@ -578,10 +578,30 @@ export function extractTaskFromUserMessage(
         .replace(/\?\s*$/, '')
         .trim();
       if (desc.length < 10) continue; // too short to be meaningful
+      // Also check if an SSH target is mentioned alongside the project
+      const SSH_TARGETS = ['coolify', 'hetzner', 'mac', 'windows', 'server', 'vps'];
+      const target = SSH_TARGETS.find(t => new RegExp(`\\b${t}\\b`, 'i').test(lower));
       console.log(`[create-task] Strategy 0: matched project "${proj}" from user message`);
-      return [{ project: proj, description: desc }];
+      return [{ project: proj, description: desc, machine: target }];
     }
   }
+
+  // If no project matched, check for SSH target mentions → map to default project
+  const SSH_TARGET_NAMES = ['coolify', 'hetzner', 'mac', 'windows', 'server', 'vps'];
+  const mentionedTarget = SSH_TARGET_NAMES.find(t =>
+    new RegExp(`\\b${t}\\b`, 'i').test(lower)
+  );
+  if (mentionedTarget && hasActionVerb) {
+    let desc = text
+      .replace(/^(?:can you|could you|please|hey|yo|)\s*/i, '')
+      .replace(/\?\s*$/, '')
+      .trim();
+    if (desc.length >= 10) {
+      console.log(`[create-task] Strategy 0: matched SSH target "${mentionedTarget}" from user message`);
+      return [{ project: 'itachi-memory', description: desc, machine: mentionedTarget }];
+    }
+  }
+
   return null;
 }
 
