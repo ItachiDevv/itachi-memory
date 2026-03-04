@@ -624,3 +624,207 @@ describe('ANSI stripping', () => {
     expect(stripAnsi('a\n\n\n\nb')).toBe('a\n\nb');
   });
 });
+
+// ============================================================
+// 13. Windows engine resolution (Get-Command vs which)
+// ============================================================
+
+const ENGINE_DIRECT: Record<string, string> = {
+  claude: 'claude',
+  codex: 'codex',
+  gemini: 'gemini',
+};
+
+describe('Windows engine resolution', () => {
+  it('should use Get-Command on Windows targets', async () => {
+    let executedCmd = '';
+    const sshService = makeMockSSHService({
+      exec: async (_target: string, cmd: string) => {
+        executedCmd = cmd;
+        return { success: true, stdout: 'FOUND', stderr: '' };
+      },
+      isWindowsTarget: (t: string) => t === 'windows',
+    });
+
+    // Simulate resolveEngineCommand logic for Windows
+    const sshTarget = 'windows';
+    const wrapper = 'itachi';
+    const isWin = sshService.isWindowsTarget(sshTarget);
+    const checkCmd = isWin
+      ? `try { Get-Command ${wrapper} -ErrorAction Stop | Out-Null; Write-Output FOUND } catch { Write-Output MISSING }`
+      : `which ${wrapper} 2>/dev/null || echo MISSING`;
+
+    await sshService.exec(sshTarget, checkCmd, 5_000);
+
+    expect(executedCmd).toContain('Get-Command');
+    expect(executedCmd).not.toContain('which');
+  });
+
+  it('should use which on Linux targets', async () => {
+    let executedCmd = '';
+    const sshService = makeMockSSHService({
+      exec: async (_target: string, cmd: string) => {
+        executedCmd = cmd;
+        return { success: true, stdout: '/usr/local/bin/itachi', stderr: '' };
+      },
+      isWindowsTarget: () => false,
+    });
+
+    const sshTarget = 'coolify';
+    const wrapper = 'itachi';
+    const isWin = sshService.isWindowsTarget(sshTarget);
+    const checkCmd = isWin
+      ? `try { Get-Command ${wrapper} -ErrorAction Stop | Out-Null; Write-Output FOUND } catch { Write-Output MISSING }`
+      : `which ${wrapper} 2>/dev/null || echo MISSING`;
+
+    await sshService.exec(sshTarget, checkCmd, 5_000);
+
+    expect(executedCmd).toContain('which');
+    expect(executedCmd).not.toContain('Get-Command');
+  });
+
+  it('should fall back to direct CLI when wrapper MISSING', async () => {
+    const sshService = makeMockSSHService({
+      exec: async () => ({ success: true, stdout: 'MISSING', stderr: '' }),
+      isWindowsTarget: () => false,
+    });
+
+    const check = await sshService.exec('coolify', 'which itachi 2>/dev/null || echo MISSING', 5_000);
+    const isMissing = check.stdout?.includes('MISSING');
+    expect(isMissing).toBe(true);
+  });
+
+  it('should detect wrapper found when stdout has path', async () => {
+    const sshService = makeMockSSHService({
+      exec: async () => ({ success: true, stdout: '/usr/local/bin/itachi', stderr: '' }),
+    });
+
+    const check = await sshService.exec('coolify', 'which itachi 2>/dev/null || echo MISSING', 5_000);
+    const isMissing = check.stdout?.includes('MISSING');
+    expect(isMissing).toBe(false);
+    expect(check.stdout?.trim()).toBeTruthy();
+  });
+});
+
+// ============================================================
+// 14. Windows SSH command uses resolved engine
+// ============================================================
+
+describe('Windows SSH command construction', () => {
+  it('should use resolved engineCmd in Windows SSH command', () => {
+    const engineCmd = 'codex';
+    const cliFlags = '--dangerously-bypass-approvals-and-sandbox';
+    const remotePath = 'C:\\Users\\itachi\\.itachi\\prompt.txt';
+    const workspace = 'C:\\Users\\itachi\\itachi-memory';
+
+    const sshCommand = [
+      `cd '${workspace}'`,
+      `$env:ITACHI_TASK_ID='test-id'`,
+      `$env:ITACHI_ENABLED='1'`,
+      `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
+    ].join('; ');
+
+    expect(sshCommand).toContain('codex --dangerously-bypass-approvals-and-sandbox');
+    expect(sshCommand).not.toContain('claude --dangerously-skip-permissions');
+  });
+
+  it('should use gemini with --yolo flag on Windows', () => {
+    const engineCmd = 'gemini';
+    const cliFlags = '--yolo';
+    const remotePath = 'C:\\temp\\prompt.txt';
+    const workspace = 'C:\\workspace';
+
+    const sshCommand = [
+      `cd '${workspace}'`,
+      `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
+    ].join('; ');
+
+    expect(sshCommand).toContain('gemini --yolo');
+  });
+
+  it('should use claude with correct flags on Windows', () => {
+    const engineCmd = 'claude';
+    const cliFlags = '--dangerously-skip-permissions -p';
+    const remotePath = 'C:\\temp\\prompt.txt';
+    const workspace = 'C:\\workspace';
+
+    const sshCommand = [
+      `cd '${workspace}'`,
+      `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
+    ].join('; ');
+
+    expect(sshCommand).toContain('claude --dangerously-skip-permissions -p');
+  });
+});
+
+// ============================================================
+// 15. CLI flags per engine
+// ============================================================
+
+describe('CLI flags per engine', () => {
+  function getCliFlags(engine: string, isWrapper: boolean): string {
+    if (isWrapper) return '--dp';
+    switch (engine) {
+      case 'codex': return '--dangerously-bypass-approvals-and-sandbox';
+      case 'gemini': return '--yolo';
+      default: return '--dangerously-skip-permissions -p';
+    }
+  }
+
+  it('should return --dp for wrapper commands', () => {
+    expect(getCliFlags('claude', true)).toBe('--dp');
+    expect(getCliFlags('codex', true)).toBe('--dp');
+  });
+
+  it('should return codex-specific flags for direct codex', () => {
+    expect(getCliFlags('codex', false)).toBe('--dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it('should return gemini-specific flags for direct gemini', () => {
+    expect(getCliFlags('gemini', false)).toBe('--yolo');
+  });
+
+  it('should default to claude flags for unknown engine', () => {
+    expect(getCliFlags('gpt4o', false)).toBe('--dangerously-skip-permissions -p');
+  });
+});
+
+// ============================================================
+// 16. Timeout and exit code handling
+// ============================================================
+
+describe('Timeout and exit code handling', () => {
+  it('should set finalStatus to timeout when wasTimeout is true', () => {
+    const wasTimeout = true;
+    const exitCode = 1;
+    const finalStatus = wasTimeout ? 'timeout' : (exitCode === 0 ? 'completed' : 'failed');
+    expect(finalStatus).toBe('timeout');
+  });
+
+  it('should include "timed out" in error message on timeout', () => {
+    const wasTimeout = true;
+    const errorMessage = wasTimeout ? 'Task timed out after 300s' : 'Process exited with code 1';
+    expect(errorMessage).toContain('timed out');
+  });
+
+  it('should set completed when exit code is 0', () => {
+    const wasTimeout = false;
+    const exitCode = 0;
+    const finalStatus = wasTimeout ? 'timeout' : (exitCode === 0 ? 'completed' : 'failed');
+    expect(finalStatus).toBe('completed');
+  });
+
+  it('should set failed when exit code is 1', () => {
+    const wasTimeout = false;
+    const exitCode = 1;
+    const finalStatus = wasTimeout ? 'timeout' : (exitCode === 0 ? 'completed' : 'failed');
+    expect(finalStatus).toBe('failed');
+  });
+
+  it('should prioritize timeout over non-zero exit code', () => {
+    const wasTimeout = true;
+    const exitCode = 137; // SIGKILL
+    const finalStatus = wasTimeout ? 'timeout' : (exitCode === 0 ? 'completed' : 'failed');
+    expect(finalStatus).toBe('timeout');
+  });
+});

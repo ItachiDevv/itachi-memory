@@ -692,7 +692,11 @@ export class TaskExecutorService extends Service {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
 
     try {
-      const check = await sshService.exec(sshTarget, `which ${wrapper} 2>/dev/null || echo MISSING`, 5_000);
+      const isWin = sshService.isWindowsTarget(sshTarget);
+      const checkCmd = isWin
+        ? `try { Get-Command ${wrapper} -ErrorAction Stop | Out-Null; Write-Output FOUND } catch { Write-Output MISSING }`
+        : `which ${wrapper} 2>/dev/null || echo MISSING`;
+      const check = await sshService.exec(sshTarget, checkCmd, 5_000);
       if (!check.stdout?.includes('MISSING') && check.stdout?.trim()) {
         return { cmd: wrapper, engine };
       }
@@ -750,8 +754,8 @@ export class TaskExecutorService extends Service {
         `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
         // Load API keys
         `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
-        // Pipe prompt to claude directly (bypass itachi.cmd)
-        `Get-Content '${remotePath}' | claude --dangerously-skip-permissions -p`,
+        // Pipe prompt to resolved engine (bypass itachi.cmd wrapper)
+        `Get-Content '${remotePath}' | ${engineCmd} ${cliFlags}`,
       ].join('; ');
     } else {
       // Check if SSH target connects as root — if so, we need to run claude as a

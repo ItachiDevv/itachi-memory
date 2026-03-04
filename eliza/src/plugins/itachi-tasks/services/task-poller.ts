@@ -75,6 +75,7 @@ export class TaskPollerService extends Service {
         metadata: {
           task_status: task.status,
           is_failure: isFailure,
+          outcome: isFailure ? 'failure' : 'success',
           source: 'task_completion',
         },
       });
@@ -89,8 +90,6 @@ export class TaskPollerService extends Service {
         task.description.substring(0, 200),
         task.project,
         5,
-        undefined,
-        'task_lesson',
       );
       for (const cl of contextLessons) {
         if (cl.id === newLesson?.id) continue; // skip the one we just stored

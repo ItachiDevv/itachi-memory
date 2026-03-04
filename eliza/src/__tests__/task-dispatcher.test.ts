@@ -274,3 +274,118 @@ describe('Task Dispatcher — no machine available', () => {
     expect(typeof result).toBe('boolean');
   });
 });
+
+// ============================================================
+// MACHINE MATCHING — project assignment and capacity
+// ============================================================
+
+describe('Task Dispatcher — machine matching', () => {
+  it('should assign project to machine that lists that project', async () => {
+    const assignCalls: any[] = [];
+    const registry = makeMockRegistry({
+      getMachineForProject: async (project: string) => {
+        if (project === 'web-app') {
+          return { machine_id: 'web-server', projects: ['web-app', 'api'], max_concurrent: 3, active_tasks: 0 };
+        }
+        return null;
+      },
+      assignTask: async (taskId: string, machineId: string) => {
+        assignCalls.push({ taskId, machineId });
+      },
+    });
+
+    const unassignedTasks = [
+      { id: 'task-web', project: 'web-app' },
+    ];
+    const queryBuilder: any = {
+      select: () => queryBuilder,
+      eq: () => queryBuilder,
+      is: () => queryBuilder,
+      order: () => queryBuilder,
+      limit: () => Promise.resolve({ data: unassignedTasks, error: null }),
+    };
+    const taskService = {
+      getSupabase: () => ({ from: () => queryBuilder }),
+    };
+
+    const { runtime } = makeMockRuntime({
+      'machine-registry': registry,
+      'itachi-tasks': taskService,
+    });
+
+    await taskDispatcherWorker.execute(runtime);
+
+    expect(assignCalls).toHaveLength(1);
+    expect(assignCalls[0]).toEqual({ taskId: 'task-web', machineId: 'web-server' });
+  });
+
+  it('should not assign when no available machines for project', async () => {
+    const assignCalls: any[] = [];
+    const registry = makeMockRegistry({
+      getMachineForProject: async () => null,
+      assignTask: async (taskId: string, machineId: string) => {
+        assignCalls.push({ taskId, machineId });
+      },
+    });
+
+    const unassignedTasks = [
+      { id: 'orphan-task', project: 'unknown-project' },
+    ];
+    const queryBuilder: any = {
+      select: () => queryBuilder,
+      eq: () => queryBuilder,
+      is: () => queryBuilder,
+      order: () => queryBuilder,
+      limit: () => Promise.resolve({ data: unassignedTasks, error: null }),
+    };
+    const taskService = {
+      getSupabase: () => ({ from: () => queryBuilder }),
+    };
+
+    const { runtime } = makeMockRuntime({
+      'machine-registry': registry,
+      'itachi-tasks': taskService,
+    });
+
+    await taskDispatcherWorker.execute(runtime);
+
+    expect(assignCalls).toHaveLength(0);
+  });
+
+  it('should not select machine at max_concurrent (active_tasks >= max)', async () => {
+    const assignCalls: any[] = [];
+    const registry = makeMockRegistry({
+      getMachineForProject: async (project: string) => {
+        // Machine is at capacity — getMachineForProject should already filter this
+        // but we test that null means "no available machine"
+        return null;
+      },
+      assignTask: async (taskId: string, machineId: string) => {
+        assignCalls.push({ taskId, machineId });
+      },
+    });
+
+    const unassignedTasks = [
+      { id: 'task-at-cap', project: 'busy-project' },
+    ];
+    const queryBuilder: any = {
+      select: () => queryBuilder,
+      eq: () => queryBuilder,
+      is: () => queryBuilder,
+      order: () => queryBuilder,
+      limit: () => Promise.resolve({ data: unassignedTasks, error: null }),
+    };
+    const taskService = {
+      getSupabase: () => ({ from: () => queryBuilder }),
+    };
+
+    const { runtime } = makeMockRuntime({
+      'machine-registry': registry,
+      'itachi-tasks': taskService,
+    });
+
+    await taskDispatcherWorker.execute(runtime);
+
+    expect(assignCalls).toHaveLength(0);
+  });
+});
