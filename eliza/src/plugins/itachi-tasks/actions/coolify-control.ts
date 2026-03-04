@@ -608,7 +608,8 @@ export async function handleSlashCommand(
   // /ssh <target> <command>
   const sshMatch = text.match(/^\/ssh\s+(\S+)\s+(.+)/s);
   if (sshMatch) {
-    const targetName = sshMatch[1];
+    const rawTarget = sshMatch[1];
+    const targetName = MACHINE_ALIASES[rawTarget.toLowerCase()] || rawTarget;
     const command = sshMatch[2].trim();
     const target = sshService.getTarget(targetName);
     if (!target) {
