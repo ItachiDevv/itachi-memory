@@ -4,7 +4,7 @@ import { TaskService, type ItachiTask, generateTaskTitle } from './task-service.
 import { TelegramTopicsService } from './telegram-topics.js';
 import { MachineRegistryService } from './machine-registry.js';
 import { activeSessions, markSessionClosed } from '../shared/active-sessions.js';
-import { resolveRepoPathByProject } from '../shared/repo-utils.js';
+import { resolveRepoPathByProject, EXTRA_REPO_BASES, DEFAULT_REPO_BASES } from '../shared/repo-utils.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
@@ -187,27 +187,67 @@ export class TaskExecutorService extends Service {
         const lower = machineId.toLowerCase();
         const os = lower === 'mac' ? 'darwin' : lower === 'windows' ? 'win32' : 'linux';
 
+        // Detect projects on this machine (every heartbeat, cheap SSH call)
+        const projects = await this.detectProjectsOnMachine(machineId);
+
         // Register or heartbeat each registry ID for this SSH target
         for (const regId of registryIds) {
           try {
             await registry.heartbeat(regId, activeTasks);
+            // Update projects if we detected any
+            if (projects.length > 0) {
+              await registry.updateProjects(regId, projects);
+            }
           } catch {
             // Machine not registered yet — register it
             await registry.registerMachine({
               machine_id: regId,
               display_name: regId,
-              projects: [],
+              projects,
               max_concurrent: this.maxConcurrent,
               os,
               engine_priority: ['claude', 'codex', 'gemini'],
             });
-            this.runtime.logger.info(`[executor] Registered machine "${regId}" in registry`);
+            this.runtime.logger.info(`[executor] Registered machine "${regId}" in registry (projects: ${projects.join(', ') || 'none'})`);
           }
         }
       } catch (err) {
         this.runtime.logger.warn(`[executor] Heartbeat failed for ${machineId}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+  }
+
+  /**
+   * Detect which projects (git repos) exist on a machine by listing its base directories.
+   * Returns an array of directory names that are git repos.
+   */
+  private async detectProjectsOnMachine(sshTarget: string): Promise<string[]> {
+    const sshService = this.runtime.getService<SSHService>('ssh');
+    if (!sshService) return [];
+
+    const base = getStartingDir(sshTarget);
+    const extras = EXTRA_REPO_BASES[sshTarget] || [];
+    const allBases = [base, ...extras];
+    const isWindows = sshService.isWindowsTarget(sshTarget);
+    const projects = new Set<string>();
+
+    for (const dir of allBases) {
+      try {
+        // List directories that contain .git (are repos)
+        const cmd = isWindows
+          ? `Get-ChildItem -Path '${dir}' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName '.git') } | ForEach-Object { $_.Name }`
+          : `for d in ${dir}/*/; do [ -d "$d/.git" ] && basename "$d"; done 2>/dev/null`;
+        const result = await sshService.exec(sshTarget, cmd, 10_000);
+        if (result.success && result.stdout) {
+          for (const name of result.stdout.trim().split('\n')) {
+            const trimmed = name.trim();
+            if (trimmed) projects.add(trimmed);
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+
+    return [...projects];
   }
 
   /**

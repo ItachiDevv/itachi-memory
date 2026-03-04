@@ -101,6 +101,20 @@ export class MachineRegistryService extends Service {
   }
 
   /**
+   * Update the projects array for a machine (detected repos on disk).
+   */
+  async updateProjects(machineId: string, projects: string[]): Promise<void> {
+    const { error } = await this.supabase
+      .from('machine_registry')
+      .update({ projects })
+      .eq('machine_id', machineId);
+
+    if (error) {
+      // Non-critical — don't throw, just log
+    }
+  }
+
+  /**
    * Get machines that are online and have capacity (active_tasks < max_concurrent).
    * Only includes machines with heartbeat within the last 60 seconds.
    */

@@ -67,8 +67,15 @@ export const DEFAULT_REPO_PATHS: Record<string, string> = {
 /** Base directories where repos are typically cloned per machine */
 export const DEFAULT_REPO_BASES: Record<string, string> = {
   mac: '~/itachi',
-  windows: '~/Documents/Crypto',
+  windows: '~/Documents/Crypto/skills-plugins',
   coolify: '/home/itachi/itachi',
+};
+
+/** Additional search directories per machine (checked if primary base misses) */
+export const EXTRA_REPO_BASES: Record<string, string[]> = {
+  mac: [],
+  windows: ['~/Documents/Crypto'],
+  coolify: [],
 };
 
 export interface RepoResolution {
@@ -171,6 +178,7 @@ export async function resolveRepoPath(
 
 /**
  * Resolve repo path by exact project name (for task executor where project is already known).
+ * Checks primary base dir, then extra bases, then tries to clone.
  */
 export async function resolveRepoPathByProject(
   target: string,
@@ -179,31 +187,41 @@ export async function resolveRepoPathByProject(
   sshService: SSHService,
   logger: IAgentRuntime['logger'],
 ): Promise<string | null> {
-  const base = getStartingDir(target);
+  const primaryBase = getStartingDir(target);
+  const extraBases = EXTRA_REPO_BASES[target] || [];
+  const allBases = [primaryBase, ...extraBases];
+  const isWindows = sshService.isWindowsTarget(target);
+  const escapedProject = project.replace(/'/g, "''");
 
-  try {
-    const isWindows = sshService.isWindowsTarget(target);
-    const escapedProject = project.replace(/'/g, "''");
-    const findCmd = isWindows
-      ? `if (Test-Path '${base}/${escapedProject}') { Write-Output (Resolve-Path '${base}/${escapedProject}').Path } else { Write-Output 'MISSING' }`
-      : `found=$(find ${base} -maxdepth 1 -iname '${project.replace(/'/g, "'\\''")}' -type d 2>/dev/null | head -1) && [ -n "$found" ] && echo "$found" || echo MISSING`;
-    const check = await sshService.exec(target, findCmd, 5_000);
-    const output = (check.stdout || '').trim();
+  // Check each base directory for the project
+  for (const base of allBases) {
+    try {
+      const findCmd = isWindows
+        ? `if (Test-Path '${base}/${escapedProject}') { Write-Output (Resolve-Path '${base}/${escapedProject}').Path } else { Write-Output 'MISSING' }`
+        : `found=$(find ${base} -maxdepth 1 -iname '${project.replace(/'/g, "'\\''")}' -type d 2>/dev/null | head -1) && [ -n "$found" ] && echo "$found" || echo MISSING`;
+      const check = await sshService.exec(target, findCmd, 5_000);
+      const output = (check.stdout || '').trim();
 
-    if (output !== 'MISSING' && output !== '') {
-      return output;
+      if (output !== 'MISSING' && output !== '') {
+        logger.info(`[repo-utils] Found ${project} at ${output} on ${target}`);
+        return output;
+      }
+    } catch (err) {
+      logger.warn(`[repo-utils] Check failed for ${base}/${project}: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
 
-    // Clone if URL available
-    if (repoUrl) {
-      const candidatePath = `${base}/${project}`;
-      logger.info(`[repo-utils] Cloning ${repoUrl} → ${candidatePath} on ${target}`);
+  // Not found anywhere — clone if URL available
+  if (repoUrl) {
+    const candidatePath = `${primaryBase}/${project}`;
+    logger.info(`[repo-utils] Cloning ${repoUrl} → ${candidatePath} on ${target}`);
+    try {
       const clone = await sshService.exec(target, buildCloneCmd(repoUrl, candidatePath), 120_000);
       if (clone.success) return candidatePath;
       logger.warn(`[repo-utils] Clone failed: ${clone.stderr || clone.stdout}`);
+    } catch (err) {
+      logger.warn(`[repo-utils] Clone error: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } catch (err) {
-    logger.warn(`[repo-utils] resolveRepoPathByProject failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   return null;
