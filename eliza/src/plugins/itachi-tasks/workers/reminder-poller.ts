@@ -245,20 +245,22 @@ async function executeCustom(
 }
 
 /**
- * Framework/generic actions that should NEVER be matched by the scheduler.
- * These validate true for almost everything but do nothing useful for scheduled commands.
+ * Only these itachi plugin actions are eligible for direct scheduler dispatch.
+ * All framework actions (REPLY, IGNORE, UPDATE_ENTITY, etc.) are excluded.
  */
-const SKIP_ACTIONS = new Set([
-  'REPLY', 'IGNORE', 'NONE',
-  'UPDATE_ENTITY', 'FOLLOW_ROOM', 'UNFOLLOW_ROOM',
-  'MUTE_ROOM', 'UNMUTE_ROOM',
-  'SEND_MESSAGE', 'WAIT', 'CONTINUE',
+const ALLOWED_ACTIONS = new Set([
+  'CREATE_TASK', 'LIST_TASKS', 'CANCEL_TASK',
+  'REMOTE_EXEC', 'GITHUB_DIRECT', 'COOLIFY_CONTROL',
+  'TELEGRAM_COMMANDS', 'REMINDER_COMMANDS',
+  'INTERACTIVE_SESSION', 'SPAWN_CLAUDE_SESSION', 'TOPIC_REPLY',
+  'MESSAGE_SUBAGENT', 'LIST_SUBAGENTS', 'MANAGE_AGENT_CRON', 'SPAWN_SUBAGENT',
+  'STORE_MEMORY',
 ]);
 
 /**
- * Try to find a registered action whose validate() returns true for the command,
+ * Try to find a registered itachi action whose validate() returns true for the command,
  * then call its handler directly. Fast path — no LLM needed.
- * Skips generic framework actions that validate true for everything.
+ * Only considers itachi plugin actions, skipping all framework actions.
  */
 async function tryDirectActionDispatch(
   runtime: IAgentRuntime,
@@ -268,7 +270,7 @@ async function tryDirectActionDispatch(
   const actions = runtime.actions || [];
 
   for (const action of actions) {
-    if (SKIP_ACTIONS.has(action.name)) continue;
+    if (!ALLOWED_ACTIONS.has(action.name)) continue;
 
     try {
       const valid = await action.validate(runtime, message);

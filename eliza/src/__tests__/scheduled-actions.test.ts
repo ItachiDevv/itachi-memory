@@ -203,7 +203,7 @@ describe('Scheduled Actions Integration', () => {
 
     // Register a fake action that handles /repos
     const fakeAction = {
-      name: 'LIST_REPOS',
+      name: 'TELEGRAM_COMMANDS',
       validate: async (_rt: any, msg: any) => msg.content?.text === '/repos',
       handler: async (_rt: any, _msg: any, _s: any, _o: any, cb: any) => {
         if (cb) await cb({ text: 'Found repos: itachi-memory, lotitachi' });
