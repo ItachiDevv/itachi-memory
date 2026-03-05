@@ -14,8 +14,14 @@ const KNOWN_PROJECTS = ['itachi-memory', 'time', 'lotitachi', 'gudtek', 'elizape
 
 function isCronRequest(text: string): boolean {
   const lower = text.toLowerCase();
-  return /\b(schedule|set up)\b/i.test(lower)
-    && /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+  const hasScheduleVerb = /\b(schedule|set up)\b/i.test(lower);
+  const hasFrequencyKeyword = /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+  // "schedule" + frequency → cron; "set up" + frequency → cron
+  // "schedule [noun]" (not "schedule a task to/me") → also cron (inherently implies recurring)
+  // "set up [noun]" without frequency → one-shot setup, NOT cron
+  const isScheduleNoun = /\bschedule\b/i.test(lower)
+    && !/\bschedule\s+(a\s+task|me)\b/i.test(lower);
+  return (hasScheduleVerb && hasFrequencyKeyword) || isScheduleNoun;
 }
 
 // ─── store-memory validate pattern (duplicated from store-memory.ts) ───
@@ -91,8 +97,8 @@ describe('isCronRequest — cron vs one-shot routing', () => {
     expect(isCronRequest('remind me every morning to check logs')).toBe(false);
   });
 
-  it('should NOT detect "schedule deployment of itachi-memory" as cron (no time pattern)', () => {
-    expect(isCronRequest('schedule deployment of itachi-memory')).toBe(false);
+  it('should detect "schedule deployment of itachi-memory" as cron (schedule as main verb)', () => {
+    expect(isCronRequest('schedule deployment of itachi-memory')).toBe(true);
   });
 
   it('should detect "set up a weekly disk check" as cron', () => {

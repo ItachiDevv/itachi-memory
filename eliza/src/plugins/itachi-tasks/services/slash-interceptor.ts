@@ -286,8 +286,14 @@ async function detectDirectTask(
 
   // Yield to ElizaOS MANAGE_AGENT_CRON for recurring/scheduled patterns
   const lower = text.toLowerCase();
-  const isCronRequest = /\b(schedule|set up)\b/i.test(lower)
-    && /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+  const hasScheduleVerb = /\b(schedule|set up)\b/i.test(lower);
+  const hasFrequencyKeyword = /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+  // "schedule" + frequency → cron; "set up" + frequency → cron
+  // "schedule [noun]" (not "schedule a task to/me") → also cron (inherently implies recurring)
+  // "set up [noun]" without frequency → one-shot setup, NOT cron
+  const isScheduleNoun = /\bschedule\b/i.test(lower)
+    && !/\bschedule\s+(a\s+task|me)\b/i.test(lower);
+  const isCronRequest = (hasScheduleVerb && hasFrequencyKeyword) || isScheduleNoun;
   if (isCronRequest) {
     runtime.logger.info(`${TAG} Yielding to MANAGE_AGENT_CRON for: "${text.substring(0, 60)}"`);
     return null;
