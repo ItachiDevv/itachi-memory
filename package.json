@@ -27,6 +27,8 @@
   },
   "homepage": "https://github.com/ItachiDevv/itachi-memory#readme",
   "dependencies": {
-    "@supabase/supabase-js": "^2.95.2"
+    "@supabase/supabase-js": "^2.95.2",
+    "input": "^1.0.1",
+    "telegram": "^2.26.22"
   }
 }
