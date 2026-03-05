@@ -644,7 +644,7 @@ export async function handleSyncRepos(
   return { success: true, data: result as unknown as Record<string, unknown> };
 }
 
-async function handleDeleteTopics(
+export async function handleDeleteTopics(
   runtime: IAgentRuntime,
   status: string,
   callback?: HandlerCallback
@@ -926,7 +926,7 @@ async function handleDeleteTopicPicker(
 /**
  * /close_all_topics — Close (archive) ALL topics. Topics stay visible but are collapsed.
  */
-async function handleCloseAllTopics(
+export async function handleCloseAllTopics(
   runtime: IAgentRuntime,
   callback?: HandlerCallback
 ): Promise<ActionResult> {
@@ -966,7 +966,7 @@ async function handleCloseAllTopics(
 /**
  * /delete_topics all — Permanently delete ALL topics (removes from chat).
  */
-async function handleDeleteTopicsAll(
+export async function handleDeleteTopicsAll(
   runtime: IAgentRuntime,
   callback?: HandlerCallback
 ): Promise<ActionResult> {

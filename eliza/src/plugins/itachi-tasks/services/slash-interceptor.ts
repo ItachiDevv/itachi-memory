@@ -30,6 +30,9 @@ import {
   handleSpawn,
   handleAgents,
   handleMsg,
+  handleCloseAllTopics,
+  handleDeleteTopicsAll,
+  handleDeleteTopics,
 } from '../actions/telegram-commands.js';
 import {
   handleSlashCommand,
@@ -54,7 +57,7 @@ const TG_MAX = 4096;
 const SESSION_CONTROL = /^\/(ctrl\+[a-z\\]|stop|exit|esc|close|switch|kill|interrupt|enter|tab|yes|no)\b/i;
 
 /** Interactive-flow commands that need ElizaOS callback buttons */
-const PASS_THROUGH = /^\/(session|browse|task|delete[-_]?topics?|delete|close[-_]?all|closealltopics)\b/i;
+const PASS_THROUGH = /^\/(session|browse|task|delete)\b/i;
 
 type Handler = (
   runtime: IAgentRuntime,
@@ -107,11 +110,21 @@ function buildDispatch(
     [/^\/ops\b/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
     [/^\/ssh[-_]?test$/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
     [/^\/ssh[-_]?targets$/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
+    // Topic management — handled directly (ElizaOS pass-through is unreliable for these)
+    [/^\/close[-_]?all[-_]?topics?$/i, (rt, _t, cb) => handleCloseAllTopics(rt, cb)],
+    [/^\/closealltopics$/i, (rt, _t, cb) => handleCloseAllTopics(rt, cb)],
+    [/^\/delete[-_]?topics?\s+(done|failed|cancelled|completed|timeout)\b/i, (rt, t, cb) => {
+      const statusMatch = t.match(/\s+(done|failed|cancelled|completed|timeout)/i);
+      const status = statusMatch?.[1]?.toLowerCase() || 'all';
+      const mapped = status === 'done' ? 'completed' : status;
+      return handleDeleteTopics(rt, mapped, cb);
+    }],
+    [/^\/delete[-_]?topics?\s+all\b/i, (rt, _t, cb) => handleDeleteTopicsAll(rt, cb)],
+    [/^\/delete[-_]?topics?$/i, (rt, _t, cb) => handleDeleteTopicsAll(rt, cb)],
     // Pass-through markers (null handler → let ElizaOS handle)
     [/^\/session\b/i, null],
     [/^\/browse\b/i, null],
     [/^\/task\b/i, null],
-    [/^\/delete[-_]?topics?\b/i, null],
     [/^\/delete\b/i, null],
     [/^\/close\b/i, null],
     [/^\/cancel\b/i, null],
