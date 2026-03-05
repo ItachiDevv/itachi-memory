@@ -102,6 +102,14 @@ export const createTaskAction: Action = {
       }
     }
 
+    // Yield to MANAGE_AGENT_CRON for recurring/scheduled task patterns
+    const isCronRequest = /\b(schedule|set up)\b/i.test(lower)
+      && /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+    if (isCronRequest) {
+      runtime.logger.debug(`[CREATE_TASK] validate: "${text.substring(0, 60)}" → false (cron request, yielding to MANAGE_AGENT_CRON)`);
+      return false;
+    }
+
     // Only validate for natural language if there's a task-creation or confirmation signal
     const hasTaskSignal = /\b(task|queue|create|make|add|schedule|work on)\b/i.test(lower)
       || /\b(yes|yeah|do it|go ahead|please|confirm|yep|sure|ok|okay)\b/i.test(lower);

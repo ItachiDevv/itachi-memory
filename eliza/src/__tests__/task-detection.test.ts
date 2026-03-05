@@ -138,3 +138,62 @@ describe('detectSelfReference', () => {
     expect(result![0].project).toBe('itachi-memory');
   });
 });
+
+// ============================================================
+// Cron request detection — CREATE_TASK should yield to MANAGE_AGENT_CRON
+// Mirrors the isCronRequest regex from create-task.ts validate()
+// ============================================================
+
+describe('isCronRequest routing — CREATE_TASK yields to MANAGE_AGENT_CRON', () => {
+  function isCronRequest(text: string): boolean {
+    const lower = text.toLowerCase();
+    return /\b(schedule|set up)\b/i.test(lower)
+      && /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+  }
+
+  // Should be recognized as cron (CREATE_TASK yields)
+  it('detects "Schedule a daily task at 9am UTC"', () => {
+    expect(isCronRequest('Schedule a daily task at 9am UTC that checks disk space')).toBe(true);
+  });
+
+  it('detects "schedule a weekly report every Monday"', () => {
+    expect(isCronRequest('schedule a weekly report every Monday at 10am')).toBe(true);
+  });
+
+  it('detects "set up a recurring health check every 30 minutes"', () => {
+    expect(isCronRequest('set up a recurring health check every 30 minutes')).toBe(true);
+  });
+
+  it('detects "schedule hourly backup"', () => {
+    expect(isCronRequest('schedule an hourly backup of the database')).toBe(true);
+  });
+
+  it('detects "schedule every morning"', () => {
+    expect(isCronRequest('schedule a git pull every morning')).toBe(true);
+  });
+
+  it('detects "set up a cron job"', () => {
+    expect(isCronRequest('set up a cron job to clean temp files')).toBe(true);
+  });
+
+  it('detects "schedule at 3pm daily"', () => {
+    expect(isCronRequest('schedule at 3pm daily to run tests')).toBe(true);
+  });
+
+  // Should NOT be cron (CREATE_TASK handles normally)
+  it('does not match one-time "schedule a task to fix the bug"', () => {
+    expect(isCronRequest('schedule a task to fix the login bug')).toBe(false);
+  });
+
+  it('does not match "create a task on coolify"', () => {
+    expect(isCronRequest('create a task on coolify to deploy the app')).toBe(false);
+  });
+
+  it('does not match plain imperative "check disk space on coolify"', () => {
+    expect(isCronRequest('check disk space on coolify and report')).toBe(false);
+  });
+
+  it('does not match "add a test for the scheduler"', () => {
+    expect(isCronRequest('add a test for the scheduler module')).toBe(false);
+  });
+});
