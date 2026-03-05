@@ -261,10 +261,13 @@ describe('parseStreamJsonLine', () => {
     });
   });
 
-  test('skips init, hook_started, and rate_limit_event', () => {
+  test('skips init and hook_started; emits rate_limit chunk for rate_limit_event', () => {
     expect(parseStreamJsonLine(JSON.stringify({ type: 'init', session_id: 'x' }))).toEqual([]);
     expect(parseStreamJsonLine(JSON.stringify({ type: 'hook_started', hook: 'test' }))).toEqual([]);
-    expect(parseStreamJsonLine(JSON.stringify({ type: 'rate_limit_event', retry_after: 5 }))).toEqual([]);
+    // rate_limit_event is tracked for proactive engine switching
+    expect(parseStreamJsonLine(JSON.stringify({ type: 'rate_limit_event', retry_after: 5 }))).toEqual([
+      { kind: 'rate_limit', retryAfter: 5 },
+    ]);
   });
 });
 

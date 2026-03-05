@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterAll, mock } from 'bun:test';
 
 // ============================================================
 // Mock external dependencies BEFORE importing the module under test
@@ -1040,5 +1040,51 @@ describe('telegramCommandsAction', () => {
       expect(Array.isArray(telegramCommandsAction.similes)).toBe(true);
       expect(telegramCommandsAction.similes!.length).toBeGreaterThan(0);
     });
+  });
+
+  // Restore real module implementations after all tests in this file so that
+  // subsequent test files that import these modules directly get the real code,
+  // not the mocks set up here for telegram-commands testing.
+  afterAll(() => {
+    // Restore interactive-session (mocked to control wrapStreamJsonInput)
+    mock.module('../plugins/itachi-tasks/actions/interactive-session.js', () => ({
+      wrapStreamJsonInput: (text: string) => {
+        const msg = {
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text }] },
+        };
+        return JSON.stringify(msg) + '\n';
+      },
+    }));
+
+    // Restore conversation-flows (mocked to control flowKey / getFlow / etc.)
+    const FLOW_TTL_MS = 10 * 60 * 1000;
+    const flows = new Map<string, any>();
+    mock.module('../plugins/itachi-tasks/shared/conversation-flows.js', () => ({
+      conversationFlows: flows,
+      flowKey: (chatId: number, _userId?: number) => `${chatId}`,
+      getFlow: (chatId: number, _userId?: number) => flows.get(`${chatId}`),
+      setFlow: (chatId: number, _userId: number | undefined, flow: any) => {
+        (flow as any).lastActivity = Date.now();
+        flows.set(`${chatId}`, flow);
+      },
+      clearFlow: (chatId: number, _userId?: number) => {
+        flows.delete(`${chatId}`);
+      },
+      cleanupStaleFlows: () => {
+        const now = Date.now();
+        for (const [key, flow] of flows) {
+          const lastActive = (flow as any).lastActivity || flow.createdAt;
+          if (now - lastActive > FLOW_TTL_MS) flows.delete(key);
+        }
+      },
+      encodeCallback: (prefix: string, key: string, value: string | number) =>
+        `${prefix}:${key}:${value}`,
+      decodeCallback: (data: string) => {
+        const parts = data.split(':');
+        if (parts.length < 3) return null;
+        return { prefix: parts[0], key: parts[1], value: parts.slice(2).join(':') };
+      },
+    }));
   });
 });

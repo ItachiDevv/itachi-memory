@@ -14,6 +14,7 @@
  * Run with: npx tsx src/plugins/itachi-tasks/__tests__/comprehensive-fixes.test.ts
  */
 
+import { test } from 'bun:test';
 import { stripBotMention } from '../utils/telegram.js';
 import {
   decodeCallback, encodeCallback,
@@ -746,13 +747,16 @@ conversationFlows.clear();
 console.log('\n' + '='.repeat(70));
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
 
-if (failures.length > 0) {
-  console.log('\nFailures:');
-  for (const f of failures) {
-    console.log(`  - ${f}`);
+// Register a bun:test test so this file runs in an isolated worker,
+// preventing mock.module() from other test files bleeding in.
+test('comprehensive-fixes suite', () => {
+  if (failures.length > 0) {
+    console.log('\nFailures:');
+    for (const f of failures) {
+      console.log(`  - ${f}`);
+    }
+    throw new Error(`${failures.length} test(s) failed:\n${failures.join('\n')}`);
+  } else {
+    console.log('\nAll tests passed!');
   }
-  process.exit(1);
-} else {
-  console.log('\nAll tests passed!');
-  process.exit(0);
-}
+});
