@@ -682,16 +682,17 @@ export async function handleDeleteTopics(
   let deleted = 0;
   let failed = 0;
   let cleaned = 0;
+  const chatId = topicsService.chatId;
   for (const task of withTopics) {
     const topicId = task.telegram_topic_id;
     const result = await topicsService.forceDeleteTopic(topicId);
     if (result.success) {
       deleted++;
-      await clearTopicFromDb(taskService, topicId);
+      await clearTopicFromDb(taskService, topicId, chatId);
       await topicsService.unregisterTopic(topicId);
     } else if (result.invalid) {
       cleaned++;
-      await clearTopicFromDb(taskService, topicId);
+      await clearTopicFromDb(taskService, topicId, chatId);
       await topicsService.unregisterTopic(topicId);
     } else {
       failed++;
@@ -783,8 +784,8 @@ async function collectAllTopicIds(
   return topicIds;
 }
 
-/** Clear telegram_topic_id from DB for a given topicId */
-async function clearTopicFromDb(taskService: TaskService | null, topicId: number): Promise<void> {
+/** Clear telegram_topic_id from DB and remove associated room entry */
+async function clearTopicFromDb(taskService: TaskService | null, topicId: number, chatId?: number | string): Promise<void> {
   if (!taskService) return;
   try {
     const supabase = taskService.getSupabase();
@@ -792,6 +793,15 @@ async function clearTopicFromDb(taskService: TaskService | null, topicId: number
       .from('itachi_tasks')
       .update({ telegram_topic_id: null })
       .eq('telegram_topic_id', topicId);
+
+    // Also remove the ElizaOS room entry so it's not re-discovered
+    if (chatId) {
+      await supabase
+        .from('rooms')
+        .delete()
+        .eq('source', 'telegram')
+        .eq('channel_id', `${chatId}-${topicId}`);
+    }
   } catch { /* best-effort */ }
 }
 
@@ -818,9 +828,10 @@ async function handleDeleteSingleTopic(
   browsingSessionMap.delete(topicId);
 
   const result = await topicsService.forceDeleteTopic(topicId);
+  const chatId = topicsService.chatId;
   if (result.success) {
     const taskService = runtime.getService<TaskService>('itachi-tasks');
-    await clearTopicFromDb(taskService, topicId);
+    await clearTopicFromDb(taskService, topicId, chatId);
     await topicsService.unregisterTopic(topicId);
     if (callback) await callback({ text: `Topic ${topicId} deleted successfully.` });
     return { success: true, data: { topicId, deleted: true } };
@@ -829,7 +840,7 @@ async function handleDeleteSingleTopic(
   if (result.invalid) {
     // Ghost — clean DB but topic doesn't exist in Telegram
     const taskService = runtime.getService<TaskService>('itachi-tasks');
-    await clearTopicFromDb(taskService, topicId);
+    await clearTopicFromDb(taskService, topicId, chatId);
     await topicsService.unregisterTopic(topicId);
     if (callback) await callback({ text: `Topic ${topicId} no longer exists in Telegram. Cleaned DB entry.` });
     return { success: true, data: { topicId, cleaned: true } };
@@ -953,6 +964,7 @@ export async function handleCloseAllTopics(
   }
 
   const taskService = runtime.getService<TaskService>('itachi-tasks');
+  const chatId = topicsService.chatId;
   const topicIds = await collectAllTopicIds(runtime, topicsService, taskService);
 
   if (topicIds.size === 0) {
@@ -975,7 +987,7 @@ export async function handleCloseAllTopics(
       closed++;
     } else if (result.invalid) {
       cleaned++;
-      await clearTopicFromDb(taskService, topicId);
+      await clearTopicFromDb(taskService, topicId, chatId);
       await topicsService.unregisterTopic(topicId);
     } else {
       failed++;
@@ -1011,6 +1023,7 @@ export async function handleDeleteTopicsAll(
   }
 
   const taskService = runtime.getService<TaskService>('itachi-tasks');
+  const chatId = topicsService.chatId;
   const topicIds = await collectAllTopicIds(runtime, topicsService, taskService);
 
   if (topicIds.size === 0) {
@@ -1031,12 +1044,12 @@ export async function handleDeleteTopicsAll(
     const result = await topicsService.forceDeleteTopic(topicId);
     if (result.success) {
       deleted++;
-      await clearTopicFromDb(taskService, topicId);
+      await clearTopicFromDb(taskService, topicId, chatId);
       await topicsService.unregisterTopic(topicId);
     } else if (result.invalid) {
       // Ghost topic — clean stale DB entry
       cleaned++;
-      await clearTopicFromDb(taskService, topicId);
+      await clearTopicFromDb(taskService, topicId, chatId);
       await topicsService.unregisterTopic(topicId);
     } else {
       failed++;
