@@ -1186,13 +1186,28 @@ async function handleBrainProposalCallback(
 
   const supabase = taskService.getSupabase();
 
-  // Look up proposal by UUID prefix
-  const { data: proposals, error } = await supabase
+  // Look up proposal by UUID prefix (client-side match — .ilike on UUID columns is unreliable in PostgREST)
+  const { data: proposalIds, error: idError } = await supabase
     .from('itachi_brain_proposals')
-    .select('*')
+    .select('id')
     .eq('status', 'proposed')
-    .ilike('id', `${shortId}%`)
-    .limit(1);
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  const lowerShortId = shortId.toLowerCase();
+  const matchedProposal = (proposalIds || []).find((p: { id: string }) => p.id.toLowerCase().startsWith(lowerShortId));
+
+  let proposals: Record<string, unknown>[] | null = null;
+  let error = idError;
+  if (matchedProposal) {
+    const { data: fullProposals, error: fetchError } = await supabase
+      .from('itachi_brain_proposals')
+      .select('*')
+      .eq('id', matchedProposal.id)
+      .limit(1);
+    proposals = fullProposals;
+    error = fetchError;
+  }
 
   if (error || !proposals || proposals.length === 0) {
     if (messageId) {
