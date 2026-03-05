@@ -8,6 +8,24 @@ description: "Use when the user needs to interact with websites, automate browse
 A CLI tool by Vercel Labs for browser automation. NOT an MCP server — invoke via Bash.
 93% less context than DOM-dumping approaches. Boots in <50ms (Rust).
 
+## Windows Port Fix (IMPORTANT)
+
+On Windows, Hyper-V reserves dynamic port ranges that conflict with the default daemon port.
+The default session "default" hashes to port 50838 which is blocked. **Always use `--session x`**:
+
+```bash
+# WRONG (will fail with "Daemon failed to start" on Windows):
+agent-browser open https://example.com
+
+# CORRECT (session "x" maps to port 49272, outside Hyper-V exclusions):
+agent-browser --session x open https://example.com
+agent-browser --session x snapshot -i
+agent-browser --session x click @e1
+```
+
+Use `netsh interface ipv4 show excludedportrange protocol=tcp` to see reserved ranges.
+Pick a session name that hashes to an allowed port (a, b, x, z, abc all work).
+
 ## Core Pattern: Snapshot + Refs
 
 ```bash
