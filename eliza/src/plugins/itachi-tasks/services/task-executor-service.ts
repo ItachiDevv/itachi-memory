@@ -36,6 +36,7 @@ function filterTuiNoise(text: string): string {
     if (/^(?:✻|✶|\*|✢|·|✽|●|✳|⏺)?\s*(?:Churning…|Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
     if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
     if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
+    if (/^={2,}\s*(End Briefing|Start Briefing|Briefing)\s*={0,}$/i.test(stripped)) continue;
     if ((stripped.match(/(?:Churning…|Crunching…)/g) || []).length >= 2) continue;
     if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
     if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
