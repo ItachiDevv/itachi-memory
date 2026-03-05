@@ -310,7 +310,7 @@ describe('TelegramTopicsService', () => {
       queueOk(); // closeForumTopic
 
       const result = await service.closeTopic(100);
-      expect(result).toBe(true);
+      expect(result.success).toBe(true);
 
       const closeCall = fetchCalls.find(c => c.url.includes('closeForumTopic'));
       expect(closeCall).toBeDefined();
@@ -371,7 +371,7 @@ describe('TelegramTopicsService', () => {
       const service = new TelegramTopicsService(runtime);
 
       const result = await service.closeTopic(100);
-      expect(result).toBe(false);
+      expect(result.success).toBe(false);
       expect(fetchCalls.length).toBe(0);
     });
   });
@@ -482,7 +482,7 @@ describe('TelegramTopicsService', () => {
       queueOk(); // deleteForumTopic
 
       const result = await service.forceDeleteTopic(100);
-      expect(result).toBe(true);
+      expect(result.success).toBe(true);
 
       const methods = fetchCalls.map(c => {
         const urlParts = c.url.split('/');
@@ -505,7 +505,7 @@ describe('TelegramTopicsService', () => {
       const service = new TelegramTopicsService(runtime);
 
       const result = await service.forceDeleteTopic(100);
-      expect(result).toBe(false);
+      expect(result.success).toBe(false);
     });
 
     it('should return false when topicId is 0', async () => {
@@ -513,7 +513,7 @@ describe('TelegramTopicsService', () => {
       const service = new TelegramTopicsService(runtime);
 
       const result = await service.forceDeleteTopic(0);
-      expect(result).toBe(false);
+      expect(result.success).toBe(false);
     });
   });
 

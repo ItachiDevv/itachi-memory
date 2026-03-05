@@ -124,8 +124,8 @@ async function executeCloseTopics(
   for (const task of withTopics) {
     const topicId = (task as any).telegram_topic_id;
     const shortId = task.id.substring(0, 8);
-    const ok = await topicsService.closeTopic(topicId, `${label} | ${shortId} | ${task.project}`);
-    if (ok) closed++;
+    const result = await topicsService.closeTopic(topicId, `${label} | ${shortId} | ${task.project}`);
+    if (result.success) closed++;
   }
 
   await sendTelegram(botBaseUrl, item.telegram_chat_id,

@@ -1138,10 +1138,10 @@ async function handleDeleteTopicCallback(
   activeSessions.delete(topicId);
   browsingSessionMap.delete(topicId);
 
-  const ok = await topicsService.forceDeleteTopic(topicId);
+  const result = await topicsService.forceDeleteTopic(topicId);
 
-  if (ok) {
-    // Clear from DB and registry
+  if (result.success || result.invalid) {
+    // Clear from DB and registry (for both real deletes and ghost cleanup)
     if (taskService) {
       try {
         const supabase = taskService.getSupabase();
@@ -1153,13 +1153,16 @@ async function handleDeleteTopicCallback(
     }
     await topicsService.unregisterTopic(topicId);
 
+    const msg = result.invalid
+      ? `\u2705 Topic ${topicId} no longer exists. Cleaned DB entry.`
+      : `\u2705 Topic ${topicId} deleted.`;
     if (messageId) {
-      await topicsService.editMessageWithKeyboard(chatId, messageId, `\u2705 Topic ${topicId} deleted.`, []);
+      await topicsService.editMessageWithKeyboard(chatId, messageId, msg, []);
     }
-    runtime.logger.info(`[callback] Deleted topic ${topicId} via picker`);
+    runtime.logger.info(`[callback] ${result.invalid ? 'Cleaned ghost' : 'Deleted'} topic ${topicId} via picker`);
   } else {
     if (messageId) {
-      await topicsService.editMessageWithKeyboard(chatId, messageId, `\u274c Failed to delete topic ${topicId}. May not exist or is the General topic.`, []);
+      await topicsService.editMessageWithKeyboard(chatId, messageId, `\u274c Failed to delete topic ${topicId}. May be the General topic.`, []);
     }
   }
 }

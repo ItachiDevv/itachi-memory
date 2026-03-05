@@ -102,7 +102,7 @@ function createRuntime(opts: {
   };
 
   const topicsService = {
-    closeTopic: async () => true,
+    closeTopic: async () => ({ success: true }),
   };
 
   const memoryService = {

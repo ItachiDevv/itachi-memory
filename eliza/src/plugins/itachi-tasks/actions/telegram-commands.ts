@@ -681,22 +681,30 @@ export async function handleDeleteTopics(
 
   let deleted = 0;
   let failed = 0;
+  let cleaned = 0;
   for (const task of withTopics) {
     const topicId = task.telegram_topic_id;
-    const ok = await topicsService.forceDeleteTopic(topicId);
-    if (ok) {
+    const result = await topicsService.forceDeleteTopic(topicId);
+    if (result.success) {
       deleted++;
-      // Only clear DB reference AFTER confirmed deletion
+      await clearTopicFromDb(taskService, topicId);
+      await topicsService.unregisterTopic(topicId);
+    } else if (result.invalid) {
+      cleaned++;
       await clearTopicFromDb(taskService, topicId);
       await topicsService.unregisterTopic(topicId);
     } else {
       failed++;
     }
+
+    // Inter-topic delay to avoid Telegram rate limits
+    await new Promise(r => setTimeout(r, 1000));
   }
 
-  const failedMsg = failed > 0 ? ` (${failed} failed)` : '';
+  const cleanedMsg = cleaned > 0 ? `, ${cleaned} ghost cleaned` : '';
+  const failedMsg = failed > 0 ? ` (${failed} failed${cleanedMsg})` : (cleaned > 0 ? ` (${cleanedMsg.substring(2)})` : '');
   if (callback) await callback({ text: `Deleted ${deleted}/${withTopics.length} ${status} topic(s).${failedMsg}` });
-  return { success: true, data: { deleted, failed, total: withTopics.length } };
+  return { success: true, data: { deleted, failed, cleaned, total: withTopics.length } };
 }
 
 /**
@@ -809,9 +817,8 @@ async function handleDeleteSingleTopic(
   markSessionClosed(topicId);
   browsingSessionMap.delete(topicId);
 
-  const ok = await topicsService.forceDeleteTopic(topicId);
-  if (ok) {
-    // Clear from DB and registry
+  const result = await topicsService.forceDeleteTopic(topicId);
+  if (result.success) {
     const taskService = runtime.getService<TaskService>('itachi-tasks');
     await clearTopicFromDb(taskService, topicId);
     await topicsService.unregisterTopic(topicId);
@@ -819,7 +826,16 @@ async function handleDeleteSingleTopic(
     return { success: true, data: { topicId, deleted: true } };
   }
 
-  if (callback) await callback({ text: `Failed to delete topic ${topicId}. It may not exist or may be the General topic.` });
+  if (result.invalid) {
+    // Ghost — clean DB but topic doesn't exist in Telegram
+    const taskService = runtime.getService<TaskService>('itachi-tasks');
+    await clearTopicFromDb(taskService, topicId);
+    await topicsService.unregisterTopic(topicId);
+    if (callback) await callback({ text: `Topic ${topicId} no longer exists in Telegram. Cleaned DB entry.` });
+    return { success: true, data: { topicId, cleaned: true } };
+  }
+
+  if (callback) await callback({ text: `Failed to delete topic ${topicId}. It may be the General topic.` });
   return { success: false, error: `Failed to delete topic ${topicId}` };
 }
 
@@ -948,19 +964,37 @@ export async function handleCloseAllTopics(
 
   let closed = 0;
   let failed = 0;
+  let cleaned = 0;
   for (const topicId of topicIds) {
     activeSessions.delete(topicId);
     markSessionClosed(topicId);
     browsingSessionMap.delete(topicId);
 
-    const ok = await topicsService.closeTopic(topicId);
-    if (ok) closed++;
-    else failed++;
+    const result = await topicsService.closeTopic(topicId);
+    if (result.success) {
+      closed++;
+    } else if (result.invalid) {
+      cleaned++;
+      await clearTopicFromDb(taskService, topicId);
+      await topicsService.unregisterTopic(topicId);
+    } else {
+      failed++;
+    }
+
+    // Progress update every 50 topics
+    const done = closed + failed + cleaned;
+    if (done % 50 === 0 && done < topicIds.size && callback) {
+      await callback({ text: `Progress: ${closed} closed, ${cleaned} ghost cleaned, ${failed} failed / ${topicIds.size}...` });
+    }
+
+    // Inter-topic delay to avoid Telegram rate limits
+    await new Promise(r => setTimeout(r, 500));
   }
 
-  const failedMsg = failed > 0 ? ` (${failed} failed)` : '';
+  const cleanedMsg = cleaned > 0 ? `, ${cleaned} ghost entries cleaned` : '';
+  const failedMsg = failed > 0 ? ` (${failed} failed${cleanedMsg})` : (cleaned > 0 ? ` (${cleanedMsg.substring(2)})` : '');
   if (callback) await callback({ text: `Closed ${closed}/${topicIds.size} topic(s).${failedMsg}` });
-  return { success: true, data: { closed, failed, total: topicIds.size } };
+  return { success: true, data: { closed, failed, cleaned, total: topicIds.size } };
 }
 
 /**
@@ -988,25 +1022,40 @@ export async function handleDeleteTopicsAll(
 
   let deleted = 0;
   let failed = 0;
+  let cleaned = 0;
   for (const topicId of topicIds) {
     activeSessions.delete(topicId);
     markSessionClosed(topicId);
     browsingSessionMap.delete(topicId);
 
-    const ok = await topicsService.forceDeleteTopic(topicId);
-    if (ok) {
+    const result = await topicsService.forceDeleteTopic(topicId);
+    if (result.success) {
       deleted++;
-      // Only clear DB reference AFTER confirmed deletion
+      await clearTopicFromDb(taskService, topicId);
+      await topicsService.unregisterTopic(topicId);
+    } else if (result.invalid) {
+      // Ghost topic — clean stale DB entry
+      cleaned++;
       await clearTopicFromDb(taskService, topicId);
       await topicsService.unregisterTopic(topicId);
     } else {
       failed++;
     }
+
+    // Progress update every 25 topics
+    const done = deleted + failed + cleaned;
+    if (done % 25 === 0 && done < topicIds.size && callback) {
+      await callback({ text: `Progress: ${deleted} deleted, ${cleaned} ghost cleaned, ${failed} failed / ${topicIds.size}...` });
+    }
+
+    // Inter-topic delay to avoid Telegram rate limits
+    await new Promise(r => setTimeout(r, 1000));
   }
 
-  const failedMsg = failed > 0 ? ` (${failed} failed — may be General topic or already deleted)` : '';
+  const cleanedMsg = cleaned > 0 ? `, ${cleaned} ghost entries cleaned` : '';
+  const failedMsg = failed > 0 ? ` (${failed} failed${cleanedMsg})` : (cleaned > 0 ? ` (${cleanedMsg.substring(2)})` : '');
   if (callback) await callback({ text: `Deleted ${deleted}/${topicIds.size} topic(s).${failedMsg}` });
-  return { success: true, data: { deleted, failed, total: topicIds.size } };
+  return { success: true, data: { deleted, failed, cleaned, total: topicIds.size } };
 }
 
 export async function handleFeedback(

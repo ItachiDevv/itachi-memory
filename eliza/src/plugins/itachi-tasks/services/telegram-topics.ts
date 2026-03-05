@@ -6,6 +6,14 @@ interface TelegramApiResponse {
   ok: boolean;
   result?: any;
   description?: string;
+  error_code?: number;
+  parameters?: { retry_after?: number };
+}
+
+export interface TopicDeleteResult {
+  success: boolean;
+  /** true when the topic no longer exists in Telegram (ghost DB entry) */
+  invalid?: boolean;
 }
 
 interface StreamBuffer {
@@ -113,13 +121,24 @@ export class TelegramTopicsService extends Service {
     return !!this.botToken && !!this.groupChatId;
   }
 
-  private async apiCall(method: string, params: Record<string, unknown>): Promise<TelegramApiResponse> {
-    const response = await fetch(`${this.baseUrl}/${method}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    return response.json() as Promise<TelegramApiResponse>;
+  private async apiCall(method: string, params: Record<string, unknown>, maxRetries = 2): Promise<TelegramApiResponse> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const response = await fetch(`${this.baseUrl}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const json = (await response.json()) as TelegramApiResponse;
+
+      if (json.error_code === 429 && attempt < maxRetries) {
+        const retryAfter = json.parameters?.retry_after ?? 5;
+        this.runtime.logger.warn(`[topics] Rate limited on ${method} (retry_after=${retryAfter}s), waiting...`);
+        await new Promise(r => setTimeout(r, retryAfter * 1000 + 500));
+        continue;
+      }
+      return json;
+    }
+    return { ok: false, description: 'max retries exceeded' };
   }
 
   // ============================================================
@@ -194,33 +213,43 @@ export class TelegramTopicsService extends Service {
    * Try to delete a topic by ID. Returns true if successful, false otherwise.
    * Handles the reopen→close→delete sequence automatically.
    */
-  async forceDeleteTopic(topicId: number): Promise<boolean> {
-    if (!this.isEnabled() || !topicId) return false;
+  async forceDeleteTopic(topicId: number): Promise<TopicDeleteResult> {
+    if (!this.isEnabled() || !topicId) return { success: false };
 
     try {
-      // Try reopen (topic might be closed already)
-      await this.apiCall('reopenForumTopic', {
+      // Step 1: Reopen (probe whether topic exists)
+      const reopenResult = await this.apiCall('reopenForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
       });
+
+      // If topic doesn't exist in Telegram, skip remaining calls
+      if (!reopenResult.ok && reopenResult.description?.includes('TOPIC_ID_INVALID')) {
+        return { success: false, invalid: true };
+      }
+
       await new Promise(r => setTimeout(r, 200));
 
-      // Close first (required before delete)
+      // Step 2: Close (required before delete)
       await this.apiCall('closeForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
       });
       await new Promise(r => setTimeout(r, 300));
 
-      // Delete
+      // Step 3: Delete
       const result = await this.apiCall('deleteForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
       });
 
-      return result.ok;
+      if (!result.ok && result.description?.includes('TOPIC_ID_INVALID')) {
+        return { success: false, invalid: true };
+      }
+
+      return { success: result.ok };
     } catch {
-      return false;
+      return { success: false };
     }
   }
 
@@ -379,8 +408,8 @@ export class TelegramTopicsService extends Service {
   /**
    * Close (and optionally rename) a topic when task completes.
    */
-  async closeTopic(topicId: number, finalStatus?: string): Promise<boolean> {
-    if (!this.isEnabled() || !topicId) return false;
+  async closeTopic(topicId: number, finalStatus?: string): Promise<TopicDeleteResult> {
+    if (!this.isEnabled() || !topicId) return { success: false };
 
     try {
       // Close the topic
@@ -390,6 +419,9 @@ export class TelegramTopicsService extends Service {
       });
 
       if (!result.ok) {
+        if (result.description?.includes('TOPIC_ID_INVALID')) {
+          return { success: false, invalid: true };
+        }
         this.runtime.logger.error(`closeTopic failed: ${result.description}`);
       }
 
@@ -417,10 +449,10 @@ export class TelegramTopicsService extends Service {
         } catch { /* best-effort */ }
       }
 
-      return result.ok;
+      return { success: result.ok };
     } catch (error) {
       this.runtime.logger.error('closeTopic error:', error instanceof Error ? error.message : String(error));
-      return false;
+      return { success: false };
     }
   }
 
