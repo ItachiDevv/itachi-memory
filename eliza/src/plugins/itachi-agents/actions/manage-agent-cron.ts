@@ -161,13 +161,15 @@ async function handleCreate(
   const profileList = profiles.map((p) => p.id).join(', ');
 
   try {
+    runtime.logger.info(`[agent-cron] handleCreate: extracting cron from "${text.substring(0, 80)}"`);
+
     const response = await runtime.useModel(ModelType.TEXT_SMALL, {
       prompt: `Extract a cron job definition from this request.
 Available agent profiles: ${profileList || 'none'}
 
 Request: "${text}"
 
-Respond in JSON:
+Respond in JSON only (no markdown, no explanation):
 {
   "schedule": "cron expression (5 fields)",
   "profileId": "profile-id or null",
@@ -179,11 +181,25 @@ Common patterns:
 - "every hour" = "0 * * * *"
 - "every morning at 9am" = "0 9 * * *"
 - "every weekday at 9am" = "0 9 * * 1-5"
-- "daily at midnight" = "0 0 * * *"`,
+- "daily at midnight" = "0 0 * * *"
+- "daily at 9am" = "0 9 * * *"`,
       temperature: 0,
     });
 
-    const parsed = JSON.parse(typeof response === 'string' ? response : '{}');
+    const rawResp = typeof response === 'string' ? response : '';
+    runtime.logger.info(`[agent-cron] LLM response: ${rawResp.substring(0, 200)}`);
+
+    // Extract JSON from response (handle markdown code blocks)
+    const jsonMatch = rawResp.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      runtime.logger.error(`[agent-cron] No JSON found in LLM response`);
+      if (callback) await callback({ text: 'Could not parse a cron schedule from your request. Try: "schedule [task] every [interval] using [profile]"' });
+      return { success: false, error: 'No JSON in response' };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    runtime.logger.info(`[agent-cron] Parsed: schedule="${parsed.schedule}" task="${parsed.taskDescription?.substring(0, 60)}"`);
+
     if (!parsed.schedule || !parsed.taskDescription) {
       if (callback) await callback({ text: 'Could not parse a cron schedule from your request. Try: "schedule [task] every [interval] using [profile]"' });
       return { success: false, error: 'Parse failed' };
@@ -196,9 +212,12 @@ Common patterns:
     });
 
     if (!job) {
+      runtime.logger.error(`[agent-cron] createJob returned null for schedule="${parsed.schedule}"`);
       if (callback) await callback({ text: 'Failed to create cron job. The cron expression may be invalid.' });
       return { success: false, error: 'Create failed' };
     }
+
+    runtime.logger.info(`[agent-cron] Created job ${job.id} with schedule "${parsed.schedule}"`);
 
     const profileName = parsed.profileId
       ? (profiles.find((p) => p.id === parsed.profileId)?.display_name || parsed.profileId)
@@ -213,6 +232,7 @@ Common patterns:
     return { success: true, data: { jobId: job.id, schedule: parsed.schedule } };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    runtime.logger.error(`[agent-cron] handleCreate error: ${msg}`);
     if (callback) await callback({ text: `Error creating cron job: ${msg}` });
     return { success: false, error: msg };
   }
