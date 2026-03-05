@@ -64,4 +64,8 @@ ENV ANTHROPIC_SMALL_MODEL=claude-haiku-4-5-20251001
 # Gemini Flash handles TEXT_SMALL/OBJECT_SMALL (evaluators, synthesizers, analyzers)
 ENV GEMINI_SMALL_MODEL=gemini-3-flash-preview
 
+# Coolify / Docker health check — polls /health every 30s, 90s startup grace
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+  CMD curl -sf http://localhost:3000/health || exit 1
+
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
