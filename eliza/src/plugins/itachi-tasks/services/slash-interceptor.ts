@@ -293,6 +293,16 @@ async function detectDirectTask(
     return null;
   }
 
+  // Yield to ElizaOS STORE_MEMORY for "remember that..." (fact storage)
+  // but NOT "remember to..." (action request / reminder)
+  const trimmedLower = text.trim().toLowerCase();
+  const isFactStorage = /^remember\s+that\b/.test(trimmedLower)
+    || /^(note[:\s]|don't forget\s+that|keep in mind)/i.test(trimmedLower);
+  if (isFactStorage) {
+    runtime.logger.info(`${TAG} Yielding to STORE_MEMORY for: "${text.substring(0, 60)}"`);
+    return null;
+  }
+
   // Strategy 0: action verb + known project name (or SSH target)
   const parsed = extractTaskFromUserMessage(text, repoNames);
   if (parsed && parsed.length > 0) return parsed[0];

@@ -354,3 +354,39 @@ describe('Adversarial routing edge cases', () => {
     expect(storeMemoryValidate('save this info: API endpoint is /v2/data')).toBe(true);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════
+// Slash-interceptor STORE_MEMORY guard (isFactStorage)
+// ════════════════════════════════════════════════════════════════════
+
+function isFactStorage(text: string): boolean {
+  const trimmedLower = text.trim().toLowerCase();
+  return /^remember\s+that\b/.test(trimmedLower)
+    || /^(note[:\s]|don't forget\s+that|keep in mind)/i.test(trimmedLower);
+}
+
+describe('Slash-interceptor isFactStorage guard', () => {
+  it('"remember that the API key expires in March" → yield to STORE_MEMORY', () => {
+    expect(isFactStorage('remember that the API key expires in March')).toBe(true);
+  });
+
+  it('"remember to add error handling to the API" → NOT fact storage (action request)', () => {
+    expect(isFactStorage('remember to add error handling to the API')).toBe(false);
+  });
+
+  it('"note: always use bun instead of npm" → yield to STORE_MEMORY', () => {
+    expect(isFactStorage('note: always use bun instead of npm')).toBe(true);
+  });
+
+  it('"don\'t forget that the server uses port 3000" → yield to STORE_MEMORY', () => {
+    expect(isFactStorage("don't forget that the server uses port 3000")).toBe(true);
+  });
+
+  it('"keep in mind the API has rate limits" → yield to STORE_MEMORY', () => {
+    expect(isFactStorage('keep in mind the API has rate limits')).toBe(true);
+  });
+
+  it('"remember to deploy the fix" → NOT fact storage (action)', () => {
+    expect(isFactStorage('remember to deploy the fix')).toBe(false);
+  });
+});
