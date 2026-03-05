@@ -1,39 +1,106 @@
-# Active Priorities — March 4, 2026
+# Active Priorities — March 5, 2026
 
-## Priority 1: Fix LLM Hallucination (CRITICAL — COMPLETE ✅)
+## P0 — Critical Fixes
 
-**Problem**: Bot says "Checking..." / "Fetching..." but no action handler runs. LLM picks REPLY+NONE instead of routing to the correct action handler.
+### 1. Workspace Cleanup Janitor
+- **Problem:** Each task creates a git worktree that persists forever. 13 copies on Linux (1.2GB), 899MB outlier.
+- **Fix:** Implement periodic cleanup worker that removes worktrees >24h old (unless task is `waiting_input`).
+- **Files:** `task-executor-service.ts` (add cleanup in `handleSessionComplete` or new `workspace-janitor.ts` worker)
 
-**Fix implemented**: Slash command interceptor (`services/slash-interceptor.ts`) bypasses ElizaOS entirely for `/commands`. Patches `bot.handleUpdate()` to intercept before LLM, dispatches directly to handler function, sends result via raw Telegram API.
+### 2. Mac "End Briefing" Failures
+- **Problem:** Tasks routed to Mac (`itachi-m1`) exit after Claude's briefing text with no work done. 100% failure rate on Mac.
+- **Root cause:** Unknown — possibly Claude Code version mismatch or CLAUDE.md config on Mac blocking task prompts.
+- **Fix:** Debug Mac executor. Check Claude Code version, CLAUDE.md settings, prompt file delivery.
 
-**Status**: COMPLETE — 20/20 test cases pass (15 core + 5 alias edge cases)
-
-**Bugs fixed**:
-- Iteration 1: `/help` regex `$` → `\b` so `/help@botname` works
-- Iteration 1: `/repos` handler formats output via callback
-- Iteration 2: `/ssh` handler resolves `MACHINE_ALIASES` before `getTarget()` (c8e3fa8)
-- Iteration 2: Bot mention stripping only strips `@botname` after `/command`, not elsewhere (4b47b41)
+### 3. Verify RLM Works with Direct CLI Fallback
+- **Problem:** When `itachi` wrapper isn't found, tasks fall back to direct `claude` CLI. Unknown if `ITACHI_TASK_ID`/`ITACHI_ENABLED` env vars are honored.
+- **Fix:** Test on a machine without itachi wrapper. Check if lessons are still stored.
+- **Note:** Wrapper IS used when available (checked via `Get-Command`/`which`), and env vars are set before calling either wrapper or direct CLI.
 
 ---
 
-## Priority 2: Direct Execution Mode (COMPLETE ✅)
-- When user says "do X", bot executes immediately (no proposal flow)
-- Task executor auto-dispatch working (tested on mac + windows + coolify)
-- Brain-loop proposals still use approve/reject buttons
-- **Fixed**: Windows-safe push commands (PowerShell `-replace` instead of `sed`) (4b47b41)
-- **Fixed**: Skip `su` wrapping on Windows SSH targets (4b47b41)
-- **Tested**: Natural language "run echo direct-exec-test on coolify" → task queued, dispatched, completed
+## P1 — Deep Integration Tests (NOT Surface Level)
 
-## Priority 3: Update Full_Autonomy.md (Stages 3-4)
-- Replace confidence-scoring with mode-based (dry-run/confirm/armed)
-- Policy/allowlist per-repo
-- Always PRs, audit log
-- Budget: task-based limits only (no $ cap)
+### 4. Cron Job / Scheduled Automation
+- Test: "Set up a cron job to scrape Hacker News daily and save to a file"
+- Test: "Schedule a daily git pull on all repos"
+- Test: "Create a scheduled task to check disk space weekly and alert if >80%"
+- Verifies bot handles persistent/recurring automation, not just one-shot tasks.
 
-## Priority 4: RLM Hardening
-- Structured mistake tracking
-- Feedback loop improvements
-- Engine-specific learning
+### 5. Multi-Step Workflow
+- Test: "Clone a new repo, set it up, run tests, and report results"
+- Test: "Read a config file, modify a value, restart a service"
+- Test: "Create a new branch, make a code change, create a PR"
+- Verifies multi-step orchestration with state across steps.
+
+### 6. Cross-Machine Coordination
+- Test: "Run tests on Linux, if they pass, deploy to Windows"
+- Test: "Check git status on all machines and compare"
+- Verifies multi-machine routing and sequencing.
+
+### 7. Local App Testing with agent-browser
+- Use `agent-browser` to automate Telegram Web interactions for E2E proof
+- Test full loop: Send message -> task created -> task executes -> result posted -> verify with screenshot
+- Automate Electron apps (VS Code, Slack) for deeper integration testing
+- Record GIFs as proof of autonomous operation
+
+---
+
+## P2 — Improvements
+
+### 8. Second Message Detection
+- **Problem:** Two quick messages — bot may only pick up the first as a task.
+- **Fix:** Check evaluator debounce/batching. Each message should be evaluated independently.
+
+### 9. Task Result Filtering
+- **Problem:** `result_summary` captures raw command prompt output (`newma@HOODIE-PROMETH C:\...>type ...`).
+- **Fix:** Extend `filterTuiNoise` to strip Windows command prompt lines.
+
+### 10. Coolify Redeploy Task Protection
+- **Problem:** Git push triggers Coolify redeploy, killing in-flight tasks ("Bot restarted during execution").
+- **Fix:** Graceful shutdown handler that waits for active tasks or marks for resume.
+
+---
+
+## P3 — RLM Enhancement
+
+### 11. Outcome Reranking Validation
+- Verify success lessons rank higher in subsequent task prompts
+- Add logging to show which memories injected into each prompt
+- Dashboard metric: confidence trend over time
+
+### 12. Cross-Project Learning
+- Tasks on `time` repo should learn from `itachi-memory` patterns
+- Verify `reinforceMemory` works across categories
+
+### 13. Self-Improving Test Suite
+- Bot learns from test failures and adjusts approach
+- Track which commands succeed/fail per machine
+
+---
+
+## Completed (This Session — March 4-5, 2026)
+
+- [x] Windows task execution — .cmd batch file fixes PowerShell stdin hang (7482ac0)
+- [x] RLM outcome metadata — `outcome: 'success'|'failure'` stored in lessons (46b4d02)
+- [x] Windows engine detection — `Get-Command` instead of `which` (46b4d02)
+- [x] Windows resolved engine — uses `${engineCmd}` not hardcoded `claude` (46b4d02)
+- [x] Cross-category reinforcement — search all categories, not just `task_lesson` (46b4d02)
+- [x] Claim routing fix — executors only claim tasks assigned to their machine (49d8070)
+- [x] Briefing noise filter — "=== End Briefing ===" filtered from transcripts (f94c7a3)
+- [x] Full autonomy proof — Telegram message -> task detect -> execute -> result (f7b43f2d)
+- [x] Code change via task — removed CA from time repo Hero.tsx (79ad6b70)
+- [x] 1074 tests passing, 40+ new tests added
+- [x] agent-browser installed for local app testing
+
+---
+
+## Previous Session (March 4, 2026 — All Complete)
+
+- [x] Slash command interceptor — bypasses ElizaOS LLM for /commands
+- [x] Direct execution mode — "do X" executes immediately
+- [x] Windows-safe push commands (PowerShell -replace instead of sed)
+- [x] Skip su wrapping on Windows SSH targets
 
 ---
 
@@ -42,14 +109,3 @@
 - `bun run build` must succeed before every push
 - Live Telegram testing after every deploy
 - NEVER push without tests + build
-
-## Session Progress (March 4, 2026)
-### Commits this session:
-- `25a5512` — fix: executor git safe.directory, engine fallback, and output debug logging
-- `68b83c5` — fix: executor topicId=0 race condition — re-fetch from DB before creating topic
-- `7ca2244` — fix: PR creation --head flag and task poller direct Telegram API
-- `c178a72` — fix: wrap post-completion git/gh commands with su for root SSH targets
-- `c1a1acc` — fix: push with GITHUB_TOKEN, always check unpushed commits and file changes
-- `d04ec88` — fix: slash interceptor /help regex and /repos empty output
-- `c8e3fa8` — fix: resolve MACHINE_ALIASES in /ssh slash command handler
-- `4b47b41` — fix: bot mention stripping regex + Windows-safe push/su in executor
