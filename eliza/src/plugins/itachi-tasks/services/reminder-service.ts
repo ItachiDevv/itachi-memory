@@ -1,7 +1,7 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-export type ActionType = 'message' | 'close_done' | 'close_failed' | 'sync_repos' | 'recall' | 'custom';
+export type ActionType = 'message' | 'close_done' | 'close_failed' | 'sync_repos' | 'recall' | 'custom' | 'disk_check';
 
 export interface ScheduledItem {
   id: string;
