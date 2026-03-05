@@ -284,6 +284,15 @@ async function detectDirectTask(
   const repoNames = await getCachedRepoNames(runtime);
   if (repoNames.length === 0) return null;
 
+  // Yield to ElizaOS MANAGE_AGENT_CRON for recurring/scheduled patterns
+  const lower = text.toLowerCase();
+  const isCronRequest = /\b(schedule|set up)\b/i.test(lower)
+    && /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+  if (isCronRequest) {
+    runtime.logger.info(`${TAG} Yielding to MANAGE_AGENT_CRON for: "${text.substring(0, 60)}"`);
+    return null;
+  }
+
   // Strategy 0: action verb + known project name (or SSH target)
   const parsed = extractTaskFromUserMessage(text, repoNames);
   if (parsed && parsed.length > 0) return parsed[0];
