@@ -188,7 +188,8 @@ describe('TaskService — deeper adversarial', () => {
   });
 
   it('getTaskByPrefix with exactly 4 valid hex chars succeeds (query runs)', async () => {
-    mockSupabaseResponse = { data: { id: 'abcd1234', status: 'queued' }, error: null };
+    // Mock returns array for ID lookup, then single object for full fetch
+    mockSupabaseResponse = { data: [{ id: 'abcd1234-5678-9abc-def0-123456789abc', status: 'queued' }], error: null };
     const { runtime } = makeRuntime();
     const service = new TaskService(runtime as any);
     const result = await service.getTaskByPrefix('abcd');

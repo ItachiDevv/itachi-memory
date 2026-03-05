@@ -1672,23 +1672,14 @@ export async function handleTaskStatus(
     return { success: false, error: 'No task ID provided' };
   }
 
-  const supabase = taskService.getSupabase();
-
-  // Support partial IDs (first 8 chars)
-  let query = supabase.from('itachi_tasks').select('*');
-  if (idArg.length < 36) {
-    query = query.ilike('id', `${idArg}%`);
-  } else {
-    query = query.eq('id', idArg);
-  }
-
-  const { data, error } = await query.limit(1).single();
-  if (error || !data) {
+  // Use centralized prefix lookup (handles UUID type casting reliably)
+  const taskData = await taskService.getTaskByPrefix(idArg);
+  if (!taskData) {
     if (callback) await callback({ text: `Task not found: ${idArg}` });
     return { success: false, error: 'Task not found' };
   }
 
-  const task = data as Record<string, unknown>;
+  const task = taskData as unknown as Record<string, unknown>;
   const shortId = (task.id as string).substring(0, 8);
 
   // Check if actively executing in-process

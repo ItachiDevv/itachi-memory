@@ -150,16 +150,31 @@ export class TaskService extends Service {
   async getTaskByPrefix(prefix: string, userId?: number): Promise<ItachiTask | null> {
     if (!prefix || prefix.length < 4 || /[%_]/.test(prefix)) return null; // min 4 chars, reject SQL wildcards
 
-    // UUID columns need text cast for prefix matching
-    let query = this.supabase
+    const lowerPrefix = prefix.toLowerCase();
+
+    // PostgREST's filter('id::text', 'ilike', ...) is unreliable across versions,
+    // so we fetch recent task IDs and match client-side instead.
+    let idQuery = this.supabase
+      .from('itachi_tasks')
+      .select('id')
+      .order('created_at', { ascending: false })
+      .limit(500);
+
+    if (userId) idQuery = idQuery.eq('telegram_user_id', userId);
+
+    const { data: ids, error: idError } = await idQuery;
+    if (idError || !ids) return null;
+
+    const match = (ids as { id: string }[]).find(t => t.id.toLowerCase().startsWith(lowerPrefix));
+    if (!match) return null;
+
+    // Fetch full task by exact ID
+    const { data, error } = await this.supabase
       .from('itachi_tasks')
       .select('*')
-      .filter('id::text', 'ilike', `${prefix}%`)
-      .limit(1);
+      .eq('id', match.id)
+      .single();
 
-    if (userId) query = query.eq('telegram_user_id', userId);
-
-    const { data, error } = await query.single();
     if (error || !data) return null;
     return data as ItachiTask;
   }
