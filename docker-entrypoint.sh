@@ -66,7 +66,7 @@ echo "[entrypoint] ElizaOS started (PID: $ELIZA_PID)"
 # Wait for ElizaOS to be ready (health check on port 3000)
 echo "[entrypoint] Waiting for ElizaOS to be ready..."
 for i in $(seq 1 30); do
-  if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+  if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
     echo "[entrypoint] ElizaOS ready!"
     break
   fi
@@ -77,12 +77,7 @@ for i in $(seq 1 30); do
 done
 
 # --- Start Orchestrator in background ---
-# Skip standalone orchestrator when ElizaOS executor is enabled (it handles
-# task execution via SSH, so running both causes race conditions).
-if [ "${ITACHI_EXECUTOR_ENABLED,,}" = "true" ]; then
-  echo "[entrypoint] ElizaOS executor enabled — skipping standalone orchestrator (no race)"
-  ORCH_PID=""
-elif [ -n "$ITACHI_MACHINE_ID" ]; then
+if [ -n "$ITACHI_MACHINE_ID" ]; then
   echo "[entrypoint] Starting Orchestrator (machine: $ITACHI_MACHINE_ID)..."
   cd /app/orchestrator
   node dist/index.js &
