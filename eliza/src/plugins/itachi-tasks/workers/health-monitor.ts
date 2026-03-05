@@ -7,6 +7,8 @@ import type { MemoryService } from '../../itachi-memory/services/memory-service.
 
 let lastHealthMonitorRun = 0;
 const HEALTH_MONITOR_INTERVAL_MS = 60_000; // 60 seconds
+// Only alert on tasks started after this process booted (avoids post-deploy spam)
+const processStartTime = new Date(Date.now()).toISOString();
 
 // Track last alert times to prevent spam (key: alert type, value: timestamp)
 const lastAlerts = new Map<string, number>();
@@ -108,6 +110,7 @@ export const healthMonitorWorker: TaskWorker = {
             .from('itachi_tasks')
             .select('id, project, status, started_at')
             .in('status', ['running', 'claimed'])
+            .gt('started_at', processStartTime)
             .lt('started_at', staleThreshold)
             .limit(10);
 

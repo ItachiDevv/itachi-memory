@@ -8,26 +8,36 @@ let storedMemories: any[] = [];
 let searchResults: any[] = [];
 let supabaseCalls: { method: string; args: any[] }[] = [];
 let supabaseDeleted: string[] = [];
+// Map category values to return data for Supabase queries (used by reflection worker tests)
+let supabaseResponsesByCategory: Record<string, any[]> = {};
 
 function resetMocks() {
   storedMemories = [];
   searchResults = [];
   supabaseCalls = [];
   supabaseDeleted = [];
+  supabaseResponsesByCategory = {};
 }
 
 function createQueryBuilder(returnData: any = null, returnError: any = null): any {
+  let trackedCategory: string | null = null;
   const qb: any = {};
-  for (const m of ['select', 'eq', 'in', 'is', 'order', 'limit', 'update', 'insert', 'delete', 'single', 'lte']) {
+  for (const m of ['select', 'eq', 'in', 'is', 'order', 'limit', 'update', 'insert', 'delete', 'single', 'lte', 'gt', 'lt']) {
     qb[m] = (...args: any[]) => {
       supabaseCalls.push({ method: m, args });
+      if (m === 'eq' && args[0] === 'category') {
+        trackedCategory = args[1];
+      }
       if (m === 'delete') {
-        // track deletes
         const eqCall = supabaseCalls.find(c => c.method === 'eq' && c.args[0] === 'id');
         if (eqCall) supabaseDeleted.push(eqCall.args[1]);
         return qb;
       }
       if (m === 'limit' || m === 'single') {
+        // If category-specific responses are configured, use them
+        if (trackedCategory && supabaseResponsesByCategory[trackedCategory] !== undefined) {
+          return Promise.resolve({ data: supabaseResponsesByCategory[trackedCategory], error: null });
+        }
         return Promise.resolve({ data: returnData, error: returnError });
       }
       return qb;
@@ -410,22 +420,15 @@ describe('REFLECTION_WORKER', () => {
   });
 
   it('synthesizes lessons into a strategy document', async () => {
-    const searchCallCategories: string[] = [];
-    const memService = makeMockMemoryService({
-      searchMemories: async (_q: string, _p: any, _l: number, _t: any, category: string) => {
-        searchCallCategories.push(category);
-        if (category === 'task_lesson') {
-          return [
-            { summary: 'Lesson 1', category: 'task_lesson', project: 'general', metadata: { confidence: 0.8, outcome: 'success', lesson_category: 'task-estimation' } },
-            { summary: 'Lesson 2', category: 'task_lesson', project: 'itachi', metadata: { confidence: 0.7, outcome: 'failure', lesson_category: 'error-handling' } },
-            { summary: 'Lesson 3', category: 'task_lesson', project: 'general', metadata: { confidence: 0.9, outcome: 'success', lesson_category: 'tool-selection' } },
-          ];
-        }
-        if (category === 'strategy_document') return [];
-        return [];
-      },
-    });
+    // Configure Supabase mock to return lessons and no existing strategies
+    supabaseResponsesByCategory['task_lesson'] = [
+      { id: '1', summary: 'Lesson 1', category: 'task_lesson', project: 'general', metadata: { confidence: 0.8, outcome: 'success', lesson_category: 'task-estimation' } },
+      { id: '2', summary: 'Lesson 2', category: 'task_lesson', project: 'itachi', metadata: { confidence: 0.7, outcome: 'failure', lesson_category: 'error-handling' } },
+      { id: '3', summary: 'Lesson 3', category: 'task_lesson', project: 'general', metadata: { confidence: 0.9, outcome: 'success', lesson_category: 'tool-selection' } },
+    ];
+    supabaseResponsesByCategory['strategy_document'] = [];
 
+    const memService = makeMockMemoryService();
     const { runtime, logs } = makeMockRuntime({ 'itachi-memory': memService });
     runtime.setModelResponse('## Strategy\n1. Always test before deploying\n2. Use incremental rollouts\n3. Check error rates');
 
@@ -437,17 +440,17 @@ describe('REFLECTION_WORKER', () => {
     expect(storedMemories[0].metadata.source).toBe('reflection_worker');
     expect(storedMemories[0].metadata.lesson_count).toBe(3);
     expect(logs.some(l => l.msg.includes('Reflection complete'))).toBe(true);
-    // Should have searched both task_lesson and strategy_document
-    expect(searchCallCategories).toContain('task_lesson');
-    expect(searchCallCategories).toContain('strategy_document');
+    // Should have queried both task_lesson and strategy_document via Supabase
+    const categoryEqs = supabaseCalls.filter(c => c.method === 'eq' && c.args[0] === 'category').map(c => c.args[1]);
+    expect(categoryEqs).toContain('task_lesson');
+    expect(categoryEqs).toContain('strategy_document');
   });
 
   it('requires minimum 3 lessons to synthesize', async () => {
-    const memService = makeMockMemoryService({
-      searchMemories: async () => [
-        { summary: 'Only one', metadata: {}, category: 'task_lesson', project: 'x' },
-      ],
-    });
+    supabaseResponsesByCategory['task_lesson'] = [
+      { id: '1', summary: 'Only one', metadata: {}, category: 'task_lesson', project: 'x' },
+    ];
+    const memService = makeMockMemoryService();
     const { runtime, logs } = makeMockRuntime({ 'itachi-memory': memService });
 
     await reflectionWorker.execute(runtime, {}, {} as any);
@@ -464,12 +467,9 @@ describe('REFLECTION_WORKER', () => {
   });
 
   it('skips when LLM returns insufficient strategy', async () => {
-    const memService = makeMockMemoryService({
-      searchMemories: async (_q: string, _p: any, _l: number, _t: any, cat: string) => {
-        if (cat === 'task_lesson') return Array(5).fill({ summary: 'L', metadata: {}, category: 'task_lesson', project: 'x' });
-        return [];
-      },
-    });
+    supabaseResponsesByCategory['task_lesson'] = Array(5).fill({ id: 'x', summary: 'L', metadata: {}, category: 'task_lesson', project: 'x' });
+    supabaseResponsesByCategory['strategy_document'] = [];
+    const memService = makeMockMemoryService();
     const { runtime, logs } = makeMockRuntime({ 'itachi-memory': memService });
     runtime.setModelResponse('short');
 
@@ -481,16 +481,13 @@ describe('REFLECTION_WORKER', () => {
 
   it('passes lessons to LLM prompt for synthesis', async () => {
     let capturedPrompt = '';
-    const memService = makeMockMemoryService({
-      searchMemories: async (_q: string, _p: any, _l: number, _t: any, cat: string) => {
-        if (cat === 'task_lesson') return [
-          { summary: 'Auth needs tests', metadata: { confidence: 0.9, outcome: 'success', lesson_category: 'task-estimation' }, category: 'task_lesson', project: 'itachi-memory' },
-          { summary: 'Budget too low for refactor', metadata: { confidence: 0.7, outcome: 'failure', lesson_category: 'task-estimation' }, category: 'task_lesson', project: 'general' },
-          { summary: 'Use Opus for complex', metadata: { confidence: 0.8, outcome: 'success', lesson_category: 'tool-selection' }, category: 'task_lesson', project: 'general' },
-        ];
-        return [];
-      },
-    });
+    supabaseResponsesByCategory['task_lesson'] = [
+      { id: '1', summary: 'Auth needs tests', metadata: { confidence: 0.9, outcome: 'success', lesson_category: 'task-estimation' }, category: 'task_lesson', project: 'itachi-memory' },
+      { id: '2', summary: 'Budget too low for refactor', metadata: { confidence: 0.7, outcome: 'failure', lesson_category: 'task-estimation' }, category: 'task_lesson', project: 'general' },
+      { id: '3', summary: 'Use Opus for complex', metadata: { confidence: 0.8, outcome: 'success', lesson_category: 'tool-selection' }, category: 'task_lesson', project: 'general' },
+    ];
+    supabaseResponsesByCategory['strategy_document'] = [];
+    const memService = makeMockMemoryService();
     const { runtime } = makeMockRuntime({ 'itachi-memory': memService });
     runtime.useModel = async (_type: any, opts: any) => {
       capturedPrompt = opts.prompt;

@@ -92,20 +92,45 @@ const mockSupabase: any = {
           };
         },
         select: (_cols?: string) => {
+          let sortCol: string | null = null;
+          let sortAsc = true;
+          let limitN: number | null = null;
           const chain: any = {
             eq: (_col: string, _val: string) => chain,
-            order: () => chain,
-            limit: () => chain,
+            order: (col: string, opts?: { ascending?: boolean }) => {
+              sortCol = col;
+              sortAsc = opts?.ascending !== false;
+              return chain;
+            },
+            limit: (n: number) => { limitN = n; return chain; },
             single: () => Promise.resolve({
               data: queryRows.length > 0 ? queryRows[0] : null,
               error: null,
             }),
             then: undefined as any,
           };
-          // Make awaitable via .then
-          const promise = Promise.resolve({ data: queryRows, error: null });
-          chain.then = promise.then.bind(promise);
-          chain.catch = promise.catch.bind(promise);
+          // Make awaitable via .then — apply sort and limit when resolved
+          Object.defineProperty(chain, 'then', {
+            get() {
+              let rows = [...queryRows];
+              if (sortCol) {
+                rows.sort((a: any, b: any) => {
+                  const va = a[sortCol!] ?? '';
+                  const vb = b[sortCol!] ?? '';
+                  return sortAsc ? (va < vb ? -1 : va > vb ? 1 : 0) : (va > vb ? -1 : va < vb ? 1 : 0);
+                });
+              }
+              if (limitN != null) rows = rows.slice(0, limitN);
+              const promise = Promise.resolve({ data: rows, error: null });
+              return promise.then.bind(promise);
+            },
+          });
+          Object.defineProperty(chain, 'catch', {
+            get() {
+              const promise = Promise.resolve({ data: queryRows, error: null });
+              return promise.catch.bind(promise);
+            },
+          });
           return chain;
         },
         update: (data: any) => ({

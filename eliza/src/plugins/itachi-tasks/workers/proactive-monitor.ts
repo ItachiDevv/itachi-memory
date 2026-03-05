@@ -17,6 +17,8 @@ const MONITOR_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 // Track state between runs to avoid spamming the same alerts
 const alertedTaskIds = new Set<string>();
 const alertedMachineIds = new Set<string>();
+// Only alert on tasks completed/started after this process booted (avoids post-deploy spam)
+const processStartTime = Date.now();
 
 let lastProactiveMonitorRun = 0;
 
@@ -45,6 +47,7 @@ export const proactiveMonitorWorker: TaskWorker = {
         t.status === 'failed' &&
         !alertedTaskIds.has(t.id) &&
         t.completed_at &&
+        new Date(t.completed_at).getTime() > processStartTime &&
         Date.now() - new Date(t.completed_at).getTime() < MONITOR_INTERVAL_MS * 2
       );
 
@@ -61,6 +64,7 @@ export const proactiveMonitorWorker: TaskWorker = {
         (t.status === 'running' || t.status === 'claimed') &&
         !alertedTaskIds.has(t.id) &&
         t.started_at &&
+        new Date(t.started_at).getTime() > processStartTime &&
         Date.now() - new Date(t.started_at).getTime() > STALE_TASK_THRESHOLD_MS
       );
 
@@ -103,8 +107,15 @@ export const proactiveMonitorWorker: TaskWorker = {
 
       // Send alerts if any
       if (alerts.length > 0) {
+        const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
         const message = `🔍 Monitor Alert\n\n${alerts.join('\n\n')}`;
-        await sendTelegramMessage(botToken, chatId, message);
+        if (topicsService) {
+          await topicsService.sendMessageWithKeyboard(message, []).catch((err: unknown) => {
+            runtime.logger.debug(`[monitor] alert send failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        } else {
+          await sendTelegramMessage(botToken, chatId, message);
+        }
         runtime.logger.info(`[monitor] Sent ${alerts.length} alert(s)`);
       }
 

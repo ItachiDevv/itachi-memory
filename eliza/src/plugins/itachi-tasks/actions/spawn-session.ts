@@ -49,10 +49,10 @@ function extractFromLLMResponse(
 
 export const spawnSessionAction: Action = {
   name: 'SPAWN_CLAUDE_SESSION',
-  description: 'Create a coding task that will be picked up by the local orchestrator and executed via Claude Code CLI',
+  description: 'Start an interactive coding session with feedback loop. Use only when the user explicitly requests a session or interactive workflow — NOT for one-shot tasks.',
   similes: [
-    'create task', 'queue task', 'fix bug', 'implement feature',
-    'code this', 'work on', 'build this', 'deploy this',
+    'start session', 'interactive session', 'open session', 'spawn session',
+    'new session', 'start a session',
   ],
   examples: [
     [
@@ -81,31 +81,24 @@ export const spawnSessionAction: Action = {
     const text = message.content?.text || '';
     const lower = text.toLowerCase();
 
-    // Skip slash commands — handled by TELEGRAM_COMMANDS
-    if (text.startsWith('/')) return false;
+    // Only trigger for explicit /session commands
+    if (text.startsWith('/session ')) return true;
+
+    // Or explicit "session" / "interactive" keywords in natural language
+    // This keeps SPAWN_CLAUDE_SESSION reserved for interactive workflows
+    // while one-shot tasks route to CREATE_TASK
+    const hasSessionKeyword = /\b(interactive\s+session|start\s+a?\s*session|open\s+a?\s*session|spawn\s+a?\s*session|new\s+session)\b/i.test(lower);
+    if (!hasSessionKeyword) return false;
 
     // Skip session/browsing topics — topic-input-relay handles those
     const threadId = await getTopicThreadId(runtime, message);
     if (threadId !== null && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) return false;
 
-    // Require a strong coding keyword (narrowed from 14 to 5)
-    const hasCodingKeyword = /\b(fix|implement|refactor|deploy|debug)\b/i.test(lower);
-    if (!hasCodingKeyword) return false;
-
-    // AND require either a known project name or explicit task intent
     const taskService = runtime.getService<TaskService>('itachi-tasks');
     if (!taskService) return false;
 
-    let mentionsProject = false;
-    try {
-      const repos = await taskService.getMergedRepos();
-      mentionsProject = repos.some(r => lower.includes(r.name.toLowerCase()));
-    } catch { /* fall through */ }
-
-    const hasTaskIntent = /\b(task|queue|make a|create a|work on|build|ship)\b/i.test(lower);
-    const result = mentionsProject || hasTaskIntent;
-    runtime.logger.debug(`[SPAWN_CLAUDE_SESSION] validate: "${text.substring(0, 60)}" → ${result}`);
-    return result;
+    runtime.logger.debug(`[SPAWN_CLAUDE_SESSION] validate: "${text.substring(0, 60)}" → true (explicit session request)`);
+    return true;
   },
 
   handler: async (

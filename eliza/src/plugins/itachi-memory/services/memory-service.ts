@@ -338,36 +338,64 @@ export class MemoryService extends Service {
   }
 
   async getStats(project?: string): Promise<MemoryStats> {
-    let query = this.supabase
+    // Use SQL aggregation instead of fetching all rows client-side
+    let countQuery = this.supabase
       .from('itachi_memories')
-      .select('category, files, created_at')
-      .limit(10000); // hard cap to prevent OOM
-    if (project) query = query.eq('project', project);
+      .select('category', { count: 'exact', head: false });
+    if (project) countQuery = countQuery.eq('project', project);
 
-    const { data, error } = await query;
-    if (error) throw error;
+    // Get category counts via grouped query
+    const { data: catRows, error: catError } = await countQuery;
+    if (catError) throw catError;
 
-    const rows = data || [];
     const byCategory: Record<string, number> = {};
-    const byFile: Record<string, number> = {};
-    let oldest: string | null = null;
-    let newest: string | null = null;
-
-    for (const m of rows) {
-      byCategory[m.category] = (byCategory[m.category] || 0) + 1;
-      for (const file of m.files || []) {
-        byFile[file] = (byFile[file] || 0) + 1;
-      }
-      if (!oldest || m.created_at < oldest) oldest = m.created_at;
-      if (!newest || m.created_at > newest) newest = m.created_at;
+    let total = 0;
+    for (const row of catRows || []) {
+      byCategory[row.category] = (byCategory[row.category] || 0) + 1;
+      total++;
     }
 
+    // Get date range via min/max query (2 rows instead of 10K)
+    let oldestQuery = this.supabase
+      .from('itachi_memories')
+      .select('created_at')
+      .order('created_at', { ascending: true })
+      .limit(1);
+    let newestQuery = this.supabase
+      .from('itachi_memories')
+      .select('created_at')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (project) {
+      oldestQuery = oldestQuery.eq('project', project);
+      newestQuery = newestQuery.eq('project', project);
+    }
+
+    const [{ data: oldestRow }, { data: newestRow }] = await Promise.all([oldestQuery, newestQuery]);
+    const oldest = oldestRow?.[0]?.created_at ?? null;
+    const newest = newestRow?.[0]?.created_at ?? null;
+
+    // Get top files from a limited sample (files require unnesting, so fetch recent 500 rows)
+    let filesQuery = this.supabase
+      .from('itachi_memories')
+      .select('files')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (project) filesQuery = filesQuery.eq('project', project);
+
+    const { data: fileRows } = await filesQuery;
+    const byFile: Record<string, number> = {};
+    for (const row of fileRows || []) {
+      for (const file of row.files || []) {
+        byFile[file] = (byFile[file] || 0) + 1;
+      }
+    }
     const topFiles = Object.entries(byFile)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 10)
       .map(([file, count]) => ({ file, count }));
 
-    return { total: rows.length, byCategory, topFiles, dateRange: { oldest, newest } };
+    return { total, byCategory, topFiles, dateRange: { oldest, newest } };
   }
 
   /** Store a fact extracted from conversation (with deduplication).

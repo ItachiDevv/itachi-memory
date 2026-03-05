@@ -3,7 +3,6 @@ import type { MemoryService, ItachiMemory } from '../../itachi-memory/services/m
 
 export interface RLMRecommendations {
   suggestedBudget?: number;
-  suggestedModel?: string;
   warnings: string[];
 }
 

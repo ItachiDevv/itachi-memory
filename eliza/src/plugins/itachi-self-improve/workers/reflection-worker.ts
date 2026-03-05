@@ -22,18 +22,20 @@ export const reflectionWorker: TaskWorker = {
         return;
       }
 
-      // 1. Query recent task_lesson memories
+      // 1. Query recent task_lesson memories (date-sorted, not semantic search)
       let lessons: ItachiMemory[];
       try {
-        lessons = await memoryService.searchMemories(
-          'task lesson outcome success failure error budget',
-          undefined,  // all projects
-          50,
-          undefined,
-          'task_lesson',
-        );
+        const supabase = memoryService.getSupabase();
+        const { data, error } = await supabase
+          .from('itachi_memories')
+          .select('id, project, category, content, summary, files, branch, task_id, metadata, created_at')
+          .eq('category', 'task_lesson')
+          .order('created_at', { ascending: false })
+          .limit(50);
+        if (error) throw error;
+        lessons = (data as ItachiMemory[]) || [];
       } catch {
-        runtime.logger.warn('Reflection: Failed to search for lessons');
+        runtime.logger.warn('Reflection: Failed to query lessons');
         return;
       }
 
@@ -81,28 +83,26 @@ Keep it under 500 words. Be specific and actionable.`;
       }
 
       // 4. Check for existing strategy documents and clean up old ones (keep max 4)
+      const supabaseCleanup = memoryService.getSupabase();
       let existingStrategies: ItachiMemory[] = [];
       try {
-        existingStrategies = await memoryService.searchMemories(
-          'strategy document management',
-          undefined,
-          10,
-          undefined,
-          'strategy_document',
-        );
+        const { data } = await supabaseCleanup
+          .from('itachi_memories')
+          .select('id, project, category, content, summary, files, branch, task_id, metadata, created_at')
+          .eq('category', 'strategy_document')
+          .order('created_at', { ascending: false })
+          .limit(10);
+        existingStrategies = (data as ItachiMemory[]) || [];
       } catch {
         // Non-critical — if we can't find old ones, just store the new one
       }
 
       // Remove oldest if we have 4+
       if (existingStrategies.length >= 4) {
-        const supabase = memoryService.getSupabase();
-        const sorted = existingStrategies.sort((a, b) => {
-          return (b.created_at || '').localeCompare(a.created_at || '');
-        });
-        for (const old of sorted.slice(3)) {
+        // Already sorted by created_at desc from the query
+        for (const old of existingStrategies.slice(3)) {
           try {
-            await supabase.from('itachi_memories').delete().eq('id', old.id);
+            await supabaseCleanup.from('itachi_memories').delete().eq('id', old.id);
           } catch {
             // Silent — old doc cleanup is best-effort
           }
