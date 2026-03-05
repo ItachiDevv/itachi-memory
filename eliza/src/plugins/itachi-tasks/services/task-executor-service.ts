@@ -1187,8 +1187,15 @@ export class TaskExecutorService extends Service {
     const hasToolUsage = transcript && transcript.some(t =>
       t.content.includes('[TOOL_USE]') || t.content.includes('tool_use') ||
       t.content.includes('Edit') || t.content.includes('Write') ||
-      t.content.includes('Bash') || t.content.includes('committed'),
+      t.content.includes('Bash') || t.content.includes('Read') ||
+      t.content.includes('Grep') || t.content.includes('Glob') ||
+      t.content.includes('committed'),
     );
+
+    // Detect if this is a read-only/info task that doesn't need file changes
+    const descLower = (task.description || '').toLowerCase();
+    const isReadOnlyTask = /\b(read|check|list|show|report|status|log|uptime|count|summarize|describe|what is|inspect|verify)\b/.test(descLower)
+      && !/\b(create|write|modify|update|add|fix|change|edit|set up|install|deploy)\b/.test(descLower);
 
     let finalStatus: string;
     let workWarning = '';
@@ -1198,8 +1205,8 @@ export class TaskExecutorService extends Service {
       this.runtime.logger.warn(`[executor] Task ${shortId} timed out after 20min (exit code ${exitCode})`);
     } else if (exitCode !== 0) {
       finalStatus = 'failed';
-    } else if (filesChanged.length === 0 && !hasToolUsage) {
-      // Exit 0 but no files changed and no tool usage detected
+    } else if (filesChanged.length === 0 && !hasToolUsage && !isReadOnlyTask) {
+      // Exit 0 but no files changed, no tool usage, and not a read-only task
       finalStatus = 'completed';
       workWarning = 'Warning: Session completed with exit code 0 but no file changes detected. The agent may not have performed actual work.';
       this.runtime.logger.warn(`[executor] Task ${shortId} completed with no file changes — possible hallucination`);
