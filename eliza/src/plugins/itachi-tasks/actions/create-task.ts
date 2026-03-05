@@ -569,8 +569,17 @@ export function extractTaskFromUserMessage(
     || /^(what|who|where|when|why|how|is|are|was|were|does|did|has|have|had|any|show)\b/i.test(trimmed);
   const hasActionVerb = /\b(fix|create|add|implement|build|refactor|update|remove|delete|optimize|audit|review|scaffold|deploy|migrate|test|write|rewrite|move|rename|clean|configure|set\s*up|get|give|fetch|show|list|check|run|execute|start|stop|restart|pull|push|install|count|find|search|scan|monitor|inspect|investigate|analyze|send|verify|validate)\b/i.test(lower);
 
+  // "How do I X?" / "What does X do?" = informational question, not a task
+  const isInformationalQuestion = hasQuestionSyntax
+    && /^(how\s+(do|can|should|would|could)\s+|what\s+(is|are|does|do)\s+|why\s+(do|does|is|are)\s+|where\s+(do|can|is)\s+|when\s+(do|does|should)\s+|can\s+(you|i|we)\s+)/i.test(trimmed);
+
   if (hasQuestionSyntax && !hasActionVerb) {
     console.log(`[create-task] Strategy 0: skipping question without action verb`);
+    return null;
+  }
+
+  if (isInformationalQuestion) {
+    console.log(`[create-task] Strategy 0: skipping informational question: "${trimmed.substring(0, 50)}"`);
     return null;
   }
 

@@ -638,7 +638,9 @@ export class TaskExecutorService extends Service {
       lines.push(
         'Instructions:',
         '- Work autonomously. Make all necessary changes.',
-        '- Make minimal, focused changes.',
+        '- Make MINIMAL, focused changes — only what the description explicitly asks for.',
+        '- Do NOT build entire systems, frameworks, workers, or infrastructure beyond the scope.',
+        '- If the description is vague or ambiguous, do the simplest reasonable interpretation.',
         '- Commit your changes when done.',
         '- If blocked, explain what you need and wait for input.',
         '- Push to a feature branch and create a PR if appropriate.',

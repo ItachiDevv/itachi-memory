@@ -18,13 +18,22 @@ export const storeMemoryAction: Action = {
 
   validate: async (_runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     const text = message.content?.text?.toLowerCase() || '';
+    const trimmed = text.trim();
+    // "remember" must be imperative ("remember that...", "please remember")
+    // NOT conversational ("I remember when...", "do you remember...")
+    const isConversationalRemember = /\b(i|we|you|do you|they)\s+remember\b/.test(trimmed);
+    const hasImperativeRemember = text.includes('remember')
+      && (/^remember\b/.test(trimmed) || /\bplease remember\b/.test(trimmed))
+      && !isConversationalRemember;
+    // These are always storage intent regardless of "remember"
+    const hasStoragePhrase = /\bdon't forget\b/.test(trimmed)
+      || /\bkeep in mind\b/.test(trimmed);
     return (
-      text.includes('remember') ||
-      text.includes('note') ||
-      text.includes('store') ||
-      text.includes('save') ||
-      text.includes("don't forget") ||
-      text.includes('keep in mind') ||
+      hasImperativeRemember ||
+      hasStoragePhrase ||
+      /^note[:\s]/i.test(trimmed) ||
+      /\bstore\b/.test(text) ||
+      /\bsave\b/.test(text) ||
       text.includes('log this')
     );
   },

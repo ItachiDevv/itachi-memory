@@ -76,10 +76,13 @@ export const listTasksAction: Action = {
       return true;
     }
 
-    // Direct keyword matches
+    // Task management intent: require task/queue keyword PLUS a management verb or question word
+    // Avoids false positives on "tell me about the task system" or "the task list is broken"
+    const hasTaskKeyword = text.includes('task') || text.includes('queue');
+    const hasManagementIntent = /\b(list|show|display|what|status|running|active|pending|queued|check on|details on|update on|progress)\b/.test(text);
+    if (hasTaskKeyword && hasManagementIntent) return true;
+    // Non-task keywords that strongly signal queue/status queries
     if (
-      text.includes('task') ||
-      text.includes('queue') ||
       text.includes('status') ||
       text.includes('running') ||
       text.includes('progress') ||
