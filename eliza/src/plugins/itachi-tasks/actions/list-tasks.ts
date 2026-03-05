@@ -142,19 +142,28 @@ export const listTasksAction: Action = {
       }
 
       // --- General active/queue query ---
-      // For active queue queries, the activeTasksProvider already has the data in LLM context,
-      // so don't callback to avoid duplicate responses. The LLM can format from provider data.
       const isQueueQuery = textLower.includes('queue') || textLower.includes('running') || textLower.includes('active');
       if (isQueueQuery) {
         const tasks = await taskService.getActiveTasks();
-        // No callback — LLM answers from provider context
+        if (tasks.length === 0) {
+          callback?.({ text: 'No active tasks in the queue.' });
+          return { success: true, data: { tasks: [] } };
+        }
+        const lines: string[] = [`Active queue (${tasks.length}):\n`];
+        for (const t of tasks) {
+          const id = t.id.substring(0, 8);
+          const title = generateTaskTitle(t.description);
+          const machine = t.assigned_machine ? ` | machine:${t.assigned_machine}` : '';
+          lines.push(`[${t.status}] ${id} | ${t.project}: ${title}${machine}`);
+        }
+        callback?.({ text: lines.join('\n') });
         return { success: true, data: { tasks } };
       }
 
       // --- Default: list recent tasks ---
       const tasks = await taskService.listTasks({ limit: 5 });
       if (tasks.length === 0) {
-        // No callback — LLM can say "no recent tasks"
+        callback?.({ text: 'No recent tasks.' });
         return { success: true, data: { tasks: [] } };
       }
       const lines: string[] = [`Recent tasks (${tasks.length}):\n`];
