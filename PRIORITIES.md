@@ -2,10 +2,10 @@
 
 ## P0 — Critical Fixes
 
-### 1. Workspace Cleanup Janitor
+### ~~1. Workspace Cleanup Janitor~~ ✅ DONE
 - **Problem:** Each task creates a git worktree that persists forever. 13 copies on Linux (1.2GB), 899MB outlier.
-- **Fix:** Implement periodic cleanup worker that removes worktrees >24h old (unless task is `waiting_input`).
-- **Files:** `task-executor-service.ts` (add cleanup in `handleSessionComplete` or new `workspace-janitor.ts` worker)
+- **Fix:** Added `cleanupWorktree()` after task completion + periodic janitor every 6h that removes worktrees >24h old. Skips `waiting_input` tasks.
+- **Files:** `task-executor-service.ts` (cleanup after completion + `cleanupStaleWorktrees` method), `task-poller.ts` (janitor interval)
 
 ### 2. Mac "End Briefing" Failures
 - **Problem:** Tasks routed to Mac (`itachi-m1`) exit after Claude's briefing text with no work done. 100% failure rate on Mac.
@@ -79,7 +79,7 @@
 
 ---
 
-## Completed (This Session — March 4-5, 2026)
+## Completed (March 4-5, 2026)
 
 - [x] Windows task execution — .cmd batch file fixes PowerShell stdin hang (7482ac0)
 - [x] RLM outcome metadata — `outcome: 'success'|'failure'` stored in lessons (46b4d02)
@@ -90,8 +90,15 @@
 - [x] Briefing noise filter — "=== End Briefing ===" filtered from transcripts (f94c7a3)
 - [x] Full autonomy proof — Telegram message -> task detect -> execute -> result (f7b43f2d)
 - [x] Code change via task — removed CA from time repo Hero.tsx (79ad6b70)
-- [x] 1074 tests passing, 40+ new tests added
-- [x] agent-browser installed for local app testing
+- [x] 1078 tests passing, 40+ new tests added
+- [x] agent-browser installed + Windows Hyper-V port fix (`--session x`)
+- [x] agent-browser skill created with full command reference + Windows troubleshooting
+- [x] Workspace cleanup janitor — auto-cleanup after task completion + 6h periodic sweep
+- [x] 3-message Telegram autonomy test — all 3 detected, 2/3 completed (1 failed: Coolify redeploy)
+  - HN scraper bash script created (Firebase API approach)
+  - time repo package.json read correctly (Vite, react 19, three.js)
+  - health-check file creation killed by Coolify redeploy
+- [x] RLM confirmed working — itachi wrapper used on all tasks, lessons injected into prompts
 
 ---
 

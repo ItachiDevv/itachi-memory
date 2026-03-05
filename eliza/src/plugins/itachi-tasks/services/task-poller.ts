@@ -1,5 +1,7 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
 import { TaskService, generateTaskTitle } from './task-service.js';
+import { TaskExecutorService } from './task-executor-service.js';
+import { MACHINE_TO_SSH_TARGET } from '../shared/repo-utils.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { taskTranscripts } from '../routes/task-stream.js';
@@ -13,6 +15,7 @@ export class TaskPollerService extends Service {
   capabilityDescription = 'Polls for task completions and sends Telegram notifications';
 
   private interval: ReturnType<typeof setInterval> | null = null;
+  private janitorInterval: ReturnType<typeof setInterval> | null = null;
   private notifiedTasks = new Set<string>();
   private static readonly MAX_NOTIFIED_CACHE = 500;
 
@@ -32,6 +35,10 @@ export class TaskPollerService extends Service {
       clearInterval(this.interval);
       this.interval = null;
     }
+    if (this.janitorInterval) {
+      clearInterval(this.janitorInterval);
+      this.janitorInterval = null;
+    }
     this.runtime.logger.info('TaskPollerService stopped');
   }
 
@@ -41,6 +48,36 @@ export class TaskPollerService extends Service {
         this.runtime.logger.error('TaskPoller error:', err);
       });
     }, 10_000);
+
+    // Workspace janitor: clean stale worktrees every 6 hours
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    // Run once on startup (after 60s delay to let services init), then every 6h
+    setTimeout(() => {
+      this.runJanitor().catch(err => this.runtime.logger.error('[janitor] Error:', err));
+    }, 60_000);
+    this.janitorInterval = setInterval(() => {
+      this.runJanitor().catch(err => this.runtime.logger.error('[janitor] Error:', err));
+    }, SIX_HOURS);
+  }
+
+  private async runJanitor(): Promise<void> {
+    const executor = this.runtime.getService<TaskExecutorService>('task-executor');
+    if (!executor) return;
+
+    // Deduplicate SSH targets (many machine IDs map to same target)
+    const sshTargets = [...new Set(Object.values(MACHINE_TO_SSH_TARGET))];
+    let totalRemoved = 0;
+    for (const sshTarget of sshTargets) {
+      try {
+        const removed = await executor.cleanupStaleWorktrees(sshTarget, 24 * 60 * 60 * 1000);
+        totalRemoved += removed;
+      } catch (err) {
+        this.runtime.logger.warn(`[janitor] Failed on ${sshTarget}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (totalRemoved > 0) {
+      this.runtime.logger.info(`[janitor] Cleaned up ${totalRemoved} stale worktrees across ${sshTargets.length} targets`);
+    }
   }
 
   /**

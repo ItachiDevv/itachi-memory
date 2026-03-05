@@ -1252,8 +1252,98 @@ export class TaskExecutorService extends Service {
       await topicsService.sendToTopic(topicId, lines.join('\n'));
     }
 
-    // 6. Cleanup worktree (optional — keep for follow-ups/resume)
-    // We keep the worktree so users can resume. It'll be cleaned up manually or by a periodic janitor.
+    // 6. Cleanup worktree (keep only for waiting_input tasks that may resume)
+    if (finalStatus !== 'waiting_input' && workspace !== task.project) {
+      try {
+        await this.cleanupWorktree(sshTarget, workspace, task);
+      } catch (err) {
+        this.runtime.logger.warn(`[executor] Worktree cleanup failed for ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     this.runtime.logger.info(`[executor] Task ${shortId} post-completion done. Status: ${finalStatus}, PR: ${prUrl || 'none'}, files: ${filesChanged.length}`);
+  }
+
+  // ── Workspace Cleanup ───────────────────────────────────────────────
+
+  private async cleanupWorktree(sshTarget: string, workspace: string, task: ItachiTask): Promise<void> {
+    const sshService = this.runtime.getService<SSHService>('ssh')!;
+    const shortId = task.id.substring(0, 8);
+    const repoPath = resolveRepoPathByProject(task.project, sshTarget);
+    if (!repoPath) return;
+
+    const isWindows = sshService.isWindowsTarget(sshTarget);
+
+    // Remove the worktree via git, then prune
+    if (isWindows) {
+      await sshService.exec(
+        sshTarget,
+        `cd '${repoPath}'; git -c safe.directory='*' worktree remove '${workspace}' --force 2>$null; git -c safe.directory='*' worktree prune 2>$null`,
+        15_000,
+      );
+    } else {
+      await sshService.exec(
+        sshTarget,
+        this.wrapForUser(sshTarget, `cd ${repoPath} && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null`),
+        15_000,
+      );
+    }
+
+    this.runtime.logger.info(`[executor] Cleaned up worktree for task ${shortId} at ${workspace}`);
+  }
+
+  /**
+   * Periodic janitor: removes stale worktrees older than maxAge on a target machine.
+   * Call this from the poll loop or on service start.
+   */
+  async cleanupStaleWorktrees(sshTarget: string, maxAgeMs: number = 24 * 60 * 60 * 1000): Promise<number> {
+    const sshService = this.runtime.getService<SSHService>('ssh')!;
+    const isWindows = sshService.isWindowsTarget(sshTarget);
+    let removed = 0;
+
+    // List workspace directories
+    const listCmd = isWindows
+      ? `Get-ChildItem -Directory '$HOME\\Documents\\Crypto\\*\\workspaces\\*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + '|' + $_.LastWriteTime.ToString('o') }`
+      : `find /home/itachi/itachi/workspaces -maxdepth 1 -mindepth 1 -type d -printf '%p|%T@\\n' 2>/dev/null`;
+
+    const result = await sshService.exec(sshTarget, listCmd, 10_000);
+    if (!result.stdout?.trim()) return 0;
+
+    const now = Date.now();
+    for (const line of result.stdout.trim().split('\n')) {
+      const [dirPath, timeStr] = line.split('|');
+      if (!dirPath || !timeStr) continue;
+
+      const mtime = isWindows ? new Date(timeStr).getTime() : parseFloat(timeStr) * 1000;
+      if (isNaN(mtime)) continue;
+
+      const age = now - mtime;
+      if (age > maxAgeMs) {
+        // Find the repo base to run git worktree remove
+        const parentDir = isWindows
+          ? dirPath.replace(/\\workspaces\\[^\\]+$/, '')
+          : dirPath.replace(/\/workspaces\/[^/]+$/, '');
+
+        const removeCmd = isWindows
+          ? `cd '${parentDir}'; git -c safe.directory='*' worktree remove '${dirPath}' --force 2>$null; if (-not $?) { Remove-Item -Recurse -Force '${dirPath}' 2>$null }`
+          : `cd ${parentDir} && git -c safe.directory='*' worktree remove "${dirPath}" --force 2>/dev/null || rm -rf "${dirPath}"`;
+
+        const rm = await sshService.exec(sshTarget, isWindows ? removeCmd : this.wrapForUser(sshTarget, removeCmd), 15_000);
+        if (rm.success || rm.code === 0) {
+          removed++;
+          this.runtime.logger.info(`[janitor] Removed stale worktree: ${dirPath} (age: ${Math.round(age / 3600000)}h)`);
+        }
+      }
+    }
+
+    if (removed > 0) {
+      // Prune git worktree references
+      const pruneCmd = isWindows
+        ? `Get-ChildItem -Directory '$HOME\\Documents\\Crypto\\*' -ErrorAction SilentlyContinue | ForEach-Object { cd $_.FullName; git -c safe.directory='*' worktree prune 2>$null }`
+        : `for d in /home/itachi/itachi/*/; do cd "$d" && git -c safe.directory='*' worktree prune 2>/dev/null; done`;
+      await sshService.exec(sshTarget, isWindows ? pruneCmd : this.wrapForUser(sshTarget, pruneCmd), 15_000);
+    }
+
+    return removed;
   }
 }
