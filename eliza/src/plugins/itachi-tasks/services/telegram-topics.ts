@@ -14,6 +14,8 @@ export interface TopicDeleteResult {
   success: boolean;
   /** true when the topic no longer exists in Telegram (ghost DB entry) */
   invalid?: boolean;
+  /** true when the topic was open and skipped (only closed topics are deleted) */
+  skipped?: boolean;
 }
 
 interface StreamBuffer {
@@ -213,24 +215,38 @@ export class TelegramTopicsService extends Service {
    * Try to delete a topic by ID. Returns true if successful, false otherwise.
    * Handles the reopen→close→delete sequence automatically.
    */
+  /**
+   * Delete a topic only if it's already closed. Open topics are skipped.
+   * Uses closeForumTopic as a probe: if it succeeds the topic was open (reopen it back),
+   * if it returns TOPIC_NOT_MODIFIED the topic was already closed (proceed to delete).
+   */
   async forceDeleteTopic(topicId: number): Promise<TopicDeleteResult> {
     if (!this.isEnabled() || !topicId) return { success: false };
 
     try {
-      // Step 1: Close topic (must be closed before delete; no-op if already closed)
+      // Probe: try to close — tells us whether topic is open or already closed
       const closeResult = await this.apiCall('closeForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
       });
 
-      // If topic doesn't exist in Telegram, it's a ghost entry
+      // Topic doesn't exist in Telegram — ghost entry
       if (!closeResult.ok && closeResult.description?.includes('TOPIC_ID_INVALID')) {
         return { success: false, invalid: true };
       }
 
+      // Close succeeded → topic was OPEN. Reopen it and skip (user only wants closed topics deleted).
+      if (closeResult.ok) {
+        await this.apiCall('reopenForumTopic', {
+          chat_id: this.groupChatId,
+          message_thread_id: topicId,
+        });
+        return { success: false, skipped: true };
+      }
+
+      // Close failed with TOPIC_NOT_MODIFIED → topic was already closed. Delete it.
       await new Promise(r => setTimeout(r, 500));
 
-      // Step 2: Delete
       const result = await this.apiCall('deleteForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
