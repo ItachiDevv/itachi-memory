@@ -5,14 +5,22 @@ import type { IAgentRuntime, Memory } from '@elizaos/core';
  * In group chats, Telegram appends @BotUsername to commands (e.g. /status@Itachi_Mangekyou_bot).
  * This normalizes the text so validators and handlers can match cleanly.
  *
+ * Also strips Telegram auto-link angle brackets from URLs.
+ * Telegram wraps URLs in angle brackets in the message text
+ * (e.g. "<http://localhost:3000/health>" → "http://localhost:3000/health").
+ * These break shell commands when passed to SSH/exec.
+ *
  * Examples:
  *   "/repos@Itachi_Mangekyou_bot" → "/repos"
  *   "/cancel@Itachi_Mangekyou_bot 3c1a19e5" → "/cancel 3c1a19e5"
  *   "/exec@Bot @windows echo test" → "/exec @windows echo test"
  *   "normal text @mention" → "normal text @mention" (unchanged)
+ *   "/ssh coolify curl -sf <http://localhost:3000>" → "/ssh coolify curl -sf http://localhost:3000"
  */
 export function stripBotMention(text: string): string {
-  return text.replace(/^(\/[\w-]+)@[\w]+/, '$1');
+  return text
+    .replace(/^(\/[\w-]+)@[\w]+/, '$1')
+    .replace(/<(https?:\/\/[^>]+)>/g, '$1');
 }
 
 /**

@@ -14,6 +14,8 @@ export interface TopicDeleteResult {
   success: boolean;
   /** true when the topic no longer exists in Telegram (ghost DB entry) */
   invalid?: boolean;
+  /** true when the topic was open and skipped (only closed topics are deleted) */
+  skipped?: boolean;
 }
 
 interface StreamBuffer {
@@ -121,7 +123,7 @@ export class TelegramTopicsService extends Service {
     return !!this.botToken && !!this.groupChatId;
   }
 
-  private async apiCall(method: string, params: Record<string, unknown>, maxRetries = 2): Promise<TelegramApiResponse> {
+  private async apiCall(method: string, params: Record<string, unknown>, maxRetries = 5): Promise<TelegramApiResponse> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const response = await fetch(`${this.baseUrl}/${method}`, {
         method: 'POST',
@@ -132,7 +134,7 @@ export class TelegramTopicsService extends Service {
 
       if (json.error_code === 429 && attempt < maxRetries) {
         const retryAfter = json.parameters?.retry_after ?? 5;
-        this.runtime.logger.warn(`[topics] Rate limited on ${method} (retry_after=${retryAfter}s), waiting...`);
+        this.runtime.logger.warn(`[topics] Rate limited on ${method} (retry_after=${retryAfter}s, attempt ${attempt + 1}/${maxRetries}), waiting...`);
         await new Promise(r => setTimeout(r, retryAfter * 1000 + 500));
         continue;
       }
@@ -213,31 +215,38 @@ export class TelegramTopicsService extends Service {
    * Try to delete a topic by ID. Returns true if successful, false otherwise.
    * Handles the reopen→close→delete sequence automatically.
    */
+  /**
+   * Delete a topic only if it's already closed. Open topics are skipped.
+   * Uses closeForumTopic as a probe: if it succeeds the topic was open (reopen it back),
+   * if it returns TOPIC_NOT_MODIFIED the topic was already closed (proceed to delete).
+   */
   async forceDeleteTopic(topicId: number): Promise<TopicDeleteResult> {
     if (!this.isEnabled() || !topicId) return { success: false };
 
     try {
-      // Step 1: Reopen (probe whether topic exists)
-      const reopenResult = await this.apiCall('reopenForumTopic', {
+      // Probe: try to close — tells us whether topic is open or already closed
+      const closeResult = await this.apiCall('closeForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
       });
 
-      // If topic doesn't exist in Telegram, skip remaining calls
-      if (!reopenResult.ok && reopenResult.description?.includes('TOPIC_ID_INVALID')) {
+      // Topic doesn't exist in Telegram — ghost entry
+      if (!closeResult.ok && closeResult.description?.includes('TOPIC_ID_INVALID')) {
         return { success: false, invalid: true };
       }
 
-      await new Promise(r => setTimeout(r, 200));
+      // Close succeeded → topic was OPEN. Reopen it and skip (user only wants closed topics deleted).
+      if (closeResult.ok) {
+        await this.apiCall('reopenForumTopic', {
+          chat_id: this.groupChatId,
+          message_thread_id: topicId,
+        });
+        return { success: false, skipped: true };
+      }
 
-      // Step 2: Close (required before delete)
-      await this.apiCall('closeForumTopic', {
-        chat_id: this.groupChatId,
-        message_thread_id: topicId,
-      });
-      await new Promise(r => setTimeout(r, 300));
+      // Close failed with TOPIC_NOT_MODIFIED → topic was already closed. Delete it.
+      await new Promise(r => setTimeout(r, 500));
 
-      // Step 3: Delete
       const result = await this.apiCall('deleteForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
@@ -245,6 +254,10 @@ export class TelegramTopicsService extends Service {
 
       if (!result.ok && result.description?.includes('TOPIC_ID_INVALID')) {
         return { success: false, invalid: true };
+      }
+
+      if (!result.ok) {
+        this.runtime.logger.warn(`[topics] deleteForumTopic ${topicId} failed: ${result.description || 'unknown'} (code: ${(result as any).error_code || '?'})`);
       }
 
       return { success: result.ok };
