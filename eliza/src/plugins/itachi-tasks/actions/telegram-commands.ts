@@ -698,8 +698,8 @@ export async function handleDeleteTopics(
       failed++;
     }
 
-    // Inter-topic delay to avoid Telegram rate limits
-    await new Promise(r => setTimeout(r, 1000));
+    // Inter-topic delay to avoid Telegram rate limits (3 API calls per topic)
+    await new Promise(r => setTimeout(r, 2000));
   }
 
   const cleanedMsg = cleaned > 0 ? `, ${cleaned} ghost cleaned` : '';
@@ -1055,14 +1055,14 @@ export async function handleDeleteTopicsAll(
       failed++;
     }
 
-    // Progress update every 25 topics
+    // Progress update every 10 topics
     const done = deleted + failed + cleaned;
-    if (done % 25 === 0 && done < topicIds.size && callback) {
+    if (done % 10 === 0 && done < topicIds.size && callback) {
       await callback({ text: `Progress: ${deleted} deleted, ${cleaned} ghost cleaned, ${failed} failed / ${topicIds.size}...` });
     }
 
-    // Inter-topic delay to avoid Telegram rate limits
-    await new Promise(r => setTimeout(r, 1000));
+    // Inter-topic delay to avoid Telegram rate limits (3 API calls per topic)
+    await new Promise(r => setTimeout(r, 2000));
   }
 
   const cleanedMsg = cleaned > 0 ? `, ${cleaned} ghost entries cleaned` : '';

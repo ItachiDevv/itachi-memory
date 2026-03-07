@@ -121,7 +121,7 @@ export class TelegramTopicsService extends Service {
     return !!this.botToken && !!this.groupChatId;
   }
 
-  private async apiCall(method: string, params: Record<string, unknown>, maxRetries = 2): Promise<TelegramApiResponse> {
+  private async apiCall(method: string, params: Record<string, unknown>, maxRetries = 5): Promise<TelegramApiResponse> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const response = await fetch(`${this.baseUrl}/${method}`, {
         method: 'POST',
@@ -132,7 +132,7 @@ export class TelegramTopicsService extends Service {
 
       if (json.error_code === 429 && attempt < maxRetries) {
         const retryAfter = json.parameters?.retry_after ?? 5;
-        this.runtime.logger.warn(`[topics] Rate limited on ${method} (retry_after=${retryAfter}s), waiting...`);
+        this.runtime.logger.warn(`[topics] Rate limited on ${method} (retry_after=${retryAfter}s, attempt ${attempt + 1}/${maxRetries}), waiting...`);
         await new Promise(r => setTimeout(r, retryAfter * 1000 + 500));
         continue;
       }
@@ -217,27 +217,20 @@ export class TelegramTopicsService extends Service {
     if (!this.isEnabled() || !topicId) return { success: false };
 
     try {
-      // Step 1: Reopen (probe whether topic exists)
-      const reopenResult = await this.apiCall('reopenForumTopic', {
+      // Step 1: Close topic (must be closed before delete; no-op if already closed)
+      const closeResult = await this.apiCall('closeForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
       });
 
-      // If topic doesn't exist in Telegram, skip remaining calls
-      if (!reopenResult.ok && reopenResult.description?.includes('TOPIC_ID_INVALID')) {
+      // If topic doesn't exist in Telegram, it's a ghost entry
+      if (!closeResult.ok && closeResult.description?.includes('TOPIC_ID_INVALID')) {
         return { success: false, invalid: true };
       }
 
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 500));
 
-      // Step 2: Close (required before delete)
-      await this.apiCall('closeForumTopic', {
-        chat_id: this.groupChatId,
-        message_thread_id: topicId,
-      });
-      await new Promise(r => setTimeout(r, 300));
-
-      // Step 3: Delete
+      // Step 2: Delete
       const result = await this.apiCall('deleteForumTopic', {
         chat_id: this.groupChatId,
         message_thread_id: topicId,
@@ -245,6 +238,10 @@ export class TelegramTopicsService extends Service {
 
       if (!result.ok && result.description?.includes('TOPIC_ID_INVALID')) {
         return { success: false, invalid: true };
+      }
+
+      if (!result.ok) {
+        this.runtime.logger.warn(`[topics] deleteForumTopic ${topicId} failed: ${result.description || 'unknown'} (code: ${(result as any).error_code || '?'})`);
       }
 
       return { success: result.ok };
