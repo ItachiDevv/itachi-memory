@@ -4,6 +4,7 @@ import { TaskService } from '../services/task-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
+import { SSHService } from '../services/ssh-service.js';
 import { syncGitHubRepos } from '../services/github-sync.js';
 
 // Deterministic UUID for the scheduler entity (used for synthetic messages)
@@ -79,6 +80,8 @@ async function executeAction(
       return await executeSyncRepos(runtime, item, botBaseUrl);
     case 'recall':
       return await executeRecall(runtime, item, botBaseUrl);
+    case 'disk_check':
+      return await executeDiskCheck(runtime, item, botBaseUrl);
     case 'custom':
       return await executeCustom(runtime, item, botBaseUrl);
     default:
@@ -176,6 +179,32 @@ async function executeRecall(
 
   await sendTelegram(botBaseUrl, item.telegram_chat_id, response);
   return `${memories.length} results`;
+}
+
+async function executeDiskCheck(
+  runtime: IAgentRuntime,
+  item: ScheduledItem,
+  botBaseUrl: string
+): Promise<string> {
+  const sshService = runtime.getService<SSHService>('ssh');
+  if (!sshService) {
+    await sendTelegram(botBaseUrl, item.telegram_chat_id, 'Disk check failed: SSH service unavailable.');
+    return 'no-ssh';
+  }
+
+  const target = (item.action_data?.target as string) || 'coolify';
+  const result = await sshService.exec(target, 'df -h', 15_000);
+
+  if (!result.success || !result.stdout.trim()) {
+    await sendTelegram(botBaseUrl, item.telegram_chat_id,
+      `Disk check failed on ${target}: ${result.stderr || 'no output'}`);
+    return 'failed';
+  }
+
+  const now = new Date().toUTCString();
+  const msg = `Disk Usage (${target}) — ${now}\n\n${result.stdout.trim()}`;
+  await sendTelegram(botBaseUrl, item.telegram_chat_id, msg);
+  return 'sent';
 }
 
 // ============================================================
@@ -345,5 +374,67 @@ export async function registerReminderPollerTask(runtime: IAgentRuntime): Promis
     runtime.logger.info('Registered ITACHI_REMINDER_POLLER repeating task (60s)');
   } catch (error: unknown) {
     runtime.logger.error('Failed to register reminder poller task:', error instanceof Error ? error.message : String(error));
+  }
+
+  // Ensure the daily disk check reminder exists
+  await seedDiskCheckReminder(runtime);
+}
+
+/** Compute the next UTC occurrence of HH:MM (today if still in the future, else tomorrow). */
+function nextUtcOccurrence(hour: number, minute: number): Date {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0));
+  if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+}
+
+/**
+ * Seeds a daily 9am UTC disk_check reminder if one does not already exist.
+ * Idempotent — safe to call on every startup.
+ */
+async function seedDiskCheckReminder(runtime: IAgentRuntime): Promise<void> {
+  try {
+    const supabaseUrl = String(runtime.getSetting('SUPABASE_URL') || '');
+    const supabaseKey = String(runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || runtime.getSetting('SUPABASE_KEY') || '');
+    if (!supabaseUrl || !supabaseKey) return;
+
+    const chatId = parseInt(
+      String(runtime.getSetting('TELEGRAM_GROUP_CHAT_ID') || process.env.TELEGRAM_GROUP_CHAT_ID || '0'),
+      10
+    );
+    if (!chatId) {
+      runtime.logger.warn('[scheduler] TELEGRAM_GROUP_CHAT_ID not set — skipping disk check seed');
+      return;
+    }
+
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Check for any existing unsent disk_check reminder
+    const { data: existing } = await supabase
+      .from('itachi_reminders')
+      .select('id')
+      .eq('action_type', 'disk_check')
+      .is('sent_at', null)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      runtime.logger.info('[scheduler] Daily disk check reminder already exists, skipping seed');
+      return;
+    }
+
+    const remindAt = nextUtcOccurrence(9, 0);
+    await supabase.from('itachi_reminders').insert({
+      telegram_chat_id: chatId,
+      telegram_user_id: 0,
+      message: 'Daily disk check: df -h on coolify',
+      remind_at: remindAt.toISOString(),
+      recurring: 'daily',
+      action_type: 'disk_check',
+      action_data: { target: 'coolify' },
+    });
+    runtime.logger.info(`[scheduler] Seeded daily disk check reminder — first run at ${remindAt.toISOString()}`);
+  } catch (err) {
+    runtime.logger.warn('[scheduler] seedDiskCheckReminder failed:', err instanceof Error ? err.message : String(err));
   }
 }
