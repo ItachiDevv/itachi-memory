@@ -129,6 +129,34 @@ assertEqual(
   'bare slash is unchanged',
 );
 
+// Telegram auto-linked URLs: angle brackets stripped
+assertEqual(
+  stripBotMention('/ssh coolify curl -sf <http://localhost:3000/health>'),
+  '/ssh coolify curl -sf http://localhost:3000/health',
+  'angle brackets stripped from auto-linked URL',
+);
+
+// Multiple auto-linked URLs
+assertEqual(
+  stripBotMention('/ssh coolify curl <http://a.com> && curl <https://b.com/path>'),
+  '/ssh coolify curl http://a.com && curl https://b.com/path',
+  'multiple auto-linked URLs stripped',
+);
+
+// Bot mention + auto-linked URL combined
+assertEqual(
+  stripBotMention('/ssh@Bot coolify curl -sf <http://localhost:3000>'),
+  '/ssh coolify curl -sf http://localhost:3000',
+  'bot mention + auto-linked URL both stripped',
+);
+
+// Non-URL angle brackets should NOT be stripped
+assertEqual(
+  stripBotMention('/ssh coolify echo "a < b > c"'),
+  '/ssh coolify echo "a < b > c"',
+  'non-URL angle brackets preserved',
+);
+
 // =====================================================================
 // 2. buildEngineKeyboard — verify structure expectations
 // =====================================================================
