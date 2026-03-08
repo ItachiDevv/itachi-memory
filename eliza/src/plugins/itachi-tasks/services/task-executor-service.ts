@@ -9,49 +9,7 @@ import { resolveRepoPathByProject, EXTRA_REPO_BASES, DEFAULT_REPO_BASES, MACHINE
 import { getStartingDir } from '../shared/start-dir.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-
-// ── ANSI stripping (same as interactive-session.ts) ──────────────────
-function stripAnsi(text: string): string {
-  return text
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[^[\]()][^\x1b]?/g, '')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-// ── TUI noise filter (same as interactive-session.ts) ────────────────
-// Filters out TUI-specific noise (box drawing, spinners, progress indicators)
-// while preserving actual content (tool output, code, results).
-function filterTuiNoise(text: string): string {
-  const lines = text.split('\n');
-  const kept: string[] = [];
-  for (const line of lines) {
-    const stripped = line.replace(/[╭╮╰╯│─┌┐└┘├┤┬┴┼━┃╋▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓▙▟▛▜▝▞▘▗▖]/g, '').trim();
-    if (!stripped) continue;
-    // Skip lines that are only spinner/progress chars (includes ✳ ⏺)
-    if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
-    // Skip "Churning…", "Crunching…", thinking noise
-    if (/^(?:✻|✶|\*|✢|·|✽|●|✳|⏺)?\s*(?:Churning…|Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
-    if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
-    if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
-    if (/^={2,}\s*(End Briefing|Start Briefing|Briefing)\s*={0,}$/i.test(stripped)) continue;
-    if ((stripped.match(/(?:Churning…|Crunching…)/g) || []).length >= 2) continue;
-    if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
-    if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
-    if (/^>\s*$/.test(stripped)) continue;
-    // Push stripped (not raw) line so box chars and whitespace are gone
-    kept.push(stripped);
-  }
-  const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  // Debug: log when significant content is completely filtered out
-  if (!result && text.length > 50) {
-    const preview = text.substring(0, 120).replace(/\n/g, '\\n');
-    console.warn(`[executor:filter] Dropped ${text.length} chars of output. Preview: ${preview}`);
-  }
-  return result;
-}
+import { stripAnsi, filterTuiNoise } from '../utils/tui-filter.js';
 
 // Machine alias → SSH target imported from shared module
 import { resolveSSHTarget, getMachineIdsForTarget } from '../shared/repo-utils.js';

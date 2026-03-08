@@ -1895,6 +1895,31 @@ export async function handleBrain(runtime: IAgentRuntime, text: string, callback
       return { success: true };
     }
 
+    // /brain proposals — list pending brain proposals
+    if (sub === 'proposals' || sub === 'pending') {
+      const taskService = runtime.getService<TaskService>('itachi-tasks');
+      if (!taskService) {
+        if (callback) await callback({ text: 'Task service not available.' });
+        return { success: true };
+      }
+      try {
+        const pending = await brainService.getPendingProposals(taskService.getSupabase());
+        if (pending.length === 0) {
+          if (callback) await callback({ text: 'No pending brain proposals.' });
+          return { success: true };
+        }
+        const lines = pending.map((p: any, i: number) => {
+          const shortId = p.id.substring(0, 8);
+          const stars = '\u2605'.repeat(Math.min(5, p.priority || 3));
+          return `${i + 1}. [${shortId}] ${p.title}\n   ${stars} (${p.priority}/5) | ${p.project} | ${p.estimated_complexity}\n   ${p.description.substring(0, 120)}`;
+        });
+        if (callback) await callback({ text: `**Pending Brain Proposals** (${pending.length}):\n\n${lines.join('\n\n')}` });
+      } catch (err) {
+        if (callback) await callback({ text: `Failed to fetch proposals: ${err instanceof Error ? err.message : String(err)}` });
+      }
+      return { success: true };
+    }
+
     // /brain config <key> <value>
     if (sub.startsWith('config ')) {
       const parts = sub.substring('config '.length).trim().split(/\s+/);
@@ -1924,7 +1949,7 @@ export async function handleBrain(runtime: IAgentRuntime, text: string, callback
       return { success: true };
     }
 
-    if (callback) await callback({ text: 'Usage: /brain [status|on|off|config interval|budget|max <value>]' });
+    if (callback) await callback({ text: 'Usage: /brain [status|on|off|proposals|config interval|budget|max <value>]' });
     return { success: true };
   } catch (error) {
     if (callback) await callback({ text: `Brain command failed: ${error instanceof Error ? error.message : String(error)}` });
@@ -1998,7 +2023,7 @@ export async function handleHelp(callback?: HandlerCallback): Promise<ActionResu
 
 **System**
   /health — System health check (Supabase, machines, tasks)
-  /brain — Brain loop status + control (on/off/config)
+  /brain — Brain loop status + control (on/off/proposals/config)
   /self — Bot self-inspection (executor, SSH targets, uptime, memory)
   /self env — Show bot environment variables (filtered, no secrets)
   /self test-exec — Test executor pipeline (SSH connectivity + CLI check)

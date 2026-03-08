@@ -286,6 +286,112 @@ async function gatherObservations(runtime: IAgentRuntime): Promise<Observation[]
     } catch { /* non-critical */ }
   }
 
+  // Recent task completions (learn from successes — not just failures)
+  if (taskService) {
+    try {
+      const supabase = taskService.getSupabase();
+      const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+      const { data: completedTasks } = await supabase
+        .from('itachi_tasks')
+        .select('id, project, description, result_summary')
+        .eq('status', 'completed')
+        .gte('completed_at', hourAgo)
+        .limit(3);
+
+      for (const t of completedTasks || []) {
+        observations.push({
+          type: 'proactive',
+          title: `Task ${t.id.substring(0, 8)} completed`,
+          detail: (t.result_summary || t.description || '').substring(0, 150),
+          project: t.project,
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Recurring failure pattern detection (same project failing 3+ times in 24h)
+  if (taskService) {
+    try {
+      const supabase = taskService.getSupabase();
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: recentFailures } = await supabase
+        .from('itachi_tasks')
+        .select('project')
+        .eq('status', 'failed')
+        .gte('completed_at', dayAgo);
+
+      if (recentFailures && recentFailures.length > 0) {
+        const failCounts = new Map<string, number>();
+        for (const f of recentFailures) {
+          failCounts.set(f.project, (failCounts.get(f.project) || 0) + 1);
+        }
+        for (const [project, count] of failCounts) {
+          if (count >= 3) {
+            observations.push({
+              type: 'task_failure',
+              title: `${project}: ${count} failures in 24h`,
+              detail: `Recurring failure pattern detected. Project "${project}" has failed ${count} times. Investigate root cause.`,
+              project,
+            });
+          }
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Memory consolidation trigger: too many raw lessons without synthesis
+  if (memoryService) {
+    try {
+      const supabase = memoryService.getSupabase();
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { count: lessonCount } = await supabase
+        .from('itachi_memories')
+        .select('*', { count: 'exact', head: true })
+        .eq('category', 'task_lesson')
+        .gte('created_at', weekAgo);
+
+      const { count: synthCount } = await supabase
+        .from('itachi_memories')
+        .select('*', { count: 'exact', head: true })
+        .eq('category', 'synthesized_insight')
+        .gte('created_at', weekAgo);
+
+      if ((lessonCount || 0) > 20 && (synthCount || 0) < 3) {
+        observations.push({
+          type: 'memory_insight',
+          title: `${lessonCount} unprocessed lessons this week`,
+          detail: `${lessonCount} task lessons accumulated with only ${synthCount || 0} synthesized insights. Consider triggering reflection to consolidate knowledge.`,
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Queued task backlog (tasks waiting >30min)
+  if (taskService) {
+    try {
+      const supabase = taskService.getSupabase();
+      const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+      const { data: backlogTasks } = await supabase
+        .from('itachi_tasks')
+        .select('id, project, description')
+        .eq('status', 'queued')
+        .lt('created_at', thirtyMinAgo)
+        .limit(5);
+
+      if (backlogTasks && backlogTasks.length > 0) {
+        observations.push({
+          type: 'health_check',
+          title: `${backlogTasks.length} tasks queued >30min`,
+          detail: backlogTasks.map(t => `${t.id.substring(0, 8)}: ${(t.description || '').substring(0, 40)}`).join('; '),
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
   return observations;
 }
 
