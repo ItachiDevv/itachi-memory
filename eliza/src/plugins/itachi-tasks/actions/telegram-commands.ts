@@ -1005,8 +1005,8 @@ export async function handleCloseAllTopics(
       await callback({ text: `Progress: ${closed} closed, ${cleaned} ghost cleaned, ${failed} failed / ${topicIds.size}...` });
     }
 
-    // Inter-topic delay to avoid Telegram rate limits
-    await new Promise(r => setTimeout(r, 500));
+    // Inter-topic delay to avoid Telegram rate limits (1s for bulk operations)
+    await new Promise(r => setTimeout(r, 1000));
   }
 
   const cleanedMsg = cleaned > 0 ? `, ${cleaned} ghost entries cleaned` : '';

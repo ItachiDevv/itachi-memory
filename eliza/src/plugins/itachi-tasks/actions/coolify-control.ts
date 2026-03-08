@@ -127,18 +127,23 @@ const SELF_REF_PATTERNS = /\b(your(?:self| own)?|the bot|our (?:setup|vps|server
 /**
  * Extract a machine target name from natural language text.
  * Returns the SSH target name (e.g. "mac", "windows", "coolify") or null.
+ * Uses word-boundary matching to prevent substring collisions
+ * (e.g. "on coolify" should NOT match "mac" or "win").
+ *
+ * Priority: longer aliases first to prefer "mac air" over "mac".
  */
 function extractTarget(text: string, sshService: SSHService): string | null {
   const lower = text.toLowerCase();
-  // Check aliases
-  for (const [alias, target] of Object.entries(MACHINE_ALIASES)) {
-    if (lower.includes(alias) && sshService.getTarget(target)) {
+  // Sort aliases by length descending so multi-word aliases match first
+  const sorted = Object.entries(MACHINE_ALIASES).sort((a, b) => b[0].length - a[0].length);
+  for (const [alias, target] of sorted) {
+    if (new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(lower) && sshService.getTarget(target)) {
       return target;
     }
   }
-  // Check direct target names
+  // Check direct target names with word boundaries
   for (const name of sshService.getTargets().keys()) {
-    if (lower.includes(name)) return name;
+    if (new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(lower)) return name;
   }
   return null;
 }
@@ -281,7 +286,9 @@ export const coolifyControlAction: Action = {
 
     // Match natural language about machines/servers
     const lower = text.toLowerCase();
-    const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias => lower.includes(alias));
+    const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias =>
+      new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(lower)
+    );
     const mentionsAction = /\b(ssh|check|investigate|deploy|restart|update|logs?|status|failing|broken|down|running|containers?|docker|fix|diagnose|debug|figure out)\b/i.test(text);
 
     // Direct match: machine + action
@@ -329,13 +336,10 @@ export const coolifyControlAction: Action = {
       }
       handledMessages.add(msgId);
       // Clean old entries (keep last 50)
-      if (handledMessages.size > 50) {
-        const iter = handledMessages.values();
-        for (let i = 0; i < handledMessages.size - 50; i++) iter.next();
-        const keep = new Set<string>();
-        for (const v of iter) keep.add(v);
+      if (handledMessages.size > 100) {
+        const all = [...handledMessages];
         handledMessages.clear();
-        for (const v of keep) handledMessages.add(v);
+        for (const v of all.slice(-50)) handledMessages.add(v);
       }
 
       // ── Record handler run time for cooldown ──

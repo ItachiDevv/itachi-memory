@@ -189,15 +189,21 @@ Common patterns:
     const rawResp = typeof response === 'string' ? response : '';
     runtime.logger.info(`[agent-cron] LLM response: ${rawResp.substring(0, 200)}`);
 
-    // Extract JSON from response (handle markdown code blocks)
-    const jsonMatch = rawResp.match(/\{[\s\S]*\}/);
+    // Extract JSON from response — strip markdown fences and backticks first
+    const cleaned = rawResp
+      .replace(/```(?:json)?\s*/gi, '')  // Remove opening code fences
+      .replace(/```\s*/g, '')            // Remove closing code fences
+      .replace(/^`+|`+$/g, '');          // Remove leading/trailing backticks
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      runtime.logger.error(`[agent-cron] No JSON found in LLM response`);
+      runtime.logger.error(`[agent-cron] No JSON found in LLM response: ${rawResp.substring(0, 100)}`);
       if (callback) await callback({ text: 'Could not parse a cron schedule from your request. Try: "schedule [task] every [interval] using [profile]"' });
       return { success: false, error: 'No JSON in response' };
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    // Strip any remaining backticks inside the JSON string before parsing
+    const jsonStr = jsonMatch[0].replace(/`/g, '');
+    const parsed = JSON.parse(jsonStr);
     runtime.logger.info(`[agent-cron] Parsed: schedule="${parsed.schedule}" task="${parsed.taskDescription?.substring(0, 60)}"`);
 
     if (!parsed.schedule || !parsed.taskDescription) {

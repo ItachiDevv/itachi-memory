@@ -435,6 +435,10 @@ export class TelegramTopicsService extends Service {
         if (result.description?.includes('TOPIC_ID_INVALID')) {
           return { success: false, invalid: true };
         }
+        // TOPIC_NOT_MODIFIED means already closed — treat as success
+        if (result.description?.includes('TOPIC_NOT_MODIFIED')) {
+          return { success: true };
+        }
         this.runtime.logger.error(`closeTopic failed: ${result.description}`);
       }
 
