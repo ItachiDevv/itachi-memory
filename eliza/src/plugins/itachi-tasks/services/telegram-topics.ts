@@ -244,7 +244,15 @@ export class TelegramTopicsService extends Service {
         return { success: false, skipped: true };
       }
 
-      // Close failed with TOPIC_NOT_MODIFIED → topic was already closed. Delete it.
+      // Only proceed to delete if close failed with TOPIC_NOT_MODIFIED (= already closed).
+      // Any other failure (rate limit exhaustion, forbidden, network error) means we can't
+      // determine the topic's state — don't blindly attempt deletion.
+      if (!closeResult.description?.includes('TOPIC_NOT_MODIFIED')) {
+        this.runtime.logger.warn(`[topics] forceDeleteTopic ${topicId}: close probe failed with unexpected error: ${closeResult.description || 'unknown'} (code: ${(closeResult as any).error_code || '?'})`);
+        return { success: false };
+      }
+
+      // Topic was already closed — safe to delete
       await new Promise(r => setTimeout(r, 500));
 
       const result = await this.apiCall('deleteForumTopic', {
