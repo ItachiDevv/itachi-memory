@@ -28,7 +28,7 @@ export class AgentCronService extends Service {
     this.runtime.logger.info('[agent-cron] Service stopped');
   }
 
-  /** Create a new cron job */
+  /** Create a new cron job (deduplicates against existing enabled jobs with same schedule + similar description) */
   async createJob(opts: {
     profileId?: string;
     schedule: string;
@@ -41,6 +41,28 @@ export class AgentCronService extends Service {
     if (!parsed) {
       this.runtime.logger.error('[agent-cron] Invalid cron expression:', opts.schedule);
       return null;
+    }
+
+    // Dedup: check for existing enabled job with same schedule
+    const { data: existing } = await this.supabase
+      .from('itachi_agent_cron')
+      .select('*')
+      .eq('schedule', opts.schedule)
+      .eq('enabled', true);
+
+    if (existing && existing.length > 0) {
+      // Check if any existing job has a similar description (fuzzy match on key words)
+      const newWords = new Set(opts.taskDescription.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+      const duplicate = existing.find(job => {
+        const existingWords = new Set(job.task_description.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3));
+        const overlap = [...newWords].filter(w => existingWords.has(w)).length;
+        return overlap >= Math.min(2, newWords.size); // At least 2 shared keywords (or all if fewer)
+      });
+
+      if (duplicate) {
+        this.runtime.logger.info(`[agent-cron] Duplicate detected — existing job "${duplicate.task_description}" (${duplicate.id.substring(0, 8)}) has same schedule "${opts.schedule}"`);
+        return duplicate as AgentCronJob;
+      }
     }
 
     const nextRun = getNextRun(parsed, new Date());

@@ -415,6 +415,24 @@ export const coolifyControlAction: Action = {
         return { success: true };
       }
 
+      // ── Pre-check: verify machine is reachable before running commands ──
+      // Quick connectivity test (5s timeout) to avoid waiting 15s per command on dead machines
+      {
+        const probe = await sshService.exec(target, 'echo ok', 5_000);
+        if (!probe.success || !probe.stdout.includes('ok')) {
+          const errDetail = probe.stderr?.includes('Connection timed out')
+            ? 'Connection timed out — machine appears offline'
+            : probe.stderr?.includes('Connection refused')
+              ? 'Connection refused — SSH service not running'
+              : probe.stderr || `exit code ${probe.code}`;
+          runtime.logger.warn(`[coolify-control] Machine "${target}" is unreachable: ${errDetail}`);
+          if (callback) await callback({
+            text: `**${target}** is unreachable: ${errDetail}\n\nThe machine may be offline, disconnected, or its SSH service is down.`,
+          });
+          return { success: false, error: `Machine ${target} unreachable` };
+        }
+      }
+
       // Handle specific intents
       switch (intent) {
         case 'update':
