@@ -193,7 +193,7 @@ Common patterns:
     const stripped = rawResp.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
     const jsonMatch = stripped.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      runtime.logger.error(`[agent-cron] No JSON found in LLM response`);
+      runtime.logger.error(`[agent-cron] No JSON found in LLM response: ${rawResp.substring(0, 100)}`);
       if (callback) await callback({ text: 'Could not parse a cron schedule from your request. Try: "schedule [task] every [interval] using [profile]"' });
       return { success: false, error: 'No JSON in response' };
     }

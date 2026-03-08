@@ -127,6 +127,10 @@ const SELF_REF_PATTERNS = /\b(your(?:self| own)?|the bot|our (?:setup|vps|server
 /**
  * Extract a machine target name from natural language text.
  * Returns the SSH target name (e.g. "mac", "windows", "coolify") or null.
+ * Uses word-boundary matching to prevent substring collisions
+ * (e.g. "on coolify" should NOT match "mac" or "win").
+ *
+ * Priority: longer aliases first to prefer "mac air" over "mac".
  */
 function extractTarget(text: string, sshService: SSHService): string | null {
   const lower = text.toLowerCase();
@@ -136,7 +140,7 @@ function extractTarget(text: string, sshService: SSHService): string | null {
       return target;
     }
   }
-  // Check direct target names
+  // Check direct target names with word boundaries
   for (const name of sshService.getTargets().keys()) {
     if (new RegExp(`\\b${name}\\b`).test(lower)) return name;
   }
@@ -281,7 +285,9 @@ export const coolifyControlAction: Action = {
 
     // Match natural language about machines/servers
     const lower = text.toLowerCase();
-    const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias => lower.includes(alias));
+    const mentionsMachine = Object.keys(MACHINE_ALIASES).some(alias =>
+      new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(lower)
+    );
     const mentionsAction = /\b(ssh|check|investigate|deploy|restart|update|logs?|status|failing|broken|down|running|containers?|docker|fix|diagnose|debug|figure out)\b/i.test(text);
 
     // Direct match: machine + action
