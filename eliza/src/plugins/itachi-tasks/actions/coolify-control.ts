@@ -109,8 +109,9 @@ const DIAGNOSTICS_DARWIN: Record<string, { label: string; cmd: string }[]> = {
  */
 function getDiagnosticsForOS(os: string | null | undefined): Record<string, { label: string; cmd: string }[]> {
   const osLower = (os || '').toLowerCase();
-  if (osLower.includes('win')) return DIAGNOSTICS_WINDOWS;
+  // Check darwin BEFORE 'win' — 'darwin' contains 'win' as a substring!
   if (osLower.includes('darwin') || osLower.includes('mac')) return DIAGNOSTICS_DARWIN;
+  if (osLower.includes('win')) return DIAGNOSTICS_WINDOWS;
   return DIAGNOSTICS; // Linux / default
 }
 
