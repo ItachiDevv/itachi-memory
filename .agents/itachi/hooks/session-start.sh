@@ -208,15 +208,19 @@ fi
 # ============ Fetch Learnings ============
 LEARNINGS=$(curl -s -k -H "$AUTH_HEADER" "${BASE_API}/api/project/learnings?project=${PROJECT_NAME}&limit=15" --max-time 10 2>/dev/null)
 
+# ============ Fetch RLM Lessons (top task outcome lessons) ============
+RLM_LESSONS=$(curl -s -k -H "$AUTH_HEADER" "${MEMORY_API}/search?project=${PROJECT_NAME}&category=task_lesson&limit=6&query=task+outcome" --max-time 8 2>/dev/null)
+
 # ============ Write to Context File ============
-if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ]; then
+if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ] || [ -n "$RLM_LESSONS" ]; then
     node -e "
 const fs=require('fs'),path=require('path'),os=require('os');
-const client=process.argv[1],cwd=process.argv[2],bj=process.argv[3],lj=process.argv[4];
+const client=process.argv[1],cwd=process.argv[2],bj=process.argv[3],lj=process.argv[4],rlmj=process.argv[5];
 try{
     const briefing=bj?JSON.parse(bj):null;
     let learnings=null;try{learnings=lj?JSON.parse(lj):null;}catch{}
-    if(!briefing&&(!learnings||!learnings.rules||!learnings.rules.length))return;
+    let rlmLessons=null;try{const r=rlmj?JSON.parse(rlmj):null;if(r&&r.results&&r.results.length>0)rlmLessons=r.results;}catch{}
+    if(!briefing&&(!learnings||!learnings.rules||!learnings.rules.length)&&!rlmLessons)return;
     let targetFile;
     if(client==='claude'){
         function enc(p){return p.replace(/:/g,'').replace(/[\\\\/]/g,'--').replace(/^-+|-+\$/g,'');}
@@ -240,9 +244,10 @@ try{
     function upsert(c,h,b){const i=c.indexOf(h);if(i!==-1){const a=c.substring(i+h.length);const n=a.match(/\n## /);const e=n?i+h.length+n.index:c.length;return c.substring(0,i)+b+c.substring(e);}else{const s=c.length>0&&!c.endsWith('\n\n')?'\n\n':(c.length>0&&!c.endsWith('\n')?'\n':'');return c+s+b;}}
     if(lines.length>3){lines.push('');existing=upsert(existing,'## Itachi Session Context',lines.join('\n'));}
     if(learnings&&learnings.rules&&learnings.rules.length>0){const rl=['## Project Rules','<!-- auto-updated by itachi session-start hook -->',''];for(const r of learnings.rules){const rf=r.times_reinforced>1?' (reinforced '+r.times_reinforced+'x)':'';rl.push('- '+r.rule+rf);}rl.push('');existing=upsert(existing,'## Project Rules',rl.join('\n'));}
+    if(rlmLessons&&rlmLessons.length>0){const ll=['## RLM Lessons','<!-- auto-updated: task outcome lessons from reinforcement learning -->',''];for(const l of rlmLessons){const meta=l.metadata||{};const outcome=meta.last_outcome||meta.outcome||'';const conf=meta.confidence!=null?(' (conf: '+(meta.confidence*100).toFixed(0)+'%)'):'';const tag=outcome?('['+outcome+'] '):'';ll.push('- '+tag+l.summary.substring(0,120)+conf);}ll.push('');existing=upsert(existing,'## RLM Lessons',ll.join('\n'));}
     fs.writeFileSync(targetFile,existing);
 }catch(e){}
-" "$CLIENT" "$PWD" "$BRIEFING" "$LEARNINGS" 2>/dev/null
+" "$CLIENT" "$PWD" "$BRIEFING" "$LEARNINGS" "$RLM_LESSONS" 2>/dev/null
 fi
 
 exit 0

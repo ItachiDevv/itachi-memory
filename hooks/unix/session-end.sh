@@ -192,7 +192,6 @@ const sessionApi = process.argv[4];
 const summary = process.argv[5] || '';
 const durationMs = parseInt(process.argv[6]) || 0;
 const filesChanged = process.argv[7] ? process.argv[7].split(',').filter(Boolean) : [];
-const exitReason = process.argv[8] || 'unknown';
 
 function encodeCwd(p) {
     return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+\$/g, '');
@@ -247,45 +246,52 @@ function httpPost(url, body) {
             }
         }
 
-        if (!transcriptPath) return;
+        // Support plain-text transcript from non-Claude CLIs (itachic/itachig)
+        // when ITACHI_TRANSCRIPT_FILE is set by the wrapper script
+        const transcriptFileEnv = process.env.ITACHI_TRANSCRIPT_FILE;
+        if (!transcriptPath && !transcriptFileEnv) return;
 
-        const content = fs.readFileSync(transcriptPath, 'utf8');
-        const lines = content.split('\n').filter(Boolean);
         const conversationParts = [];
 
-        for (const line of lines) {
-            try {
-                const entry = JSON.parse(line);
-                if (entry.type === 'assistant' && entry.message && entry.message.content) {
-                    const parts = Array.isArray(entry.message.content) ? entry.message.content : [];
-                    const textParts = parts.filter(c => c.type === 'text').map(c => c.text).join(' ');
-                    if (textParts.length > 50) {
-                        conversationParts.push('[ASSISTANT] ' + textParts);
+        if (transcriptFileEnv && fs.existsSync(transcriptFileEnv)) {
+            // Plain text transcript (script capture or wrapper-provided)
+            const raw = fs.readFileSync(transcriptFileEnv, 'utf8')
+                .replace(/\x1B\[[0-9;]*[mGKHFABCDJnsuhl]/g, '') // strip ANSI
+                .replace(/\r/g, '')
+                .trim();
+            if (raw.length > 50) conversationParts.push(raw.substring(0, 6000));
+            // Clean up temp file
+            try { fs.unlinkSync(transcriptFileEnv); } catch {}
+        } else if (transcriptPath) {
+            const content = fs.readFileSync(transcriptPath, 'utf8');
+            const lines = content.split('\n').filter(Boolean);
+
+            for (const line of lines) {
+                try {
+                    const entry = JSON.parse(line);
+                    if (entry.type === 'assistant' && entry.message && entry.message.content) {
+                        const textParts = Array.isArray(entry.message.content)
+                            ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                            : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                        if (textParts.length > 50) {
+                            conversationParts.push('[ASSISTANT] ' + textParts);
+                        }
+                    } else if (entry.type === 'human' && entry.message && entry.message.content) {
+                        const textParts = Array.isArray(entry.message.content)
+                            ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                            : (typeof entry.message.content === 'string' ? entry.message.content : '');
+                        if (textParts.length > 10) {
+                            conversationParts.push('[USER] ' + textParts);
+                        }
                     }
-                    // Capture tool calls (what the assistant decided to do)
-                    for (const p of parts.filter(c => c.type === 'tool_use')) {
-                        const inputStr = typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {}).substring(0, 300);
-                        conversationParts.push('[TOOL_USE] ' + p.name + ': ' + inputStr);
-                    }
-                } else if (entry.type === 'human' && entry.message && entry.message.content) {
-                    const parts = Array.isArray(entry.message.content) ? entry.message.content : [];
-                    const textParts = parts.filter(c => c.type === 'text').map(c => c.text).join(' ');
-                    if (textParts.length > 10) {
-                        conversationParts.push('[USER] ' + textParts);
-                    }
-                    // Capture tool results (what happened when tools ran)
-                    for (const p of parts.filter(c => c.type === 'tool_result')) {
-                        const content = Array.isArray(p.content) ? p.content.map(c => c.text || '').join(' ') : (typeof p.content === 'string' ? p.content : '');
-                        const prefix = p.is_error ? '[TOOL_ERROR]' : '[TOOL_RESULT]';
-                        if (content.length > 20) conversationParts.push(prefix + ' ' + content.substring(0, 500));
-                    }
-                }
-            } catch {}
+                } catch {}
+            }
         }
 
         if (conversationParts.length === 0) return;
 
-        const conversationText = conversationParts.join('\n---\n').substring(0, 8000);
+        // Concatenate and truncate to 6000 chars (increased to capture user+assistant)
+        const conversationText = conversationParts.join('\n---\n').substring(0, 6000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,
@@ -293,8 +299,7 @@ function httpPost(url, body) {
             conversation_text: conversationText,
             files_changed: filesChanged,
             summary: summary,
-            duration_ms: durationMs,
-            exit_reason: exitReason
+            duration_ms: durationMs
         });
 
         // Also contribute lessons directly to the task_lesson pool
@@ -302,11 +307,10 @@ function httpPost(url, body) {
             await httpPost(sessionApi + '/contribute-lessons', {
                 conversation_text: conversationText,
                 project: project,
-                exit_reason: exitReason,
             });
         } catch(e) {}
     } catch(e) {}
 })();
-" "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" "$REASON" 2>/dev/null &
+" "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" 2>/dev/null &
 
 exit 0

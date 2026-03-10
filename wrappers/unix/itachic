@@ -1,0 +1,42 @@
+#!/bin/bash
+# Itachi Memory System - Codex CLI wrapper
+# All sessions go through hooks (wrapper-managed lifecycle)
+
+# Utility commands
+case "$1" in
+    clear-failed) node "$HOME/itachi/itachi-memory/orchestrator/scripts/clear-tasks.js" failed; exit ;;
+    clear-done)   node "$HOME/itachi/itachi-memory/orchestrator/scripts/clear-tasks.js" completed; exit ;;
+esac
+
+# Map shortcut flags
+CLI_ARGS=("$@")
+case "$1" in
+    --ds)  shift; CLI_ARGS=(--dangerously-bypass-approvals-and-sandbox "$@") ;;
+    --fa)  shift; CLI_ARGS=(--full-auto "$@") ;;
+    --c)   shift; CLI_ARGS=(resume --last "$@") ;;
+    --cds) shift; CLI_ARGS=(resume --last --dangerously-bypass-approvals-and-sandbox "$@") ;;
+esac
+
+# Load env vars
+export ITACHI_ENABLED=1
+export ITACHI_CLIENT="codex"
+KEYS_FILE="$HOME/.itachi-api-keys"
+if [ -f "$KEYS_FILE" ]; then
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && export "$key=$value"
+    done < "$KEYS_FILE"
+fi
+[ -z "$ITACHI_API_URL" ] && export ITACHI_API_URL="https://itachisbrainserver.online"
+
+# Run session-start hook
+HOOKS_DIR="$HOME/.claude/hooks"
+[ -x "$HOOKS_DIR/session-start.sh" ] && "$HOOKS_DIR/session-start.sh"
+
+# Launch codex, capturing output for RLM contribution
+ITACHI_TRANSCRIPT_FILE="/tmp/itachi-codex-$$.log"
+script -q "$ITACHI_TRANSCRIPT_FILE" codex "${CLI_ARGS[@]}"
+export ITACHI_EXIT_CODE=$?
+export ITACHI_TRANSCRIPT_FILE
+
+# Run session-end hook (reads ITACHI_TRANSCRIPT_FILE for RLM contribution)
+[ -x "$HOOKS_DIR/session-end.sh" ] && "$HOOKS_DIR/session-end.sh"

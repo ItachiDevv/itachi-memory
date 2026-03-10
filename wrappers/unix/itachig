@@ -1,0 +1,46 @@
+#!/bin/bash
+# Itachi Memory System - Gemini CLI wrapper
+# All sessions go through hooks (wrapper-managed lifecycle)
+
+# Ensure PATH includes common bin dirs (nvm, homebrew, etc.)
+for d in "$HOME/.nvm/versions/node"/*/bin "$HOME/.bun/bin" /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) export PATH="$d:$PATH" ;; esac
+done
+
+# Utility commands
+case "$1" in
+    clear-failed) node "$HOME/itachi/itachi-memory/orchestrator/scripts/clear-tasks.js" failed; exit ;;
+    clear-done)   node "$HOME/itachi/itachi-memory/orchestrator/scripts/clear-tasks.js" completed; exit ;;
+esac
+
+# Map shortcut flags
+CLI_ARGS=("$@")
+case "$1" in
+    --ds)  shift; CLI_ARGS=(--yolo "$@") ;;
+    --c)   shift; CLI_ARGS=(--resume latest "$@") ;;
+    --cds) shift; CLI_ARGS=(--resume latest --yolo "$@") ;;
+esac
+
+# Load env vars
+export ITACHI_ENABLED=1
+export ITACHI_CLIENT="gemini"
+KEYS_FILE="$HOME/.itachi-api-keys"
+if [ -f "$KEYS_FILE" ]; then
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && export "$key=$value"
+    done < "$KEYS_FILE"
+fi
+[ -z "$ITACHI_API_URL" ] && export ITACHI_API_URL="https://itachisbrainserver.online"
+
+# Run session-start hook
+HOOKS_DIR="$HOME/.gemini/hooks"
+[ -x "$HOOKS_DIR/session-start.sh" ] && "$HOOKS_DIR/session-start.sh"
+
+# Launch gemini, capturing output for RLM contribution
+ITACHI_TRANSCRIPT_FILE="/tmp/itachi-gemini-$$.log"
+script -q "$ITACHI_TRANSCRIPT_FILE" gemini "${CLI_ARGS[@]}"
+export ITACHI_EXIT_CODE=$?
+export ITACHI_TRANSCRIPT_FILE
+
+# Run session-end hook (reads ITACHI_TRANSCRIPT_FILE for RLM contribution)
+[ -x "$HOOKS_DIR/session-end.sh" ] && "$HOOKS_DIR/session-end.sh"

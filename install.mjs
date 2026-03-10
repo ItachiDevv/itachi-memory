@@ -404,6 +404,20 @@ function step4_installHooks() {
   }
 
   log(`${C.reset}${C.green}  [1/5] Installing hooks.............. OK (${count} hooks)${C.reset}`);
+
+  // Install CLI wrappers (itachic, itachig) to ~/.claude/ on unix
+  if (PLATFORM !== 'windows') {
+    const wrapperSubdir = 'unix';
+    const wrapperFiles = ['itachic', 'itachig'];
+    for (const wrapper of wrapperFiles) {
+      const src = join(__dirname, 'wrappers', wrapperSubdir, wrapper);
+      const dst = join(CLAUDE_DIR, wrapper);
+      if (existsSync(src)) {
+        copyFileSync(src, dst);
+        try { chmodSync(dst, 0o755); } catch {}
+      }
+    }
+  }
 }
 
 function step5_installSkills() {
