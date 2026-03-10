@@ -61,21 +61,21 @@ export function getMachineIdsForTarget(sshTarget: string): string[] {
 
 /** Default repo paths per SSH target */
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
-  mac: '~/itachi/itachi-memory',
+  mac: '~/itachi-workspaces/itachi-memory',
   windows: '~/Documents/Crypto/skills-plugins/itachi-memory',
   coolify: '/home/itachi/itachi/itachi-memory',
 };
 
 /** Base directories where repos are typically cloned per machine */
 export const DEFAULT_REPO_BASES: Record<string, string> = {
-  mac: '~/itachi',
+  mac: '~/itachi-workspaces',
   windows: '~/Documents/Crypto/skills-plugins',
   coolify: '/home/itachi/itachi',
 };
 
 /** Additional search directories per machine (checked if primary base misses) */
 export const EXTRA_REPO_BASES: Record<string, string[]> = {
-  mac: [],
+  mac: ['~/itachi'],
   windows: ['~/Documents/Crypto'],
   coolify: [],
 };

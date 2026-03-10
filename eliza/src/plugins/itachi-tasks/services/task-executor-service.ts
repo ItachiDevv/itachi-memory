@@ -1268,10 +1268,11 @@ export class TaskExecutorService extends Service {
     const isWindows = sshService.isWindowsTarget(sshTarget);
     let removed = 0;
 
-    // List workspace directories
+    // List workspace directories (use the configured base for this target)
+    const base = getStartingDir(sshTarget);
     const listCmd = isWindows
       ? `Get-ChildItem -Directory '$HOME\\Documents\\Crypto\\*\\workspaces\\*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + '|' + $_.LastWriteTime.ToString('o') }`
-      : `find /home/itachi/itachi/workspaces -maxdepth 1 -mindepth 1 -type d -printf '%p|%T@\\n' 2>/dev/null`;
+      : `find ${base}/workspaces -maxdepth 1 -mindepth 1 -type d -printf '%p|%T@\\n' 2>/dev/null`;
 
     const result = await sshService.exec(sshTarget, listCmd, 10_000);
     if (!result.stdout?.trim()) return 0;
@@ -1307,7 +1308,7 @@ export class TaskExecutorService extends Service {
       // Prune git worktree references
       const pruneCmd = isWindows
         ? `Get-ChildItem -Directory '$HOME\\Documents\\Crypto\\*' -ErrorAction SilentlyContinue | ForEach-Object { cd $_.FullName; git -c safe.directory='*' worktree prune 2>$null }`
-        : `for d in /home/itachi/itachi/*/; do cd "$d" && git -c safe.directory='*' worktree prune 2>/dev/null; done`;
+        : `for d in ${base}/*/; do cd "$d" && git -c safe.directory='*' worktree prune 2>/dev/null; done`;
       await sshService.exec(sshTarget, isWindows ? pruneCmd : this.wrapForUser(sshTarget, pruneCmd), 15_000);
     }
 
