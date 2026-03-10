@@ -1299,6 +1299,14 @@ export class TaskExecutorService extends Service {
           filesChanged = commitFiles.stdout.trim().split('\n').filter(Boolean);
         }
       }
+
+      // Fallback: if no PR URL yet, always check for an existing PR for this branch
+      // (Claude may have committed+pushed+created the PR during the session)
+      if (!prUrl) {
+        const branchName = `task/${shortId}`;
+        const prTitle = `feat: ${task.description.substring(0, 72)}`;
+        prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget);
+      }
     } catch (err) {
       this.runtime.logger.error(`[executor] Post-completion git ops failed: ${err instanceof Error ? err.message : String(err)}`);
     }
