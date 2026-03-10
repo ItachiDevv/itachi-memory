@@ -1096,6 +1096,98 @@ export class TaskExecutorService extends Service {
     return cmd;
   }
 
+  /**
+   * Create or find a GitHub PR via REST API (no gh CLI needed on remote host).
+   * Uses GITHUB_TOKEN from the container env — avoids SSH gh auth issues.
+   */
+  private async createOrFindPR(
+    workspace: string,
+    branchName: string,
+    title: string,
+    sshTarget: string,
+  ): Promise<string | undefined> {
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) {
+      this.runtime.logger.warn('[executor] GITHUB_TOKEN not set — cannot create PR via API');
+      return undefined;
+    }
+
+    // Get remote URL via SSH to determine owner/repo
+    const sshService = this.runtime.getService<SSHService>('ssh')!;
+    const remoteResult = await sshService.exec(
+      sshTarget,
+      this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' remote get-url origin 2>/dev/null`),
+      10_000,
+    );
+    const remoteUrl = remoteResult.stdout?.trim();
+    if (!remoteUrl) {
+      this.runtime.logger.warn('[executor] Could not determine git remote URL for PR creation');
+      return undefined;
+    }
+
+    // Parse owner/repo from https://github.com/owner/repo.git or git@github.com:owner/repo.git
+    let ownerRepo: string | undefined;
+    const httpsMatch = remoteUrl.match(/github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?$/);
+    if (httpsMatch) ownerRepo = httpsMatch[1];
+
+    if (!ownerRepo) {
+      this.runtime.logger.warn(`[executor] Could not parse owner/repo from remote: ${remoteUrl}`);
+      return undefined;
+    }
+
+    const [owner] = ownerRepo.split('/');
+    const apiBase = `https://api.github.com/repos/${ownerRepo}`;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    };
+
+    // Try to find existing open PR for this branch first
+    const listResp = await fetch(`${apiBase}/pulls?head=${owner}:${branchName}&state=open`, { headers });
+    if (listResp.ok) {
+      const prs = await listResp.json() as Array<{ html_url: string }>;
+      if (prs.length > 0) {
+        this.runtime.logger.info(`[executor] Found existing PR: ${prs[0].html_url}`);
+        return prs[0].html_url;
+      }
+    }
+
+    // Get default branch for base
+    const repoResp = await fetch(apiBase, { headers });
+    const defaultBranch = repoResp.ok ? ((await repoResp.json()) as { default_branch: string }).default_branch : 'master';
+
+    // Create PR
+    const createResp = await fetch(`${apiBase}/pulls`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ title, head: branchName, base: defaultBranch, body: '' }),
+    });
+
+    if (createResp.ok) {
+      const pr = await createResp.json() as { html_url: string };
+      this.runtime.logger.info(`[executor] PR created via API: ${pr.html_url}`);
+      return pr.html_url;
+    }
+
+    if (createResp.status === 422) {
+      // Already exists — fetch again (it may have been merged/closed, check all states)
+      const allResp = await fetch(`${apiBase}/pulls?head=${owner}:${branchName}&state=all`, { headers });
+      if (allResp.ok) {
+        const prs = await allResp.json() as Array<{ html_url: string }>;
+        if (prs.length > 0) {
+          this.runtime.logger.info(`[executor] Found existing PR (all states): ${prs[0].html_url}`);
+          return prs[0].html_url;
+        }
+      }
+    }
+
+    const errText = await createResp.text().catch(() => '');
+    this.runtime.logger.warn(`[executor] PR creation via API failed (${createResp.status}): ${errText}`);
+    return undefined;
+  }
+
   private async handleSessionComplete(
     task: ItachiTask,
     sshTarget: string,
@@ -1166,36 +1258,10 @@ export class TaskExecutorService extends Service {
           if (pushResult.success) {
             this.runtime.logger.info(`[executor] Pushed branch for task ${shortId}`);
 
-            // 3. Create PR (or find existing one if Claude already created it during session)
+            // 3. Create PR via GitHub REST API (avoids needing gh CLI auth on SSH host)
             const branchName = `task/${shortId}`;
-            const prResult = await sshService.exec(
-              sshTarget,
-              this.wrapForUser(sshTarget, `cd ${workspace} && gh pr create --fill --head ${branchName} 2>&1`),
-              15_000,
-            );
-
-            if (prResult.success) {
-              // Extract PR URL from output
-              const urlMatch = prResult.stdout?.match(/https:\/\/github\.com\/[^\s]+/);
-              if (urlMatch) {
-                prUrl = urlMatch[0];
-                this.runtime.logger.info(`[executor] PR created for task ${shortId}: ${prUrl}`);
-              }
-            } else {
-              // PR creation failed — check if one already exists (e.g. Claude created it during session)
-              const existingPr = await sshService.exec(
-                sshTarget,
-                this.wrapForUser(sshTarget, `cd ${workspace} && gh pr list --head ${branchName} --json url -q '.[0].url' 2>/dev/null`),
-                10_000,
-              );
-              const existingUrl = existingPr.stdout?.trim();
-              if (existingUrl?.startsWith('https://')) {
-                prUrl = existingUrl;
-                this.runtime.logger.info(`[executor] Found existing PR for task ${shortId}: ${prUrl}`);
-              } else {
-                this.runtime.logger.warn(`[executor] PR creation failed: ${prResult.stderr || prResult.stdout}`);
-              }
-            }
+            const prTitle = `feat: ${task.description.substring(0, 72)}`;
+            prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget);
           } else {
             this.runtime.logger.warn(`[executor] Push failed: ${pushResult.stderr || pushResult.stdout}`);
           }
@@ -1215,34 +1281,10 @@ export class TaskExecutorService extends Service {
         this.runtime.logger.info(`[executor] Found unpushed commits for task ${shortId}, pushing...`);
         const unpushedPush = await sshService.exec(sshTarget, this.wrapForUser(sshTarget, buildPushCmd(workspace)), 30_000);
         if (unpushedPush.success) {
-          // Also create PR for commits that Claude made during the session
+          // Create PR via GitHub REST API for commits Claude made during the session
           const branchName = `task/${shortId}`;
-          const prResult = await sshService.exec(
-            sshTarget,
-            this.wrapForUser(sshTarget, `cd ${workspace} && gh pr create --fill --head ${branchName} 2>&1`),
-            15_000,
-          );
-          if (prResult.success) {
-            const urlMatch = prResult.stdout?.match(/https:\/\/github\.com\/[^\s]+/);
-            if (urlMatch) {
-              prUrl = urlMatch[0];
-              this.runtime.logger.info(`[executor] PR created for task ${shortId}: ${prUrl}`);
-            }
-          } else {
-            // PR creation failed — check if one already exists (e.g. Claude created it during session)
-            const existingPr = await sshService.exec(
-              sshTarget,
-              this.wrapForUser(sshTarget, `cd ${workspace} && gh pr list --head ${branchName} --json url -q '.[0].url' 2>/dev/null`),
-              10_000,
-            );
-            const existingUrl = existingPr.stdout?.trim();
-            if (existingUrl?.startsWith('https://')) {
-              prUrl = existingUrl;
-              this.runtime.logger.info(`[executor] Found existing PR for task ${shortId}: ${prUrl}`);
-            } else {
-              this.runtime.logger.warn(`[executor] PR creation failed (unpushed path): ${prResult.stderr || prResult.stdout}`);
-            }
-          }
+          const prTitle = `feat: ${task.description.substring(0, 72)}`;
+          prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget);
         }
       }
 
