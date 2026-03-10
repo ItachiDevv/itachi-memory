@@ -505,7 +505,7 @@ export async function pushProjectEnv(workspacePath: string, task: Task): Promise
  * Cleanup: remove the task worktree only. Base clone persists for future tasks.
  */
 export async function cleanupWorkspace(workspacePath: string, task: Task): Promise<void> {
-    const { basePath } = getBasePath(task);
+    const { basePath, isLocal } = getBasePath(task);
 
     // Remove worktree (works for both local-path and clone modes)
     const result = await exec('git', ['worktree', 'remove', workspacePath, '--force'], basePath);
@@ -517,6 +517,12 @@ export async function cleanupWorkspace(workspacePath: string, task: Task): Promi
 
     // Prune stale worktree entries
     await exec('git', ['worktree', 'prune'], basePath);
+
+    // In local path mode, clean up the task branch from the base repo
+    if (isLocal) {
+        const branchName = `task/${slugifyDescription(task.description)}`;
+        await exec('git', ['branch', '-d', branchName], basePath);
+    }
 
     console.log(`[workspace] Removed worktree at ${workspacePath} (base preserved: ${basePath})`);
 }
