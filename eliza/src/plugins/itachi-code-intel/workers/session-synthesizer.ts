@@ -242,7 +242,7 @@ export async function registerSessionSynthesizerTask(runtime: IAgentRuntime): Pr
       metadata: {
         updateInterval: 30 * 60 * 1000, // 30 minutes — sessions complete infrequently
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_SESSION_SYNTHESIZER repeating task (5min)');
   } catch (error: unknown) {

@@ -101,7 +101,7 @@ export async function registerEffectivenessTask(runtime: IAgentRuntime): Promise
       description: 'Weekly effectiveness review of lesson confidence',
       worldId: runtime.agentId,
       metadata: { updateInterval: 7 * 24 * 60 * 60 * 1000 },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_EFFECTIVENESS repeating task (weekly)');
   } catch (error: unknown) {

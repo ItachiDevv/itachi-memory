@@ -74,7 +74,7 @@ export async function registerSubagentLifecycleTask(runtime: IAgentRuntime): Pro
       metadata: {
         updateInterval: 30_000,
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     });
     runtime.logger.info('[lifecycle] Registered repeating task (30s)');
   } catch (err) {

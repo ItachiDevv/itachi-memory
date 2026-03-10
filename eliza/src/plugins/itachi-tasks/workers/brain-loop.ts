@@ -410,7 +410,7 @@ export async function registerBrainLoopTask(runtime: IAgentRuntime): Promise<voi
       metadata: {
         updateInterval: 10 * 60 * 1000,
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_BRAIN_LOOP repeating task (10min)');
   } catch (error: unknown) {

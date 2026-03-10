@@ -159,7 +159,7 @@ export async function registerProactiveMonitorTask(runtime: IAgentRuntime): Prom
       metadata: {
         updateInterval: MONITOR_INTERVAL_MS,
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info(`Registered ITACHI_PROACTIVE_MONITOR repeating task (${MONITOR_INTERVAL_MS / 1000}s)`);
   } catch (error: unknown) {

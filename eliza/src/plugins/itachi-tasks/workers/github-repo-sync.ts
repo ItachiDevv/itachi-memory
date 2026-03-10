@@ -40,7 +40,7 @@ export async function registerGithubRepoSyncTask(runtime: IAgentRuntime): Promis
       metadata: {
         updateInterval: 86_400_000, // 24 hours
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_GITHUB_REPO_SYNC repeating task (24h)');
   } catch (error: unknown) {
