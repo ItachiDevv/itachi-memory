@@ -1333,7 +1333,7 @@ export class TaskExecutorService extends Service {
     } else {
       await sshService.exec(
         sshTarget,
-        this.wrapForUser(sshTarget, `BASE=$(dirname $(dirname $(realpath "${workspace}"))) && cd "$BASE/${project}" && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -d ${branchName} 2>/dev/null`),
+        this.wrapForUser(sshTarget, `BASE=$(cd "${workspace}/../.." 2>/dev/null && pwd) && cd "$BASE/${project}" && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -d ${branchName} 2>/dev/null`),
         15_000,
       );
     }
