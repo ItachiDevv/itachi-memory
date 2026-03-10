@@ -39,7 +39,7 @@ export const config: Config = {
     supabaseKey: required('SUPABASE_SERVICE_ROLE_KEY'),
     orchestratorId: process.env.ITACHI_ORCHESTRATOR_ID || 'default-orchestrator',
     maxConcurrent: parseInt(process.env.ITACHI_MAX_CONCURRENT || '4', 10),
-    workspaceDir: process.env.ITACHI_WORKSPACE_DIR || path.join(require('os').homedir(), 'itachi-workspaces'),
+    workspaceDir: process.env.ITACHI_WORKSPACE_DIR || path.join(require('os').homedir(), 'itachi', 'workspaces'),
     taskTimeoutMs: parseInt(process.env.ITACHI_TASK_TIMEOUT_MS || '900000', 10),
     defaultModel: process.env.ITACHI_DEFAULT_MODEL || 'opus',
     defaultBudget: parseFloat(process.env.ITACHI_DEFAULT_BUDGET || '5.00'),
