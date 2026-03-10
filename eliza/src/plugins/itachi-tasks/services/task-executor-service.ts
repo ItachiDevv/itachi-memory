@@ -1313,24 +1313,27 @@ export class TaskExecutorService extends Service {
   private async cleanupWorktree(sshTarget: string, workspace: string, task: ItachiTask): Promise<void> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
     const shortId = task.id.substring(0, 8);
-    const repoPath = resolveRepoPathByProject(task.project, sshTarget);
-    if (!repoPath) return;
-
+    const branchName = `task/${shortId}`;
     const isWindows = sshService.isWindowsTarget(sshTarget);
 
-    const branchName = `task/${shortId}`;
+    // Derive base repo path from the workspace path without an async SSH lookup:
+    // workspace = {baseRepoParent}/{project}/../workspaces/{project}-{taskId}
+    // realpath normalizes it → {baseRepoParent}/workspaces/{project}-{taskId}
+    // dirname twice → {baseRepoParent}
+    // + project name → base repo
+    const project = task.project;
 
     // Remove the worktree via git, then prune, then delete the local task branch
     if (isWindows) {
       await sshService.exec(
         sshTarget,
-        `cd '${repoPath}'; git -c safe.directory='*' worktree remove '${workspace}' --force 2>$null; git -c safe.directory='*' worktree prune 2>$null; git -c safe.directory='*' branch -d ${branchName} 2>$null`,
+        `$base = (Split-Path (Split-Path (Resolve-Path '${workspace}').Path)); cd "$base\\${project}"; git -c safe.directory='*' worktree remove '${workspace}' --force 2>$null; git -c safe.directory='*' worktree prune 2>$null; git -c safe.directory='*' branch -d ${branchName} 2>$null`,
         15_000,
       );
     } else {
       await sshService.exec(
         sshTarget,
-        this.wrapForUser(sshTarget, `cd ${repoPath} && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -d ${branchName} 2>/dev/null`),
+        this.wrapForUser(sshTarget, `BASE=$(dirname $(dirname $(realpath "${workspace}"))) && cd "$BASE/${project}" && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -d ${branchName} 2>/dev/null`),
         15_000,
       );
     }
