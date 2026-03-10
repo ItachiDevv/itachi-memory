@@ -109,8 +109,8 @@ const DIAGNOSTICS_DARWIN: Record<string, { label: string; cmd: string }[]> = {
  */
 function getDiagnosticsForOS(os: string | null | undefined): Record<string, { label: string; cmd: string }[]> {
   const osLower = (os || '').toLowerCase();
-  if (osLower.includes('win')) return DIAGNOSTICS_WINDOWS;
   if (osLower.includes('darwin') || osLower.includes('mac')) return DIAGNOSTICS_DARWIN;
+  if (osLower.includes('win')) return DIAGNOSTICS_WINDOWS;
   return DIAGNOSTICS; // Linux / default
 }
 
@@ -130,15 +130,15 @@ const SELF_REF_PATTERNS = /\b(your(?:self| own)?|the bot|our (?:setup|vps|server
  */
 function extractTarget(text: string, sshService: SSHService): string | null {
   const lower = text.toLowerCase();
-  // Check aliases
+  // Check aliases (word-boundary match to prevent "darwin" matching "win")
   for (const [alias, target] of Object.entries(MACHINE_ALIASES)) {
-    if (lower.includes(alias) && sshService.getTarget(target)) {
+    if (new RegExp(`\\b${alias}\\b`).test(lower) && sshService.getTarget(target)) {
       return target;
     }
   }
   // Check direct target names
   for (const name of sshService.getTargets().keys()) {
-    if (lower.includes(name)) return name;
+    if (new RegExp(`\\b${name}\\b`).test(lower)) return name;
   }
   return null;
 }
@@ -330,12 +330,8 @@ export const coolifyControlAction: Action = {
       handledMessages.add(msgId);
       // Clean old entries (keep last 50)
       if (handledMessages.size > 50) {
-        const iter = handledMessages.values();
-        for (let i = 0; i < handledMessages.size - 50; i++) iter.next();
-        const keep = new Set<string>();
-        for (const v of iter) keep.add(v);
-        handledMessages.clear();
-        for (const v of keep) handledMessages.add(v);
+        const oldest = [...handledMessages].slice(0, handledMessages.size - 50);
+        for (const v of oldest) handledMessages.delete(v);
       }
 
       // ── Record handler run time for cooldown ──

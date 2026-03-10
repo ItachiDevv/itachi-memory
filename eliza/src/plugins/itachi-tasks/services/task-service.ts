@@ -51,7 +51,9 @@ export interface RepoInfo {
 /** Generate a short human-readable title from a task description (e.g. "audit-branches-clean") */
 export function generateTaskTitle(description: string): string {
   const stopWords = new Set(['the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'is', 'it', 'that', 'this', 'with', 'all', 'from', 'by', 'at', 'be', 'as']);
-  const cleaned = String(description).replace(/https?:\/\/\S+/g, ''); // strip URLs
+  const cleaned = String(description)
+    .replace(/\n---\s*Lessons from previous.*$/s, '') // strip enrichWithLessons suffix
+    .replace(/https?:\/\/\S+/g, ''); // strip URLs
   const words = cleaned
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, '')

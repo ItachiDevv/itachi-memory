@@ -10,49 +10,13 @@ import { resolveRepoPathByProject, EXTRA_REPO_BASES, DEFAULT_REPO_BASES, MACHINE
 import { getStartingDir } from '../shared/start-dir.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
+import { stripAnsi, filterTuiNoise } from '../utils/tui-filter.js';
 
-// ── ANSI stripping (same as interactive-session.ts) ──────────────────
-function stripAnsi(text: string): string {
-  return text
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[^[\]()][^\x1b]?/g, '')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-// ── TUI noise filter (same as interactive-session.ts) ────────────────
-// Filters out TUI-specific noise (box drawing, spinners, progress indicators)
-// while preserving actual content (tool output, code, results).
-function filterTuiNoise(text: string): string {
-  const lines = text.split('\n');
-  const kept: string[] = [];
-  for (const line of lines) {
-    const stripped = line.replace(/[╭╮╰╯│─┌┐└┘├┤┬┴┼━┃╋▀▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓▙▟▛▜▝▞▘▗▖]/g, '').trim();
-    if (!stripped) continue;
-    // Skip lines that are only spinner/progress chars (includes ✳ ⏺)
-    if (/^[✻✶✢✽✳⏺·*●|>\s]+$/.test(stripped)) continue;
-    // Skip "Churning…", "Crunching…", thinking noise
-    if (/^(?:✻|✶|\*|✢|·|✽|●|✳|⏺)?\s*(?:Churning…|Crunching…|thinking|thought for\s)/i.test(stripped)) continue;
-    if (/bypass permissions|shift\+tab to cycle|esc to interrupt|settings issue|\/doctor for details/i.test(stripped)) continue;
-    if (/Tips for getting started|Welcome back|Run \/init to create|\/resume for more|\/statusline|Claude in Chrome enabled|\/chrome|Plugin updated|Restart to apply|\/ide fr|Found \d+ settings issue/i.test(stripped)) continue;
-    if (/^={2,}\s*(End Briefing|Start Briefing|Briefing)\s*={0,}$/i.test(stripped)) continue;
-    if ((stripped.match(/(?:Churning…|Crunching…)/g) || []).length >= 2) continue;
-    if (/^ctrl\+[a-z] to /i.test(stripped)) continue;
-    if (/^\d+s\s*·\s*↓?\d+\s*tokens/i.test(stripped)) continue;
-    if (/^>\s*$/.test(stripped)) continue;
-    // Push stripped (not raw) line so box chars and whitespace are gone
-    kept.push(stripped);
-  }
-  const result = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  // Debug: log when significant content is completely filtered out
-  if (!result && text.length > 50) {
-    const preview = text.substring(0, 120).replace(/\n/g, '\\n');
-    console.warn(`[executor:filter] Dropped ${text.length} chars of output. Preview: ${preview}`);
-  }
-  return result;
-}
+// ── Re-queue tracking (prevent infinite loops) ──────────────────────
+// Track how many times a task has been re-queued due to offline machines.
+// Max 3 re-queues before failing permanently.
+const requeueCounts = new Map<string, number>();
+const MAX_REQUEUES = 3;
 
 // Machine alias → SSH target imported from shared module
 import { resolveSSHTarget, getMachineIdsForTarget } from '../shared/repo-utils.js';
@@ -480,10 +444,11 @@ export class TaskExecutorService extends Service {
       try {
         const ping = await sshService.exec(sshTarget, 'echo OK', 5_000);
         if (!ping.success || !ping.stdout?.includes('OK')) {
-          throw new Error(`Machine ${sshTarget} unreachable (ping failed)`);
+          throw Object.assign(new Error(`Machine ${sshTarget} unreachable (ping failed)`), { requeue: true });
         }
       } catch (err) {
-        throw new Error(`SSH target ${sshTarget} offline: ${err instanceof Error ? err.message : String(err)}`);
+        if ((err as any).requeue) throw err;
+        throw Object.assign(new Error(`SSH target ${sshTarget} offline: ${err instanceof Error ? err.message : String(err)}`), { requeue: true });
       }
 
       // 4. Send start notification
@@ -515,7 +480,55 @@ export class TaskExecutorService extends Service {
 
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
+
+      // If the machine is offline/unreachable, re-queue instead of permanently failing
+      // so the dispatcher can assign it to another online machine (up to MAX_REQUEUES times)
+      if ((err as any).requeue) {
+        const count = (requeueCounts.get(task.id) || 0) + 1;
+        requeueCounts.set(task.id, count);
+
+        if (count <= MAX_REQUEUES) {
+          this.runtime.logger.warn(`[executor] Task ${shortId} machine offline — re-queuing (${count}/${MAX_REQUEUES}): ${msg}`);
+
+          await taskService.updateTask(task.id, {
+            status: 'queued',
+            assigned_machine: null as any,
+            started_at: null as any,
+            error_message: null as any,
+          });
+
+          if (topicsService) {
+            const topicId = this.activeTasks.get(task.id)?.topicId;
+            const notifyMsg = `Machine ${machineId} offline — re-queuing task ${shortId} for another machine (attempt ${count}/${MAX_REQUEUES}).`;
+            if (topicId) {
+              await topicsService.sendToTopic(topicId, notifyMsg);
+            } else {
+              try {
+                await topicsService.sendMessageWithKeyboard(notifyMsg, []);
+              } catch { /* non-critical */ }
+            }
+          }
+
+          this.activeTasks.delete(task.id);
+          return;
+        }
+        // Exceeded max re-queues — fall through to permanent failure
+        requeueCounts.delete(task.id);
+        this.runtime.logger.error(`[executor] Task ${shortId} exceeded ${MAX_REQUEUES} re-queue attempts — failing permanently`);
+      }
+
       this.runtime.logger.error(`[executor] Task ${shortId} failed: ${msg}`);
+
+      // If the failure was an SSH connectivity issue, mark the machine offline in the registry
+      if ((err as any).requeue) {
+        try {
+          const registry = this.runtime.getService<MachineRegistryService>('machine-registry');
+          if (registry) {
+            await registry.markOffline(machineId);
+            this.runtime.logger.warn(`[executor] Marked ${machineId} offline in registry after SSH ping failure`);
+          }
+        } catch { /* best-effort */ }
+      }
 
       await taskService.updateTask(task.id, {
         status: 'failed',
@@ -1462,10 +1475,11 @@ export class TaskExecutorService extends Service {
     const isWindows = sshService.isWindowsTarget(sshTarget);
     let removed = 0;
 
-    // List workspace directories
+    // List workspace directories (use the configured base for this target)
+    const base = getStartingDir(sshTarget);
     const listCmd = isWindows
       ? `Get-ChildItem -Directory '$HOME\\Documents\\Crypto\\*\\workspaces\\*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName + '|' + $_.LastWriteTime.ToString('o') }`
-      : `find /home/itachi/itachi/workspaces -maxdepth 1 -mindepth 1 -type d -printf '%p|%T@\\n' 2>/dev/null`;
+      : `find ${base}/workspaces -maxdepth 1 -mindepth 1 -type d -printf '%p|%T@\\n' 2>/dev/null`;
 
     const result = await sshService.exec(sshTarget, listCmd, 10_000);
     if (!result.stdout?.trim()) return 0;
@@ -1501,7 +1515,7 @@ export class TaskExecutorService extends Service {
       // Prune git worktree references and stale task branches
       const pruneCmd = isWindows
         ? `Get-ChildItem -Directory '$HOME\\Documents\\Crypto\\*' -ErrorAction SilentlyContinue | ForEach-Object { cd $_.FullName; git -c safe.directory='*' worktree prune 2>$null }`
-        : `for d in /home/itachi/itachi/*/; do cd "$d" 2>/dev/null && git -c safe.directory='*' worktree prune 2>/dev/null; done`;
+        : `for d in ${base}/*/; do cd "$d" 2>/dev/null && git -c safe.directory='*' worktree prune 2>/dev/null; done`;
       await sshService.exec(sshTarget, isWindows ? pruneCmd : this.wrapForUser(sshTarget, pruneCmd), 15_000);
     }
 
@@ -1509,7 +1523,7 @@ export class TaskExecutorService extends Service {
       // Also delete stale task/XXXXXXXX branches that no longer have a worktree
       const branchCleanupCmd = this.wrapForUser(
         sshTarget,
-        `for d in /home/itachi/itachi/*/; do cd "$d" 2>/dev/null || continue; ` +
+        `for d in ${base}/*/; do cd "$d" 2>/dev/null || continue; ` +
         `git -c safe.directory='*' for-each-ref --format='%(refname:short)' refs/heads/task/ 2>/dev/null | ` +
         `while read b; do ` +
         `  if ! git -c safe.directory='*' worktree list --porcelain 2>/dev/null | grep -q "$b"; then ` +

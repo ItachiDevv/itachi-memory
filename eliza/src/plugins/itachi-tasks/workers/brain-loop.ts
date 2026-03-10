@@ -286,6 +286,90 @@ async function gatherObservations(runtime: IAgentRuntime): Promise<Observation[]
     } catch { /* non-critical */ }
   }
 
+  // Task completions in last hour (proactive signal)
+  if (taskService) {
+    try {
+      const supabase = taskService.getSupabase();
+      const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+      const { data: completedTasks } = await supabase
+        .from('itachi_tasks')
+        .select('id, project, title, description')
+        .eq('status', 'completed')
+        .gte('completed_at', hourAgo)
+        .limit(5);
+
+      for (const t of completedTasks || []) {
+        observations.push({
+          type: 'proactive',
+          title: `Task completed: ${t.title || t.id.substring(0, 8)}`,
+          detail: (t.description || '').substring(0, 100),
+          project: t.project,
+        });
+      }
+
+      // Recurring failure patterns (3+ fails in 24h for same project)
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentFails } = await supabase
+        .from('itachi_tasks')
+        .select('project')
+        .eq('status', 'failed')
+        .gte('completed_at', dayAgo);
+
+      if (recentFails && recentFails.length >= 3) {
+        const counts: Record<string, number> = {};
+        for (const t of recentFails) {
+          if (t.project) counts[t.project] = (counts[t.project] || 0) + 1;
+        }
+        for (const [project, count] of Object.entries(counts)) {
+          if (count >= 3) {
+            observations.push({
+              type: 'task_failure',
+              title: `Recurring failures: ${count} in 24h`,
+              detail: `Project "${project}" has had ${count} failed tasks in the last 24 hours`,
+              project,
+            });
+          }
+        }
+      }
+
+      // Queued task backlog (>5 tasks waiting)
+      const { count: queuedCount } = await supabase
+        .from('itachi_tasks')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'queued');
+
+      if (queuedCount && queuedCount > 5) {
+        observations.push({
+          type: 'health_check',
+          title: `Task backlog: ${queuedCount} queued`,
+          detail: `${queuedCount} tasks are waiting to be picked up`,
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Memory consolidation trigger (many memories without consolidation)
+  if (memoryService) {
+    try {
+      const supabase = memoryService.getSupabase();
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const { count: memCount } = await supabase
+        .from('itachi_memories')
+        .select('id', { count: 'exact', head: true })
+        .gte('created_at', weekAgo)
+        .neq('category', 'consolidated');
+
+      if (memCount && memCount > 20) {
+        observations.push({
+          type: 'memory_insight',
+          title: `Memory consolidation needed: ${memCount} recent entries`,
+          detail: `${memCount} unconsolidated memories from the last week — consider running memory consolidation`,
+        });
+      }
+    } catch { /* non-critical */ }
+  }
+
   return observations;
 }
 

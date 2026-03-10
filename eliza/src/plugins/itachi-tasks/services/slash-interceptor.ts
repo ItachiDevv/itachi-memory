@@ -480,6 +480,7 @@ export function registerSlashInterceptor(runtime: IAgentRuntime, bot: any): void
             }
           } catch (err) {
             runtime.logger.error(`${TAG} Direct task error: ${err instanceof Error ? err.message : String(err)}`);
+            return;
           }
         }
         return originalHandleUpdate(update, ...rest);

@@ -45,6 +45,25 @@ export class AgentCronService extends Service {
 
     const nextRun = getNextRun(parsed, new Date());
 
+    // Dedup: check for existing enabled job with same schedule + similar description
+    const { data: existing } = await this.supabase
+      .from('itachi_agent_cron')
+      .select('*')
+      .eq('schedule', opts.schedule)
+      .eq('enabled', true);
+    if (existing && existing.length > 0) {
+      const newWords = new Set(opts.taskDescription.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+      const duplicate = existing.find((job: AgentCronJob) => {
+        const existingWords = job.task_description.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const shared = existingWords.filter(w => newWords.has(w)).length;
+        return shared >= 2;
+      });
+      if (duplicate) {
+        this.runtime.logger.info(`[agent-cron] Skipping duplicate cron job (schedule: ${opts.schedule}, similar to: "${duplicate.task_description}")`);
+        return duplicate as AgentCronJob;
+      }
+    }
+
     const { data, error } = await this.supabase
       .from('itachi_agent_cron')
       .insert({

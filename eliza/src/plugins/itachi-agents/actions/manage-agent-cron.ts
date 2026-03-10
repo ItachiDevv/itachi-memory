@@ -189,16 +189,23 @@ Common patterns:
     const rawResp = typeof response === 'string' ? response : '';
     runtime.logger.info(`[agent-cron] LLM response: ${rawResp.substring(0, 200)}`);
 
-    // Extract JSON from response (handle markdown code blocks)
-    const jsonMatch = rawResp.match(/\{[\s\S]*\}/);
+    // Extract JSON from response (strip markdown fences, then extract object)
+    const stripped = rawResp.replace(/```(?:json)?\s*/g, '').replace(/```/g, '');
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       runtime.logger.error(`[agent-cron] No JSON found in LLM response`);
       if (callback) await callback({ text: 'Could not parse a cron schedule from your request. Try: "schedule [task] every [interval] using [profile]"' });
       return { success: false, error: 'No JSON in response' };
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
-    runtime.logger.info(`[agent-cron] Parsed: schedule="${parsed.schedule}" task="${parsed.taskDescription?.substring(0, 60)}"`);
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      if (callback) await callback({ text: 'Could not parse a cron schedule from your request. Try: "schedule [task] every [interval] using [profile]"' });
+      return { success: false, error: 'JSON parse failed' };
+    }
+    runtime.logger.info(`[agent-cron] Parsed: schedule="${parsed.schedule}" task="${String(parsed.taskDescription || '').substring(0, 60)}"`);
 
     if (!parsed.schedule || !parsed.taskDescription) {
       if (callback) await callback({ text: 'Could not parse a cron schedule from your request. Try: "schedule [task] every [interval] using [profile]"' });
@@ -206,9 +213,9 @@ Common patterns:
     }
 
     const job = await cronService.createJob({
-      profileId: parsed.profileId || undefined,
-      schedule: parsed.schedule,
-      taskDescription: parsed.taskDescription,
+      profileId: parsed.profileId ? String(parsed.profileId) : undefined,
+      schedule: String(parsed.schedule),
+      taskDescription: String(parsed.taskDescription),
     });
 
     if (!job) {

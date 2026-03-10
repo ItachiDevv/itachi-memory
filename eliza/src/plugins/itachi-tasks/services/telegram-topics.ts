@@ -245,7 +245,7 @@ export class TelegramTopicsService extends Service {
       }
 
       // Close failed with TOPIC_NOT_MODIFIED → topic was already closed. Delete it.
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
 
       const result = await this.apiCall('deleteForumTopic', {
         chat_id: this.groupChatId,
