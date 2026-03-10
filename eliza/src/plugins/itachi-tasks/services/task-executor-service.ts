@@ -133,6 +133,16 @@ export class TaskExecutorService extends Service {
     // Recover any tasks left in claimed/running state from a previous crash
     await service.recoverStaleTasks(runtime);
 
+    // Periodic stale worktree janitor — every 4 hours, clean up worktrees older than 24h
+    setInterval(() => {
+      for (const machineId of service.managedMachines) {
+        const sshTarget = resolveSSHTarget(machineId);
+        service.cleanupStaleWorktrees(sshTarget).then((n) => {
+          if (n > 0) runtime.logger.info(`[janitor] Removed ${n} stale worktree(s) on ${machineId}`);
+        }).catch(() => {});
+      }
+    }, 4 * 60 * 60 * 1000);
+
     return service;
   }
 
@@ -1382,9 +1392,10 @@ export class TaskExecutorService extends Service {
         15_000,
       );
     } else {
+      // Resolve the workspace path first (removes any '..' segments so git can match it)
       await sshService.exec(
         sshTarget,
-        this.wrapForUser(sshTarget, `BASE=$(cd "${workspace}/../.." 2>/dev/null && pwd) && cd "$BASE/${project}" && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -D ${branchName} 2>/dev/null`),
+        this.wrapForUser(sshTarget, `WSPATH=$(realpath "${workspace}" 2>/dev/null || echo "${workspace}") && BASE=$(dirname "$(dirname "$WSPATH")") && cd "$BASE/${project}" && git -c safe.directory='*' worktree remove "$WSPATH" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -D ${branchName} 2>/dev/null`),
         15_000,
       );
     }
@@ -1437,11 +1448,26 @@ export class TaskExecutorService extends Service {
     }
 
     if (removed > 0) {
-      // Prune git worktree references
+      // Prune git worktree references and stale task branches
       const pruneCmd = isWindows
         ? `Get-ChildItem -Directory '$HOME\\Documents\\Crypto\\*' -ErrorAction SilentlyContinue | ForEach-Object { cd $_.FullName; git -c safe.directory='*' worktree prune 2>$null }`
-        : `for d in /home/itachi/itachi/*/; do cd "$d" && git -c safe.directory='*' worktree prune 2>/dev/null; done`;
+        : `for d in /home/itachi/itachi/*/; do cd "$d" 2>/dev/null && git -c safe.directory='*' worktree prune 2>/dev/null; done`;
       await sshService.exec(sshTarget, isWindows ? pruneCmd : this.wrapForUser(sshTarget, pruneCmd), 15_000);
+    }
+
+    if (!isWindows) {
+      // Also delete stale task/XXXXXXXX branches that no longer have a worktree
+      const branchCleanupCmd = this.wrapForUser(
+        sshTarget,
+        `for d in /home/itachi/itachi/*/; do cd "$d" 2>/dev/null || continue; ` +
+        `git -c safe.directory='*' for-each-ref --format='%(refname:short)' refs/heads/task/ 2>/dev/null | ` +
+        `while read b; do ` +
+        `  if ! git -c safe.directory='*' worktree list --porcelain 2>/dev/null | grep -q "$b"; then ` +
+        `    git -c safe.directory='*' branch -D "$b" 2>/dev/null; ` +
+        `  fi; ` +
+        `done; done`,
+      );
+      await sshService.exec(sshTarget, branchCleanupCmd, 30_000);
     }
 
     return removed;
