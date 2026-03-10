@@ -4,6 +4,7 @@ import { SSHService } from './ssh-service.js';
 import { TaskService, type ItachiTask, generateTaskTitle } from './task-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import { MachineRegistryService } from './machine-registry.js';
+import type { RLMService } from '../../itachi-self-improve/services/rlm-service.js';
 import { activeSessions, markSessionClosed } from '../shared/active-sessions.js';
 import { resolveRepoPathByProject, EXTRA_REPO_BASES, DEFAULT_REPO_BASES, MACHINE_TO_SSH_TARGET } from '../shared/repo-utils.js';
 import { getStartingDir } from '../shared/start-dir.js';
@@ -1275,7 +1276,27 @@ export class TaskExecutorService extends Service {
       await topicsService.sendToTopic(topicId, lines.join('\n'));
     }
 
-    // 6. Cleanup worktree (keep only for waiting_input tasks that may resume)
+    // 6. Record outcome in RLM for future learning
+    try {
+      const rlm = this.runtime.getService<RLMService>('rlm');
+      if (rlm) {
+        const outcome: 'success' | 'failure' | 'partial' =
+          finalStatus === 'completed' ? 'success' :
+          finalStatus === 'timeout' ? 'partial' : 'failure';
+        const score =
+          finalStatus === 'completed' ? (filesChanged.length > 0 ? 1.0 : 0.5) :
+          finalStatus === 'timeout' ? 0.3 : 0.0;
+        await rlm.recordOutcome(task.id, outcome, score, task.project);
+        const reinforced = await rlm.reinforceLessonsForTask(
+          task.id, task.description, task.project, outcome === 'success',
+        );
+        this.runtime.logger.info(`[executor] RLM: ${outcome} (score=${score.toFixed(1)}), reinforced ${reinforced} lessons for ${shortId}`);
+      }
+    } catch (err) {
+      this.runtime.logger.warn(`[executor] RLM recording failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 7. Cleanup worktree (keep only for waiting_input tasks that may resume)
     if (finalStatus !== 'waiting_input' && workspace !== task.project) {
       try {
         await this.cleanupWorktree(sshTarget, workspace, task);
