@@ -1185,7 +1185,7 @@ export class TaskExecutorService extends Service {
               // PR creation failed — check if one already exists (e.g. Claude created it during session)
               const existingPr = await sshService.exec(
                 sshTarget,
-                this.wrapForUser(sshTarget, `cd ${workspace} && gh pr view --json url -q .url --head ${branchName} 2>/dev/null`),
+                this.wrapForUser(sshTarget, `cd ${workspace} && gh pr list --head ${branchName} --json url -q '.[0].url' 2>/dev/null`),
                 10_000,
               );
               const existingUrl = existingPr.stdout?.trim();
@@ -1232,7 +1232,7 @@ export class TaskExecutorService extends Service {
             // PR creation failed — check if one already exists (e.g. Claude created it during session)
             const existingPr = await sshService.exec(
               sshTarget,
-              this.wrapForUser(sshTarget, `cd ${workspace} && gh pr view --json url -q .url --head ${branchName} 2>/dev/null`),
+              this.wrapForUser(sshTarget, `cd ${workspace} && gh pr list --head ${branchName} --json url -q '.[0].url' 2>/dev/null`),
               10_000,
             );
             const existingUrl = existingPr.stdout?.trim();
