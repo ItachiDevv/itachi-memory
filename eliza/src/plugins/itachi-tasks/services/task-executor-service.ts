@@ -1327,13 +1327,13 @@ export class TaskExecutorService extends Service {
     if (isWindows) {
       await sshService.exec(
         sshTarget,
-        `$base = (Split-Path (Split-Path (Resolve-Path '${workspace}').Path)); cd "$base\\${project}"; git -c safe.directory='*' worktree remove '${workspace}' --force 2>$null; git -c safe.directory='*' worktree prune 2>$null; git -c safe.directory='*' branch -d ${branchName} 2>$null`,
+        `$base = (Split-Path (Split-Path (Resolve-Path '${workspace}').Path)); cd "$base\\${project}"; git -c safe.directory='*' worktree remove '${workspace}' --force 2>$null; git -c safe.directory='*' worktree prune 2>$null; git -c safe.directory='*' branch -D ${branchName} 2>$null`,
         15_000,
       );
     } else {
       await sshService.exec(
         sshTarget,
-        this.wrapForUser(sshTarget, `BASE=$(cd "${workspace}/../.." 2>/dev/null && pwd) && cd "$BASE/${project}" && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -d ${branchName} 2>/dev/null`),
+        this.wrapForUser(sshTarget, `BASE=$(cd "${workspace}/../.." 2>/dev/null && pwd) && cd "$BASE/${project}" && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -D ${branchName} 2>/dev/null`),
         15_000,
       );
     }
