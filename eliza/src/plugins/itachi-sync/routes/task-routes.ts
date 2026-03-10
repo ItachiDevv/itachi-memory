@@ -17,6 +17,7 @@ export const taskRoutes: Route[] = [
         const {
           description, project, repo_url, branch, priority,
           model, max_budget_usd, telegram_chat_id, telegram_user_id,
+          assigned_machine,
         } = body as any;
 
         if (!description || !project) {
@@ -46,6 +47,7 @@ export const taskRoutes: Route[] = [
           priority: safePriority,
           model,
           max_budget_usd,
+          assigned_machine,
         });
 
         res.json({ success: true, task });
