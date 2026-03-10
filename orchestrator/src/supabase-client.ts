@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { config } from './config';
+import { signJwt } from './crypto';
 import type { Task, TaskUpdate } from './types';
 
 let supabase: SupabaseClient;
@@ -84,7 +85,7 @@ export async function fetchMachineConfig(machineId: string): Promise<{ engine_pr
 export async function notifyTaskCompletion(taskId: string): Promise<void> {
     try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${process.env.ITACHI_API_KEY}`;
+        if (process.env.ITACHI_API_KEY) headers['Authorization'] = `Bearer ${signJwt(process.env.ITACHI_API_KEY, 'orchestrator')}`;
         const response = await fetch(`${config.apiUrl}/api/tasks/${taskId}/notify`, {
             method: 'POST',
             headers,

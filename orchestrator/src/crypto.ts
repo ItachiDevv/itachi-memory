@@ -1,4 +1,4 @@
-import { pbkdf2Sync, createDecipheriv, createCipheriv, randomBytes, createHash } from 'crypto';
+import { pbkdf2Sync, createDecipheriv, createCipheriv, randomBytes, createHash, createHmac } from 'crypto';
 
 export function decrypt(encB64: string, saltB64: string, passphrase: string): string {
     const packed = Buffer.from(encB64, 'base64');
@@ -10,6 +10,26 @@ export function decrypt(encB64: string, saltB64: string, passphrase: string): st
     const decipher = createDecipheriv('aes-256-gcm', key, iv);
     decipher.setAuthTag(tag);
     return decipher.update(ct, undefined, 'utf8') + decipher.final('utf8');
+}
+
+const JWT_TTL_SECONDS = 3600; // 1 hour
+
+function toBase64Url(buf: Buffer): string {
+    return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+/**
+ * Issue a short-lived HS256 JWT for internal service authentication.
+ * @param secret - Signing secret (ITACHI_API_KEY)
+ * @param sub - Subject identifying the token issuer (e.g. 'orchestrator')
+ */
+export function signJwt(secret: string, sub: string): string {
+    const header = toBase64Url(Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
+    const now = Math.floor(Date.now() / 1000);
+    const payload = toBase64Url(Buffer.from(JSON.stringify({ sub, iat: now, exp: now + JWT_TTL_SECONDS })));
+    const signingInput = `${header}.${payload}`;
+    const signature = toBase64Url(createHmac('sha256', secret).update(signingInput).digest());
+    return `${header}.${payload}.${signature}`;
 }
 
 export function encrypt(content: string, passphrase: string): { encrypted_data: string; salt: string; content_hash: string } {

@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { IAgentRuntime } from '@elizaos/core';
 
 // UUID v4 format
@@ -47,32 +48,86 @@ export function sanitizeError(error: unknown): string {
   return msg;
 }
 
+type JwtPayload = Record<string, unknown> & { exp?: number; iat?: number };
+
+type JwtVerifyResult =
+  | { valid: true; payload: JwtPayload }
+  | { valid: false; reason: 'expired' | 'invalid' };
+
 /**
- * Check API key auth. Returns true if authorized.
- * Accepts Bearer token via Authorization header OR x-api-key header.
- * If ITACHI_API_KEY is not set, auth is skipped (backward compat).
+ * Verify an HS256 JWT using Node.js built-in crypto.
+ * Returns the decoded payload if valid, or a typed error reason.
+ */
+export function verifyJwt(token: string, secret: string): JwtVerifyResult {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return { valid: false, reason: 'invalid' };
+
+    const [headerB64, payloadB64, signatureB64] = parts;
+
+    // Verify HMAC-SHA256 signature using timing-safe comparison
+    const signingInput = `${headerB64}.${payloadB64}`;
+    const expected = createHmac('sha256', secret).update(signingInput).digest();
+    const actual = Buffer.from(signatureB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      return { valid: false, reason: 'invalid' };
+    }
+
+    // Decode and parse payload
+    const payloadJson = Buffer.from(
+      payloadB64.replace(/-/g, '+').replace(/_/g, '/'),
+      'base64'
+    ).toString('utf8');
+    const payload = JSON.parse(payloadJson) as JwtPayload;
+
+    // Check token expiry
+    if (typeof payload.exp === 'number' && Math.floor(Date.now() / 1000) > payload.exp) {
+      return { valid: false, reason: 'expired' };
+    }
+
+    return { valid: true, payload };
+  } catch {
+    return { valid: false, reason: 'invalid' };
+  }
+}
+
+/**
+ * Check JWT Bearer token auth. Returns true if authorized.
+ * Uses ITACHI_API_KEY as the HS256 signing secret.
+ * If ITACHI_API_KEY is not set, auth is skipped (open access).
+ *
+ * Error responses:
+ *   401 { error: 'Missing authorization token' }  — no Bearer token in header
+ *   401 { error: 'Token has expired' }            — valid JWT but past exp claim
+ *   401 { error: 'Invalid token' }                — bad signature or malformed JWT
  */
 export function checkAuth(
   req: { headers: Record<string, string | string[] | undefined> },
   res: { status: (code: number) => { json: (body: unknown) => void } },
   runtime: IAgentRuntime
 ): boolean {
-  const apiKey = runtime.getSetting('ITACHI_API_KEY');
-  if (!apiKey) return true; // no key configured = open access
+  const jwtSecret = runtime.getSetting('ITACHI_API_KEY');
+  if (!jwtSecret) return true; // no secret configured = open access
 
-  // Check Authorization: Bearer <token>
+  // Extract Bearer token from Authorization header
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  const bearerToken = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
+  const bearerToken =
+    typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
 
-  // Check x-api-key header
-  const xApiKey = req.headers['x-api-key'];
-  const apiKeyToken = typeof xApiKey === 'string' ? xApiKey : '';
-
-  if (bearerToken === apiKey || apiKeyToken === apiKey) {
-    return true;
+  if (!bearerToken) {
+    res.status(401).json({ error: 'Missing authorization token' });
+    return false;
   }
 
-  res.status(401).json({ error: 'Unauthorized' });
+  const result = verifyJwt(bearerToken, jwtSecret);
+  if (result.valid) return true;
+
+  if (result.reason === 'expired') {
+    res.status(401).json({ error: 'Token has expired' });
+  } else {
+    res.status(401).json({ error: 'Invalid token' });
+  }
   return false;
 }
 

@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { config } from './config';
+import { signJwt } from './crypto';
 import type { Task, TaskClassification, ClaudeStreamEvent, CodexStreamEvent, ElizaStreamEvent } from './types';
 import { getBudgetForClassification } from './task-classifier';
 
@@ -61,10 +62,10 @@ export function streamToEliza(taskId: string, event: ElizaStreamEvent): void {
     const url = `${config.apiUrl}/api/tasks/${taskId}/stream`;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
-    // Add auth header if ITACHI_API_KEY is available (required by ElizaOS endpoint)
+    // Add JWT auth header if ITACHI_API_KEY is configured
     const apiKey = process.env.ITACHI_API_KEY;
     if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
+        headers['Authorization'] = `Bearer ${signJwt(apiKey, 'orchestrator')}`;
     }
 
     const doPost = async (): Promise<void> => {
@@ -114,7 +115,7 @@ export async function streamToElizaAsync(taskId: string, event: ElizaStreamEvent
 
     const apiKey = process.env.ITACHI_API_KEY;
     if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
+        headers['Authorization'] = `Bearer ${signJwt(apiKey, 'orchestrator')}`;
     }
 
     try {
