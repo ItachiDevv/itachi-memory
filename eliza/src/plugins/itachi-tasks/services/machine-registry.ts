@@ -82,6 +82,8 @@ export class MachineRegistryService extends Service {
 
   /**
    * Update heartbeat timestamp and active task count.
+   * Does NOT revive machines that are marked offline — they must re-register explicitly.
+   * This prevents ghost heartbeats from bringing back machines that are actually down.
    */
   async heartbeat(machineId: string, activeTasks: number): Promise<MachineRecord> {
     const status = activeTasks > 0 ? 'busy' : 'online';
@@ -92,6 +94,7 @@ export class MachineRegistryService extends Service {
       .from('machine_registry')
       .update({ last_heartbeat: now, active_tasks: activeTasks, status })
       .eq('machine_id', machineId)
+      .in('status', ['online', 'busy']) // Never revive an offline machine via heartbeat
       .select()
       .single();
 

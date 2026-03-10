@@ -12,7 +12,7 @@ import { getConfig as getBrainConfig } from '../services/brain-loop-service.js';
 const MACHINE_ALIASES: Record<string, string> = {
   mac: 'mac', macbook: 'mac', 'mac air': 'mac', apple: 'mac',
   windows: 'windows', pc: 'windows', laptop: 'windows', win: 'windows', desktop: 'windows',
-  hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify', cloud: 'coolify', bot: 'coolify',
+  hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify', cloud: 'coolify', bot: 'coolify', 'itachi-mem': 'coolify', linux: 'coolify',
 };
 
 // ── Intent detection patterns ────────────────────────────────────────
