@@ -1152,7 +1152,7 @@ export class TaskExecutorService extends Service {
           if (pushResult.success) {
             this.runtime.logger.info(`[executor] Pushed branch for task ${shortId}`);
 
-            // 3. Create PR (use --head to avoid worktree branch detection issues)
+            // 3. Create PR (or find existing one if Claude already created it during session)
             const branchName = `task/${shortId}`;
             const prResult = await sshService.exec(
               sshTarget,
@@ -1168,7 +1168,19 @@ export class TaskExecutorService extends Service {
                 this.runtime.logger.info(`[executor] PR created for task ${shortId}: ${prUrl}`);
               }
             } else {
-              this.runtime.logger.warn(`[executor] PR creation failed: ${prResult.stderr || prResult.stdout}`);
+              // PR creation failed — check if one already exists (e.g. Claude created it during session)
+              const existingPr = await sshService.exec(
+                sshTarget,
+                this.wrapForUser(sshTarget, `cd ${workspace} && gh pr view --json url -q .url --head ${branchName} 2>/dev/null`),
+                10_000,
+              );
+              const existingUrl = existingPr.stdout?.trim();
+              if (existingUrl?.startsWith('https://')) {
+                prUrl = existingUrl;
+                this.runtime.logger.info(`[executor] Found existing PR for task ${shortId}: ${prUrl}`);
+              } else {
+                this.runtime.logger.warn(`[executor] PR creation failed: ${prResult.stderr || prResult.stdout}`);
+              }
             }
           } else {
             this.runtime.logger.warn(`[executor] Push failed: ${pushResult.stderr || pushResult.stdout}`);
@@ -1203,7 +1215,19 @@ export class TaskExecutorService extends Service {
               this.runtime.logger.info(`[executor] PR created for task ${shortId}: ${prUrl}`);
             }
           } else {
-            this.runtime.logger.warn(`[executor] PR creation failed (unpushed path): ${prResult.stderr || prResult.stdout}`);
+            // PR creation failed — check if one already exists (e.g. Claude created it during session)
+            const existingPr = await sshService.exec(
+              sshTarget,
+              this.wrapForUser(sshTarget, `cd ${workspace} && gh pr view --json url -q .url --head ${branchName} 2>/dev/null`),
+              10_000,
+            );
+            const existingUrl = existingPr.stdout?.trim();
+            if (existingUrl?.startsWith('https://')) {
+              prUrl = existingUrl;
+              this.runtime.logger.info(`[executor] Found existing PR for task ${shortId}: ${prUrl}`);
+            } else {
+              this.runtime.logger.warn(`[executor] PR creation failed (unpushed path): ${prResult.stderr || prResult.stdout}`);
+            }
           }
         }
       }
