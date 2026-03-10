@@ -103,20 +103,17 @@ export const character: Character = {
   plugins: [
     '@elizaos/plugin-bootstrap',
     '@elizaos/plugin-sql',
-    '@elizaos/plugin-anthropic',
     '@elizaos/plugin-openai',
     '@elizaos/plugin-telegram',
   ],
   settings: {
-    ANTHROPIC_LARGE_MODEL: 'claude-sonnet-4-5-20250929',
-    ANTHROPIC_SMALL_MODEL: 'claude-haiku-4-5-20251001',
-    GEMINI_SMALL_MODEL: 'gemini-3-flash-preview',
-    GEMINI_LARGE_MODEL: 'gemini-3-flash-preview',
+    OPENAI_LARGE_MODEL: 'gpt-5.4',
+    OPENAI_SMALL_MODEL: 'gpt-4o-mini',
+    OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small',
     USE_GEMINI_LARGE: 'false',
     ENABLE_EXTENDED_CAPABILITIES: true,
     SHOULD_RESPOND_BYPASS_SOURCES: 'telegram',
     secrets: {
-      ANTHROPIC_API_KEY: loadCredential('ANTHROPIC_API_KEY', '.anthropic-key', /ANTHROPIC_API_KEY=(.+)/),
       OPENAI_API_KEY: loadCredential('OPENAI_API_KEY', '.eliza-openai-key', /OPENAI_API_KEY=(.+)/),
       TELEGRAM_BOT_TOKEN: loadCredential('TELEGRAM_BOT_TOKEN', '.telegram-bot-token'),
       SUPABASE_URL: loadCredential('SUPABASE_URL', '.supabase-credentials', /SUPABASE_URL=(.+)/),
