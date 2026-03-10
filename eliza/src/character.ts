@@ -112,7 +112,7 @@ export const character: Character = {
     ANTHROPIC_SMALL_MODEL: 'claude-haiku-4-5-20251001',
     GEMINI_SMALL_MODEL: 'gemini-3-flash-preview',
     GEMINI_LARGE_MODEL: 'gemini-3-flash-preview',
-    USE_GEMINI_LARGE: 'true',
+    USE_GEMINI_LARGE: 'false',
     ENABLE_EXTENDED_CAPABILITIES: true,
     SHOULD_RESPOND_BYPASS_SOURCES: 'telegram',
     secrets: {
