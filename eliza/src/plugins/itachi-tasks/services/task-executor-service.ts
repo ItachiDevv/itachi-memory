@@ -237,6 +237,10 @@ export class TaskExecutorService extends Service {
           } catch (regErr) {
             this.runtime.logger.warn(`[executor] Failed to register machine "${machineId}": ${regErr instanceof Error ? regErr.message : String(regErr)}`);
           }
+        } else if (hbResult === null) {
+          // SSH confirmed reachable but machine is marked offline — force-revive it
+          this.runtime.logger.info(`[executor] Machine "${machineId}" is offline in registry but SSH-reachable — reviving`);
+          await registry.revive(machineId, activeTasks, projects.length > 0 ? projects : undefined).catch(() => {});
         } else if (projects.length > 0) {
           await registry.updateProjects(machineId, projects);
         }

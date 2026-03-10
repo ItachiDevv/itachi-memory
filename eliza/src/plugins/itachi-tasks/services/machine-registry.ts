@@ -126,6 +126,19 @@ export class MachineRegistryService extends Service {
   }
 
   /**
+   * Force-revive an offline machine that has been confirmed reachable via SSH.
+   * Unlike heartbeat(), this explicitly sets status to online even if currently offline.
+   * Only called after a successful SSH ping confirms the machine is actually up.
+   */
+  async revive(machineId: string, activeTasks: number, projects?: string[]): Promise<void> {
+    const status = activeTasks > 0 ? 'busy' : 'online';
+    const now = new Date().toISOString();
+    const update: Record<string, unknown> = { last_heartbeat: now, active_tasks: activeTasks, status };
+    if (projects && projects.length > 0) update.projects = projects;
+    await this.supabase.from('machine_registry').update(update).eq('machine_id', machineId);
+  }
+
+  /**
    * Update the projects array for a machine (detected repos on disk).
    */
   async updateProjects(machineId: string, projects: string[]): Promise<void> {
