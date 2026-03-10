@@ -1318,22 +1318,24 @@ export class TaskExecutorService extends Service {
 
     const isWindows = sshService.isWindowsTarget(sshTarget);
 
-    // Remove the worktree via git, then prune
+    const branchName = `task/${shortId}`;
+
+    // Remove the worktree via git, then prune, then delete the local task branch
     if (isWindows) {
       await sshService.exec(
         sshTarget,
-        `cd '${repoPath}'; git -c safe.directory='*' worktree remove '${workspace}' --force 2>$null; git -c safe.directory='*' worktree prune 2>$null`,
+        `cd '${repoPath}'; git -c safe.directory='*' worktree remove '${workspace}' --force 2>$null; git -c safe.directory='*' worktree prune 2>$null; git -c safe.directory='*' branch -d ${branchName} 2>$null`,
         15_000,
       );
     } else {
       await sshService.exec(
         sshTarget,
-        this.wrapForUser(sshTarget, `cd ${repoPath} && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null`),
+        this.wrapForUser(sshTarget, `cd ${repoPath} && git -c safe.directory='*' worktree remove "${workspace}" --force 2>/dev/null; git -c safe.directory='*' worktree prune 2>/dev/null; git -c safe.directory='*' branch -d ${branchName} 2>/dev/null`),
         15_000,
       );
     }
 
-    this.runtime.logger.info(`[executor] Cleaned up worktree for task ${shortId} at ${workspace}`);
+    this.runtime.logger.info(`[executor] Cleaned up worktree for task ${shortId} at ${workspace} (branch ${branchName} deleted)`);
   }
 
   /**
