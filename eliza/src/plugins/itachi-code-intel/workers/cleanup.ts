@@ -49,7 +49,7 @@ export async function registerCleanupTask(runtime: IAgentRuntime): Promise<void>
       metadata: {
         updateInterval: 30 * 24 * 60 * 60 * 1000, // Monthly
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_CLEANUP repeating task (monthly)');
   } catch (error: unknown) {

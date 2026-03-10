@@ -138,7 +138,7 @@ export async function registerTaskDispatcherTask(runtime: IAgentRuntime): Promis
       metadata: {
         updateInterval: 10 * 1000, // 10 seconds
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_TASK_DISPATCHER repeating task (10s)');
   } catch (error: unknown) {

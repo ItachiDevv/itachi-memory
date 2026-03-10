@@ -369,7 +369,7 @@ export async function registerReminderPollerTask(runtime: IAgentRuntime): Promis
       metadata: {
         updateInterval: 60_000,
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_REMINDER_POLLER repeating task (60s)');
   } catch (error: unknown) {

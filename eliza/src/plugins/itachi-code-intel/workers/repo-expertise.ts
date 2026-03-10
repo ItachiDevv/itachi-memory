@@ -154,7 +154,7 @@ export async function registerRepoExpertiseTask(runtime: IAgentRuntime): Promise
       metadata: {
         updateInterval: 24 * 60 * 60 * 1000, // Daily
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_REPO_EXPERTISE repeating task (daily)');
   } catch (error: unknown) {

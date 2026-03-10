@@ -195,7 +195,7 @@ export async function registerTranscriptIndexerTask(runtime: IAgentRuntime): Pro
       metadata: {
         updateInterval: 60 * 60 * 1000, // 1 hour
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_TRANSCRIPT_INDEXER repeating task (1hr)');
   } catch (error) {

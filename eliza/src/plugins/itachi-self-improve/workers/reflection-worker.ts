@@ -151,7 +151,7 @@ export async function registerReflectionTask(runtime: IAgentRuntime): Promise<vo
       metadata: {
         updateInterval: 7 * 24 * 60 * 60 * 1000, // 7 days
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_REFLECTION repeating task (weekly)');
   } catch (error: unknown) {

@@ -19,8 +19,8 @@ import { itachiAgentsPlugin, subagentLifecycleWorker, registerSubagentLifecycleT
 import { itachiTesterPlugin, testRunnerWorker, registerTestRunnerTask } from './plugins/itachi-tester/index.js';
 
 /**
- * ElizaOS TaskWorker scheduler is non-functional (tasks never execute).
- * Use setInterval as a reliable alternative.
+ * setInterval-based fallback scheduler.
+ * Use ITACHI_USE_INTERVAL_SCHEDULER=true to bypass ElizaOS native TaskWorker.
  */
 interface WorkerDef {
   name: string;
@@ -75,12 +75,12 @@ const agent: ProjectAgent = {
     runtime.logger.info('Itachi agent initialized');
     runtime.logger.info(`Supabase URL: ${runtime.getSetting('SUPABASE_URL') ? 'configured' : 'MISSING'}`);
     runtime.logger.info(`Telegram: ${runtime.getSetting('TELEGRAM_BOT_TOKEN') ? 'configured' : 'MISSING'}`);
-    const useNativeTaskworker = resolveBoolSetting(
-      runtime.getSetting('ITACHI_USE_NATIVE_TASKWORKER') ?? process.env.ITACHI_USE_NATIVE_TASKWORKER,
+    const useIntervalScheduler = resolveBoolSetting(
+      runtime.getSetting('ITACHI_USE_INTERVAL_SCHEDULER') ?? process.env.ITACHI_USE_INTERVAL_SCHEDULER,
       false
     );
 
-    // Register workers with ElizaOS TaskWorker system (backup, currently non-functional)
+    // Register workers with ElizaOS native TaskWorker system
     const allWorkers = [
       { worker: reflectionWorker, register: registerReflectionTask, name: 'reflection' },
       { worker: editAnalyzerWorker, register: registerEditAnalyzerTask, name: 'edit-analyzer' },
@@ -111,11 +111,12 @@ const agent: ProjectAgent = {
     }
     runtime.logger.info(`Registered ${allWorkers.length} TaskWorkers with ElizaOS`);
 
-    // Schedule workers via setInterval (reliable execution fallback)
-    if (useNativeTaskworker) {
-      runtime.logger.info('[scheduler] ITACHI_USE_NATIVE_TASKWORKER=true, skipping interval fallback scheduler');
+    // Optionally fall back to setInterval-based scheduling
+    if (!useIntervalScheduler) {
+      runtime.logger.info('[scheduler] Using native ElizaOS TaskWorker scheduler (set ITACHI_USE_INTERVAL_SCHEDULER=true to use setInterval fallback)');
       return;
     }
+    runtime.logger.info('[scheduler] ITACHI_USE_INTERVAL_SCHEDULER=true, using setInterval fallback');
     if (intervalSchedulerStarted) {
       runtime.logger.warn('[scheduler] Interval scheduler already started, skipping duplicate init');
       return;

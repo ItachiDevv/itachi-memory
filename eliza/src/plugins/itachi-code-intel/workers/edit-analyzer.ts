@@ -103,7 +103,7 @@ export async function registerEditAnalyzerTask(runtime: IAgentRuntime): Promise<
       metadata: {
         updateInterval: 15 * 60 * 1000, // 15 minutes
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_EDIT_ANALYZER repeating task (15min)');
   } catch (error: unknown) {

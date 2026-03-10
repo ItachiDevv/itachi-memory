@@ -207,7 +207,7 @@ export async function registerHealthMonitorTask(runtime: IAgentRuntime): Promise
       metadata: {
         updateInterval: 60_000,
       },
-      tags: ['repeat'],
+      tags: ['queue', 'repeat'],
     } as any);
     runtime.logger.info('Registered ITACHI_HEALTH_MONITOR repeating task (60s)');
   } catch (error: unknown) {
