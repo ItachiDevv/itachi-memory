@@ -82,38 +82,47 @@ export class MachineRegistryService extends Service {
 
   /**
    * Update heartbeat timestamp and active task count.
-   * Does NOT revive machines that are marked offline — they must re-register explicitly.
+   * Returns null if machine is offline — caller must NOT re-register in that case.
+   * Returns the updated record if machine is online/busy.
+   * Inserts a new record if machine was never registered.
    * This prevents ghost heartbeats from bringing back machines that are actually down.
    */
-  async heartbeat(machineId: string, activeTasks: number): Promise<MachineRecord> {
+  async heartbeat(machineId: string, activeTasks: number): Promise<MachineRecord | null> {
     const status = activeTasks > 0 ? 'busy' : 'online';
     const now = new Date().toISOString();
 
-    // Try update first (fast path for existing machines)
+    // Update only if machine is online/busy (blocks reviving offline machines)
     const { data, error } = await this.supabase
       .from('machine_registry')
       .update({ last_heartbeat: now, active_tasks: activeTasks, status })
       .eq('machine_id', machineId)
-      .in('status', ['online', 'busy']) // Never revive an offline machine via heartbeat
+      .in('status', ['online', 'busy'])
       .select()
       .single();
 
     if (!error && data) return data as MachineRecord;
 
-    // Machine doesn't exist — upsert to create it
-    const { data: upserted, error: upsertErr } = await this.supabase
+    // No rows updated — check if machine exists (offline) or has never been registered
+    const { data: existing } = await this.supabase
       .from('machine_registry')
-      .upsert({
-        machine_id: machineId,
-        last_heartbeat: now,
-        active_tasks: activeTasks,
-        status,
-      }, { onConflict: 'machine_id' })
+      .select('machine_id, status')
+      .eq('machine_id', machineId)
+      .maybeSingle();
+
+    if (existing) {
+      // Machine is offline — don't revive it via heartbeat
+      return null;
+    }
+
+    // Machine not in registry — insert it as a new machine
+    const { data: inserted, error: insertErr } = await this.supabase
+      .from('machine_registry')
+      .insert({ machine_id: machineId, last_heartbeat: now, active_tasks: activeTasks, status })
       .select()
       .single();
 
-    if (upsertErr) throw new Error(upsertErr.message || JSON.stringify(upsertErr));
-    return upserted as MachineRecord;
+    if (insertErr) throw new Error(insertErr.message || JSON.stringify(insertErr));
+    return inserted as MachineRecord;
   }
 
   /**

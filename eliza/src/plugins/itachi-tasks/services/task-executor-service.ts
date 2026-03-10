@@ -208,22 +208,27 @@ export class TaskExecutorService extends Service {
         const projects = await this.detectProjectsOnMachine(machineId);
 
         // Register or heartbeat only the canonical SSH target (not all aliases)
-        try {
-          await registry.heartbeat(machineId, activeTasks);
-          if (projects.length > 0) {
-            await registry.updateProjects(machineId, projects);
+        const hbResult = await registry.heartbeat(machineId, activeTasks).catch(() => undefined);
+        if (hbResult === null) {
+          // Machine is marked offline in registry — don't revive it via heartbeat
+          this.runtime.logger.debug(`[executor] Machine "${machineId}" is offline in registry, skipping heartbeat`);
+        } else if (hbResult === undefined) {
+          // heartbeat() threw (DB error or machine not registered) — register it fresh
+          try {
+            await registry.registerMachine({
+              machine_id: machineId,
+              display_name: machineId,
+              projects,
+              max_concurrent: this.maxConcurrent,
+              os,
+              engine_priority: ['claude', 'codex', 'gemini'],
+            });
+            this.runtime.logger.info(`[executor] Registered machine "${machineId}" in registry (projects: ${projects.join(', ') || 'none'})`);
+          } catch (regErr) {
+            this.runtime.logger.warn(`[executor] Failed to register machine "${machineId}": ${regErr instanceof Error ? regErr.message : String(regErr)}`);
           }
-        } catch {
-          // Machine not registered yet — register it
-          await registry.registerMachine({
-            machine_id: machineId,
-            display_name: machineId,
-            projects,
-            max_concurrent: this.maxConcurrent,
-            os,
-            engine_priority: ['claude', 'codex', 'gemini'],
-          });
-          this.runtime.logger.info(`[executor] Registered machine "${machineId}" in registry (projects: ${projects.join(', ') || 'none'})`);
+        } else if (projects.length > 0) {
+          await registry.updateProjects(machineId, projects);
         }
       } catch (err) {
         this.runtime.logger.warn(`[executor] Heartbeat failed for ${machineId}: ${err instanceof Error ? err.message : String(err)}`);
