@@ -610,10 +610,15 @@ export class TaskExecutorService extends Service {
       }
     }
 
-    // If SSH target is root, chown workspace to 'itachi' user so claude can write
+    // If SSH target is root, chown workspace AND base repo git metadata to 'itachi'
+    // so claude (running as itachi) can commit, create lock files, etc.
     const wsTarget = sshService.getTarget(sshTarget);
     if (wsTarget?.user === 'root') {
-      await sshService.exec(sshTarget, `chown -R itachi:itachi "${workspacePath}" 2>/dev/null`, 10_000);
+      await sshService.exec(
+        sshTarget,
+        `chown -R itachi:itachi "${workspacePath}" "${repoPath}/.git/worktrees" 2>/dev/null`,
+        10_000,
+      );
     }
 
     this.runtime.logger.info(`[executor] Created worktree at ${workspacePath} from ${branch}`);
@@ -1180,9 +1185,27 @@ export class TaskExecutorService extends Service {
         this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' log origin/HEAD..HEAD --oneline 2>/dev/null | head -5`),
         10_000,
       );
-      if (unpushed.stdout?.trim()) {
+      if (unpushed.stdout?.trim() && !prUrl) {
         this.runtime.logger.info(`[executor] Found unpushed commits for task ${shortId}, pushing...`);
-        await sshService.exec(sshTarget, this.wrapForUser(sshTarget, buildPushCmd(workspace)), 30_000);
+        const unpushedPush = await sshService.exec(sshTarget, this.wrapForUser(sshTarget, buildPushCmd(workspace)), 30_000);
+        if (unpushedPush.success) {
+          // Also create PR for commits that Claude made during the session
+          const branchName = `task/${shortId}`;
+          const prResult = await sshService.exec(
+            sshTarget,
+            this.wrapForUser(sshTarget, `cd ${workspace} && gh pr create --fill --head ${branchName} 2>&1`),
+            15_000,
+          );
+          if (prResult.success) {
+            const urlMatch = prResult.stdout?.match(/https:\/\/github\.com\/[^\s]+/);
+            if (urlMatch) {
+              prUrl = urlMatch[0];
+              this.runtime.logger.info(`[executor] PR created for task ${shortId}: ${prUrl}`);
+            }
+          } else {
+            this.runtime.logger.warn(`[executor] PR creation failed (unpushed path): ${prResult.stderr || prResult.stdout}`);
+          }
+        }
       }
 
       // Always check files from last commit (Claude may have committed during session)
