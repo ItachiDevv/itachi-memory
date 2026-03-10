@@ -6,3 +6,8 @@ dist/
 .DS_Store
 Thumbs.db
 *.html
+nohup.out
+# Claude Code auto-memory files
+MEMORY.md
+debugging.md
+e2e-test-proof.md
