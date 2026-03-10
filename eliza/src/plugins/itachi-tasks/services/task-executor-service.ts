@@ -193,10 +193,22 @@ export class TaskExecutorService extends Service {
    */
   private async registerAndHeartbeat(): Promise<void> {
     const registry = this.runtime.getService<MachineRegistryService>('machine-registry');
-    if (!registry) return;
+    const sshService = this.runtime.getService<SSHService>('ssh');
+    if (!registry || !sshService) return;
 
     for (const machineId of this.managedMachines) {
       try {
+        // SSH connectivity check — determines online/offline, no guessing
+        const ping = await sshService.exec(machineId, 'echo OK', 5_000);
+        const reachable = ping.success && ping.stdout?.includes('OK');
+
+        if (!reachable) {
+          // Mark offline and skip — no heartbeat for unreachable machines
+          await registry.markOffline(machineId).catch(() => {});
+          this.runtime.logger.info(`[executor] Machine "${machineId}" unreachable — marked offline`);
+          continue;
+        }
+
         // Count active tasks on this machine
         const activeTasks = [...this.activeTasks.values()].filter(t => t.machineId === machineId).length;
 
@@ -204,16 +216,13 @@ export class TaskExecutorService extends Service {
         const lower = machineId.toLowerCase();
         const os = lower === 'mac' ? 'darwin' : lower === 'windows' ? 'win32' : 'linux';
 
-        // Detect projects on this machine (every heartbeat, cheap SSH call)
+        // Detect projects on this machine (SSH already confirmed reachable)
         const projects = await this.detectProjectsOnMachine(machineId);
 
-        // Register or heartbeat only the canonical SSH target (not all aliases)
+        // Heartbeat or register if new
         const hbResult = await registry.heartbeat(machineId, activeTasks).catch(() => undefined);
-        if (hbResult === null) {
-          // Machine is marked offline in registry — don't revive it via heartbeat
-          this.runtime.logger.debug(`[executor] Machine "${machineId}" is offline in registry, skipping heartbeat`);
-        } else if (hbResult === undefined) {
-          // heartbeat() threw (DB error or machine not registered) — register it fresh
+        if (hbResult === undefined) {
+          // heartbeat() threw — machine not in registry yet, register it fresh
           try {
             await registry.registerMachine({
               machine_id: machineId,
