@@ -195,6 +195,14 @@ try{const d=JSON.parse(process.argv[1]);const l=[];l.push('');l.push('=== Sessio
     [ -n "$BRIEFING_OUTPUT" ] && echo "$BRIEFING_OUTPUT"
 fi
 
+# ============ Itachi Init Check ============
+# Remind user if CLAUDE.md exists but /itachi-init hasn't been run yet
+if [ "$CLIENT" = "claude" ] && [ -f "CLAUDE.md" ] && ! grep -q "## Memory System" CLAUDE.md 2>/dev/null; then
+    echo ""
+    echo "[itachi] CLAUDE.md found but /itachi-init hasn't been run. Run /itachi-init to enable memory system context for this project."
+    echo ""
+fi
+
 # ============ Memory Context ============
 RECENT=$(curl -s -k -H "$AUTH_HEADER" "${MEMORY_API}/recent?project=${PROJECT_NAME}&limit=5&branch=${BRANCH}" --max-time 10 2>/dev/null)
 
