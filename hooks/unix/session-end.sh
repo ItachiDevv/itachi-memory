@@ -155,7 +155,10 @@ try {
         .map(f => ({ name: f, mt: fs.statSync(path.join(projectDir, f)).mtimeMs }))
         .sort((a, b) => b.mt - a.mt);
     if (files.length === 0) process.exit(0);
-    const content = fs.readFileSync(path.join(projectDir, files[0].name), 'utf8');
+    // Skip if transcript is too large (>10MB) to avoid hook timeout
+    const filePath = path.join(projectDir, files[0].name);
+    if (fs.statSync(filePath).size > 10 * 1024 * 1024) process.exit(0);
+    const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split('\n').filter(Boolean);
     let summary = '', firstTs = null, lastTs = null;
     for (const line of lines) {
@@ -267,6 +270,8 @@ function httpPost(url, body) {
             // Clean up temp file
             try { fs.unlinkSync(transcriptFileEnv); } catch {}
         } else if (transcriptPath) {
+            // Skip if transcript is too large (>10MB) to avoid OOM/slowness
+            if (fs.statSync(transcriptPath).size > 10 * 1024 * 1024) return;
             const content = fs.readFileSync(transcriptPath, 'utf8');
             const lines = content.split('\n').filter(Boolean);
 
@@ -340,7 +345,9 @@ try {
         .sort((a, b) => b.mt - a.mt);
     if (files.length === 0) process.exit(0);
 
-    const content = fs.readFileSync(path.join(projectDir, files[0].name), 'utf8');
+    const filePath2 = path.join(projectDir, files[0].name);
+    if (fs.statSync(filePath2).size > 10 * 1024 * 1024) process.exit(0);
+    const content = fs.readFileSync(filePath2, 'utf8');
     const lines = content.split('\n').filter(Boolean);
 
     // Extract all assistant + user text
