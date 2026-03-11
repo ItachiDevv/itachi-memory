@@ -609,14 +609,15 @@ export async function spawnRemoteControlSession(
     // Detect remote control URL or connection info
     // Claude Code outputs something like "Remote Control: https://..." or "claude.ai/code"
     if (!remoteUrlSent) {
-      const urlMatch = clean.match(/https:\/\/claude\.ai\/[^\s)]+/);
+      const urlMatch = clean.match(/https:\/\/(?:claude\.ai|code\.claude\.com)\/[^\s)]+/);
       if (urlMatch) {
         remoteUrlSent = true;
         topicsService.sendToTopic(topicId, `Remote Control is live!\n\nConnect: ${urlMatch[0]}\n\nYou can interact via claude.ai/code. Send /close in this topic to end the session.`).catch(() => {});
         return;
       }
-      // Also detect "Remote Control connecting" / "connected" messages
-      if (/remote\s*control/i.test(clean) && /connect/i.test(clean)) {
+      // Also detect "remote-control is active" or "Remote Control connecting/connected" messages
+      if (/remote.?control/i.test(clean) && /(active|connect)/i.test(clean)) {
+        remoteUrlSent = true;
         topicsService.sendToTopic(topicId, `${clean.trim()}\n\nGo to claude.ai/code to connect.`).catch(() => {});
         return;
       }
