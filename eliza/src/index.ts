@@ -16,6 +16,7 @@ import {
   cleanupWorker, registerCleanupTask,
 } from './plugins/itachi-code-intel/index.js';
 import { itachiAgentsPlugin, subagentLifecycleWorker, registerSubagentLifecycleTask } from './plugins/itachi-agents/index.js';
+import { itachiTesterPlugin, testRunnerWorker, registerTestRunnerTask } from './plugins/itachi-tester/index.js';
 
 /**
  * ElizaOS TaskWorker scheduler is non-functional (tasks never execute).
@@ -68,6 +69,7 @@ const agent: ProjectAgent = {
     itachiSelfImprovePlugin,
     itachiCodeIntelPlugin,
     itachiAgentsPlugin,
+    itachiTesterPlugin,
   ],
   init: async (runtime) => {
     runtime.logger.info('Itachi agent initialized');
@@ -96,6 +98,7 @@ const agent: ProjectAgent = {
       { worker: subagentLifecycleWorker, register: registerSubagentLifecycleTask, name: 'subagent-lifecycle' },
       { worker: effectivenessWorker, register: registerEffectivenessTask, name: 'effectiveness' },
       { worker: transcriptIndexerWorker, register: registerTranscriptIndexerTask, name: 'transcript-indexer' },
+      { worker: testRunnerWorker, register: registerTestRunnerTask, name: 'test-runner' },
     ];
 
     for (const { worker, register, name } of allWorkers) {
@@ -168,6 +171,10 @@ const agent: ProjectAgent = {
       { name: 'transcript-indexer', intervalMs: 3_600_000, delayMs: 90_000,
         validate: (rt) => transcriptIndexerWorker.validate!(rt, {} as any, {} as any),
         execute: (rt) => transcriptIndexerWorker.execute(rt, {}, { name: 'ITACHI_TRANSCRIPT_INDEXER', tags: [], description: '' }) },
+      // Tester: E2E tests (6h, first run after 5min)
+      { name: 'test-runner', intervalMs: 21_600_000, delayMs: 300_000,
+        validate: (rt) => testRunnerWorker.validate!(rt, {} as any, {} as any),
+        execute: (rt) => testRunnerWorker.execute(rt, {}, { name: 'ITACHI_TEST_RUNNER', tags: [], description: '' }) },
     ]);
   },
 };
