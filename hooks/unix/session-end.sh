@@ -5,8 +5,16 @@
 # 3) Extracts conversation insights from transcript (background)
 # 4) Extracts decisions/state changes and writes to decisions.md
 
-# Read stdin immediately (before any backgrounding) so Claude Code's pipe is consumed
-INPUT=$(cat)
+# Read stdin with 1s timeout — Claude Code gives SessionEnd hooks only 1.5s total.
+# 'cat' blocks if Claude Code doesn't close stdin (ABORT_ERR after 1.5s = "Hook cancelled").
+# macOS has no 'timeout' command; bash 3.2 'read -t' doesn't work with pipes.
+# python3 select.select() works correctly with real Unix pipes.
+INPUT=$(python3 -c "
+import sys, select
+r, _, _ = select.select([sys.stdin], [], [], 1.0)
+print(sys.stdin.read().strip() if r else '{}', end='')
+" 2>/dev/null) || INPUT='{}'
+[ -z "$INPUT" ] && INPUT='{}'
 
 # Fork all work to background and exit immediately so Claude Code sees success instantly.
 # disown detaches the child from this shell's process group so it survives shutdown signals.
