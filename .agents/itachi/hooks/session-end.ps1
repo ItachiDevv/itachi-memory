@@ -17,6 +17,18 @@
 #
 # Set ITACHI_DISABLED=1 to opt out.
 
+# Prevent Ctrl+C / SIGTERM from cancelling this hook (equivalent to Unix 'trap "" SIGTERM SIGINT SIGHUP')
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class ItachiHookGuard {
+    [DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(IntPtr h, bool add);
+}
+'@
+    [ItachiHookGuard]::SetConsoleCtrlHandler([IntPtr]::Zero, $true) | Out-Null
+} catch {}
+
 if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 
 try {
