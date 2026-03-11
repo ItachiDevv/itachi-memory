@@ -27,11 +27,14 @@ export const MACHINE_TO_SSH_TARGET: Record<string, string> = {
   // Direct SSH target names
   mac: 'mac',
   windows: 'windows',
+  surface: 'surface',
   hetzner: 'coolify',
   coolify: 'coolify',
   // Machine registry IDs (from orchestrator registration)
   'itachi-m1': 'mac',
   'windows-pc': 'windows',
+  'surface-win': 'surface',
+  'hetzner-vps': 'coolify',
   // Common aliases
   macbook: 'mac',
   desktop: 'windows',
@@ -39,6 +42,7 @@ export const MACHINE_TO_SSH_TARGET: Record<string, string> = {
   vps: 'coolify',
   production: 'coolify',
   prod: 'coolify',
+  linux: 'coolify',
 };
 
 /** Resolve a machine identifier to an SSH target name */
@@ -63,6 +67,7 @@ export function getMachineIdsForTarget(sshTarget: string): string[] {
 export const DEFAULT_REPO_PATHS: Record<string, string> = {
   mac: '~/itachi/itachi-memory',
   windows: '~/Documents/Crypto/skills-plugins/itachi-memory',
+  surface: 'C:/Users/itachi/Documents/itachi-memory',
   coolify: '/home/itachi/itachi/itachi-memory',
 };
 

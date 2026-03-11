@@ -13,7 +13,7 @@ import {
 } from '../utils/directory-browser.js';
 import { getStartingDir } from '../shared/start-dir.js';
 import { resolveSSHTarget } from '../shared/repo-utils.js';
-import { spawnSessionInTopic, wrapStreamJsonInput } from '../actions/interactive-session.js';
+import { spawnSessionInTopic, spawnRemoteControlSession, wrapStreamJsonInput } from '../actions/interactive-session.js';
 import { activeSessions, pendingQuestions, spawningTopics } from '../shared/active-sessions.js';
 import { isSessionTopic, shouldSuppressLLMMessage } from '../shared/active-sessions.js';
 import {
@@ -391,6 +391,13 @@ async function handleCallback(runtime: IAgentRuntime, ctx: any): Promise<void> {
   // bp:a:<shortId> or bp:r:<shortId> — brain proposal approve/reject
   if (data.startsWith('bp:')) {
     await handleBrainProposalCallback(runtime, data, chatId, messageId);
+    return;
+  }
+
+  // remote:<target> — remote control machine picker callback
+  if (data.startsWith('remote:')) {
+    const target = data.substring(7);
+    await handleRemoteCallback(runtime, target, chatId, messageId);
     return;
   }
 
@@ -1372,5 +1379,55 @@ async function resolveEngine(runtime: IAgentRuntime, sshTarget: string): Promise
     return ENGINE_WRAPPERS[machine.engine_priority[0]] || 'itachi';
   } catch {
     return 'itachi';
+  }
+}
+
+/**
+ * Handle /remote machine picker callback: spawn remote control session on selected target.
+ */
+async function handleRemoteCallback(
+  runtime: IAgentRuntime,
+  target: string,
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  const sshService = runtime.getService<SSHService>('ssh');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!sshService || !topicsService) return;
+
+  const resolved = resolveSSHTarget(target);
+  if (!sshService.getTarget(resolved)) {
+    await topicsService.sendMessageWithKeyboard(`Unknown target: ${target}`, []);
+    return;
+  }
+
+  // Create Telegram topic
+  const topicName = `Remote: ${resolved}`;
+  const topicResult = await (topicsService as any).apiCall('createForumTopic', {
+    chat_id: (topicsService as any).groupChatId,
+    name: topicName.substring(0, 128),
+  });
+
+  if (!topicResult?.ok || !topicResult.result?.message_thread_id) {
+    await topicsService.sendMessageWithKeyboard(`Failed to create topic for remote session on ${resolved}`, []);
+    return;
+  }
+
+  const topicId = topicResult.result.message_thread_id;
+
+  // Resolve repo path
+  const { DEFAULT_REPO_PATHS } = await import('../shared/repo-utils.js');
+  const repoPath = DEFAULT_REPO_PATHS[resolved] || getStartingDir(resolved);
+  const engineCmd = await resolveEngine(runtime, resolved);
+
+  const sessionId = await spawnRemoteControlSession(
+    runtime, sshService, topicsService,
+    resolved, repoPath, engineCmd, topicId, repoPath.split('/').pop() || 'unknown',
+  );
+
+  if (sessionId) {
+    await topicsService.sendMessageWithKeyboard(`Remote Control starting on ${resolved}.\n\nCheck topic "${topicName}" for connection info.\nConnect at claude.ai/code`, []);
+  } else {
+    await topicsService.sendMessageWithKeyboard(`Failed to start Remote Control on ${resolved}. Check SSH connectivity.`, []);
   }
 }

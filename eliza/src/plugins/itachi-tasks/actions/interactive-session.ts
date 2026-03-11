@@ -155,7 +155,8 @@ const MACHINE_ALIASES: Record<string, string> = {
   mac: 'mac', macbook: 'mac', apple: 'mac',
   'windows-pc': 'windows', 'windows pc': 'windows',
   windows: 'windows', pc: 'windows', win: 'windows', desktop: 'windows',
-  hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify',
+  'surface-win': 'surface', surface: 'surface',
+  hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify', linux: 'coolify',
 };
 
 // ── Engine wrapper resolution ────────────────────────────────────────
@@ -552,6 +553,146 @@ export async function handleEngineHandoff(
     await topicsService.sendToTopic(topicId,
       `Failed to start ${nextEngine} session. Try manually with /switch ${nextEngine}.`);
   }
+}
+
+/**
+ * Spawn a Remote Control session on a target machine.
+ * Unlike spawnSessionInTopic (which uses -p / stream-json for headless execution),
+ * this starts Claude in interactive TUI mode so remoteControlAtStartup kicks in.
+ * The user connects via claude.ai/code — Telegram topic just shows status updates.
+ *
+ * Returns the sessionId on success, or null on failure.
+ */
+export async function spawnRemoteControlSession(
+  runtime: IAgentRuntime,
+  sshService: SSHService,
+  topicsService: TelegramTopicsService,
+  target: string,
+  repoPath: string,
+  engineCommand: string,
+  topicId: number,
+  project?: string,
+): Promise<string | null> {
+  // TUI mode: no -p, no --output-format. Just --ds for dangerously-skip-permissions.
+  // The machine's settings.json remoteControlAtStartup: true will auto-start /remote-control.
+  const sshCommand = `cd ${repoPath} && ${engineCommand} --ds`;
+
+  await topicsService.sendToTopic(
+    topicId,
+    `Starting Remote Control session on ${target}\nProject: ${project || 'unknown'}\nEngine: ${engineCommand}\n\nWaiting for remote control URL...`,
+  );
+
+  const sessionId = `remote-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const sessionTranscript: TranscriptEntry[] = [];
+  let remoteUrlSent = false;
+
+  // TUI output handler — parse ANSI-heavy output, look for remote control URL
+  const onStdout = (chunk: string) => {
+    const clean = stripAnsi(chunk);
+    if (!clean.trim()) return;
+
+    sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
+
+    // Detect remote control URL or connection info
+    // Claude Code outputs something like "Remote Control: https://..." or "claude.ai/code"
+    if (!remoteUrlSent) {
+      const urlMatch = clean.match(/https:\/\/claude\.ai\/[^\s)]+/);
+      if (urlMatch) {
+        remoteUrlSent = true;
+        topicsService.sendToTopic(topicId, `Remote Control is live!\n\nConnect: ${urlMatch[0]}\n\nYou can interact via claude.ai/code. Send /close in this topic to end the session.`).catch(() => {});
+        return;
+      }
+      // Also detect "Remote Control connecting" / "connected" messages
+      if (/remote\s*control/i.test(clean) && /connect/i.test(clean)) {
+        topicsService.sendToTopic(topicId, `${clean.trim()}\n\nGo to claude.ai/code to connect.`).catch(() => {});
+        return;
+      }
+    }
+
+    // Forward significant output to Telegram (not every TUI frame)
+    const filtered = filterTuiNoise(clean);
+    if (filtered && filtered.length > 10) {
+      topicsService.receiveChunk(sessionId, topicId, filtered).catch(() => {});
+    }
+  };
+
+  const onStderr = (chunk: string) => {
+    const clean = filterTuiNoise(stripAnsi(chunk));
+    if (!clean) return;
+    sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
+    // Forward hook output (session briefings etc) to topic
+    if (clean.length > 10) {
+      topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch(() => {});
+    }
+  };
+
+  const onExit = (code: number) => {
+    topicsService.finalFlush(sessionId).then(() => {
+      topicsService.sendToTopic(topicId, `\n--- Remote Control session ended (exit code: ${code}) ---\nUse /remote ${target} to start a new one.`);
+    }).catch(() => {});
+
+    const session = activeSessions.get(topicId);
+    if (session && session.transcript.length > 0) {
+      analyzeAndStoreTranscript(runtime, session.transcript, {
+        source: 'remote-control',
+        project: session.project,
+        sessionId: session.sessionId,
+        target: session.target,
+        description: 'Remote Control session',
+        outcome: code === 0 ? 'completed' : `exited with code ${code}`,
+        durationMs: Date.now() - session.startedAt,
+      }).catch(err => {
+        runtime.logger.error(`[remote] Transcript analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
+
+    activeSessions.delete(topicId);
+    markSessionClosed(topicId, { target, project: project || 'unknown', engineCommand, repoPath, mode: 'tui' });
+    runtime.logger.info(`[remote] ${sessionId} exited with code ${code}`);
+  };
+
+  // Spawn with PTY (TUI mode), very long timeout (8 hours), and stdin open
+  const handle = sshService.spawnInteractiveSession(
+    target,
+    sshCommand,
+    onStdout,
+    onStderr,
+    onExit,
+    8 * 60 * 60 * 1000, // 8 hours
+    { usePty: true, closeStdin: false },
+  );
+
+  if (!handle) {
+    await topicsService.sendToTopic(topicId, 'Failed to start SSH session. Check SSH target configuration.');
+    return null;
+  }
+
+  activeSessions.set(topicId, {
+    sessionId,
+    topicId,
+    target,
+    handle,
+    startedAt: Date.now(),
+    transcript: sessionTranscript,
+    project: project || 'unknown',
+    mode: 'tui',
+    currentEngine: 'claude',
+    rateLimitCount: 0,
+    totalTurns: 0,
+    lastUsageCheckTime: Date.now(),
+  });
+
+  // If remote control URL hasn't been detected after 30s, send a generic message
+  setTimeout(() => {
+    if (!remoteUrlSent && activeSessions.has(topicId)) {
+      remoteUrlSent = true;
+      topicsService.sendToTopic(topicId,
+        'Remote Control should be active. Go to claude.ai/code to connect.\n\nIf it\'s not connecting, the session may still be initializing. Send /close to end and try again.'
+      ).catch(() => {});
+    }
+  }, 30_000);
+
+  return sessionId;
 }
 
 export const interactiveSessionAction: Action = {

@@ -14,7 +14,7 @@ import {
   getFlow, setFlow, clearFlow, cleanupStaleFlows,
   flowKey, conversationFlows, type ConversationFlow,
 } from '../shared/conversation-flows.js';
-import { interactiveSessionAction, wrapStreamJsonInput } from './interactive-session.js';
+import { interactiveSessionAction, wrapStreamJsonInput, spawnRemoteControlSession } from './interactive-session.js';
 
 /**
  * Handles /recall, /repos, and /machines Telegram commands.
@@ -23,7 +23,7 @@ import { interactiveSessionAction, wrapStreamJsonInput } from './interactive-ses
  */
 export const telegramCommandsAction: Action = {
   name: 'TELEGRAM_COMMANDS',
-  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete_topics, /close, /close_all_topics, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, /taskstatus, interactive /task flows, /session (no args, shows machine picker), and /session <machine> (direct session on named target)',
+  description: 'Handle /help, /recall, /repos, /machines, /engines, /sync_repos, /delete_topics, /close, /close_all_topics, /feedback, /learn, /teach, /unteach, /forget, /spawn, /agents, /msg, /taskstatus, interactive /task flows, /session (no args, shows machine picker), /session <machine> (direct session on named target), /remote (remote control session picker), and /remote <machine> (start remote control on target)',
   similes: ['help', 'show commands', 'recall memory', 'search memories', 'list repos', 'show repos', 'repositories', 'list machines', 'show machines', 'orchestrators', 'available machines', 'sync repos', 'sync github', 'delete done topics', 'delete failed topics', 'close done topics', 'close failed topics', 'task feedback', 'rate task', 'learn instruction', 'teach rule', 'teach preference', 'teach personality', 'unteach', 'forget rule', 'spawn agent', 'list agents', 'message agent', 'engine priority', 'show engines', 'set engines'],
   examples: [
     [
@@ -113,11 +113,13 @@ export const telegramCommandsAction: Action = {
     if (taskMatch && !taskMatch[1].includes(' ')) return true;
 
     // /session (no args or with machine arg) → interactive flow
+    // /remote (no args or with machine arg) → remote control session
     // Suppress LLM chatter in General BEFORE it's generated. validate() runs before
     // the LLM generates text, so this is the right place to set the flag.
-    if (text === '/session' || text.startsWith('/session ')) {
+    if (text === '/session' || text.startsWith('/session ') ||
+        text === '/remote' || text.startsWith('/remote ')) {
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
-      runtime.logger.info(`[telegram-commands] validate /session: chatId=${topicsService?.chatId} suppressing LLM chatter`);
+      runtime.logger.info(`[telegram-commands] validate /session|/remote: chatId=${topicsService?.chatId} suppressing LLM chatter`);
       if (topicsService?.chatId) {
         suppressNextLLMMessage(topicsService.chatId, 1);   // General topic (threadId=1)
         suppressNextLLMMessage(topicsService.chatId, null); // fallback (no threadId)
@@ -249,6 +251,16 @@ export const telegramCommandsAction: Action = {
         const result = await interactiveSessionAction.handler(runtime, message, _state, _options, callback);
         (message.content as Record<string, unknown>)._sessionSpawned = true;
         return result ?? { success: true };
+      }
+
+      // /remote (no args) → show machine picker for remote control
+      if (text === '/remote') {
+        return await handleRemoteFlow(runtime, message, callback);
+      }
+
+      // /remote <machine> → spawn remote control session (TUI mode, no -p)
+      if (text.startsWith('/remote ')) {
+        return await handleRemoteSession(runtime, message, text, callback);
       }
 
       // /delete_topic [id] — show topic picker or delete by ID
@@ -1944,6 +1956,8 @@ export async function handleHelp(callback?: HandlerCallback): Promise<ActionResu
 **Sessions & SSH**
   /session — Interactive session (pick machine, folder, mode)
   /session <target> <prompt> — Quick session start
+  /remote — Remote Control session (pick machine, connect via claude.ai/code)
+  /remote <target> — Quick remote control start on target machine
   /ssh <target> <cmd> — Run command on machine
   /ssh targets — List SSH targets
   /ssh test — Test SSH connectivity
@@ -2008,5 +2022,134 @@ export async function handleHelp(callback?: HandlerCallback): Promise<ActionResu
 
   if (callback) await callback({ text: help });
   return { success: true };
+}
+
+// ── Remote Control Flow Handlers ──────────────────────────────────────
+
+/**
+ * /remote (no args) — show machine picker for remote control
+ */
+async function handleRemoteFlow(
+  runtime: IAgentRuntime,
+  message: Memory,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  const sshService = runtime.getService<SSHService>('ssh');
+  if (!topicsService || !sshService) {
+    if (callback) await callback({ text: 'Required services not available (topics or SSH).' });
+    return { success: false, error: 'Services not available' };
+  }
+
+  const targets = sshService.getTargets();
+  const targetList = Array.from(targets.keys());
+
+  if (targetList.length === 0) {
+    if (callback) await callback({ text: 'No SSH targets configured.' });
+    return { success: false, error: 'No SSH targets' };
+  }
+
+  const kbRows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < targetList.length; i += 2) {
+    const row: Array<{ text: string; callback_data: string }> = [];
+    row.push({ text: targetList[i], callback_data: `remote:${targetList[i]}` });
+    if (i + 1 < targetList.length) {
+      row.push({ text: targetList[i + 1], callback_data: `remote:${targetList[i + 1]}` });
+    }
+    kbRows.push(row);
+  }
+
+  await topicsService.sendMessageWithKeyboard(
+    'Remote Control\n\nSelect target machine (session starts in TUI mode with /remote-control):',
+    kbRows,
+  );
+
+  if (callback) await callback({ text: '', action: 'IGNORE' });
+  return { success: true };
+}
+
+/**
+ * /remote <machine> — spawn a remote control session on the target machine
+ */
+async function handleRemoteSession(
+  runtime: IAgentRuntime,
+  message: Memory,
+  text: string,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  const sshService = runtime.getService<SSHService>('ssh');
+  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
+  if (!sshService || !topicsService) {
+    if (callback) await callback({ text: 'Required services not available.' });
+    return { success: false, error: 'Services not available' };
+  }
+
+  // Parse target from /remote <target>
+  const targetName = text.replace(/^\/remote\s+/i, '').trim().split(/\s+/)[0].toLowerCase();
+  if (!targetName) {
+    if (callback) await callback({ text: 'Usage: /remote <machine>\nExample: /remote mac' });
+    return { success: false, error: 'No target specified' };
+  }
+
+  // Resolve through aliases
+  const { resolveSSHTarget } = await import('../shared/repo-utils.js');
+  const resolved = resolveSSHTarget(targetName);
+  const sshTarget = sshService.getTarget(resolved);
+  if (!sshTarget) {
+    const available = [...sshService.getTargets().keys()].join(', ');
+    if (callback) await callback({ text: `Unknown target: ${targetName}\nAvailable: ${available}` });
+    return { success: false, error: `Unknown target: ${targetName}` };
+  }
+
+  // Create Telegram topic for this remote control session
+  const topicName = `Remote: ${resolved}`;
+  const topicResult = await (topicsService as any).apiCall('createForumTopic', {
+    chat_id: (topicsService as any).groupChatId,
+    name: topicName.substring(0, 128),
+  });
+
+  if (!topicResult?.ok || !topicResult.result?.message_thread_id) {
+    if (callback) await callback({ text: `Failed to create topic: ${topicResult?.description || 'unknown error'}` });
+    return { success: false, error: 'Failed to create topic' };
+  }
+
+  const topicId = topicResult.result.message_thread_id;
+
+  // Resolve repo path
+  const { DEFAULT_REPO_PATHS } = await import('../shared/repo-utils.js');
+  const { getStartingDir } = await import('../shared/start-dir.js');
+  const repoPath = DEFAULT_REPO_PATHS[resolved] || getStartingDir(resolved);
+
+  // Resolve engine command
+  let engineCmd = 'itachi';
+  try {
+    const registry = runtime.getService<MachineRegistryService>('machine-registry');
+    if (registry) {
+      const { machine } = await registry.resolveMachine(resolved);
+      const engine = machine?.engine_priority?.[0] || 'claude';
+      const wrappers: Record<string, string> = { claude: 'itachi', codex: 'itachic', gemini: 'itachig' };
+      engineCmd = wrappers[engine] || 'itachi';
+    }
+  } catch { /* default to itachi */ }
+
+  // Spawn remote control session
+  const sessionId = await spawnRemoteControlSession(
+    runtime, sshService, topicsService,
+    resolved, repoPath, engineCmd, topicId, repoPath.split('/').pop() || 'unknown',
+  );
+
+  if (!sessionId) {
+    if (callback) await callback({ text: `Failed to start Remote Control session on ${resolved}. Check SSH connectivity.` });
+    return { success: false, error: 'Failed to spawn session' };
+  }
+
+  if (callback) {
+    await callback({
+      text: `Remote Control session starting on ${resolved}!\n\nTopic: "${topicName}"\n\nOnce ready, connect at claude.ai/code\nSend /close in the topic to end the session.`,
+      action: 'IGNORE',
+    });
+  }
+
+  return { success: true, data: { sessionId, topicId, target: resolved } };
 }
 
