@@ -6,9 +6,9 @@
 # 2) Fetches session briefing from code-intel API
 # 3) Fetches recent memories for context
 # 4) Writes briefing/rules to the appropriate context file:
-#    - claude  → ~/.claude/projects/{encoded-cwd}/memory/MEMORY.md
-#    - codex   → {cwd}/AGENTS.md
-#    - default → {cwd}/AGENTS.md
+#    - claude  -> ~/.claude/projects/{encoded-cwd}/memory/MEMORY.md
+#    - codex   -> {cwd}/AGENTS.md
+#    - default -> {cwd}/AGENTS.md
 #
 # Set ITACHI_DISABLED=1 to opt out.
 
@@ -560,7 +560,7 @@ function decrypt(encB64, saltB64, passphrase) {
     } catch {}
 
     # ============ Write Briefing to Context File ============
-    # Claude → MEMORY.md in auto-memory dir, others → AGENTS.md in project root
+    # Claude -> MEMORY.md in auto-memory dir, others -> AGENTS.md in project root
     try {
         $cwd = (Get-Location).Path
         $contextScript = @"
@@ -686,7 +686,7 @@ catch {
     # Silently ignore - don't block session start
 }
 
-# ============ SSH Session Detection — Notify via Telegram ============
+# ============ SSH Session Detection -- Notify via Telegram ============
 # If this session was started via SSH, remote-control is auto-enabled (remoteControlAtStartup=true).
 # Send a Telegram message so the user knows to connect via claude.ai/code or the Claude app.
 try {
@@ -702,7 +702,7 @@ try {
         }
         if ($telegramToken -and $chatId) {
             $hostname = $env:COMPUTERNAME
-            $msg = "🖥 Remote session started on $hostname via SSH. Remote Control is active — connect at claude.ai/code or open the Claude mobile app to take over."
+            $msg = "[Remote] Session started on $hostname via SSH. Remote Control is active - connect at claude.ai/code or open the Claude mobile app to take over."
             $body = @{ chat_id = $chatId; text = $msg } | ConvertTo-Json
             Invoke-RestMethod -Uri "https://api.telegram.org/bot$telegramToken/sendMessage" `
                 -Method POST -ContentType "application/json" -Body $body -ErrorAction SilentlyContinue | Out-Null
