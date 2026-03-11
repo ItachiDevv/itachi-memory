@@ -575,7 +575,20 @@ export async function spawnRemoteControlSession(
 ): Promise<string | null> {
   // TUI mode: no -p, no --output-format. Just --ds for dangerously-skip-permissions.
   // The machine's settings.json remoteControlAtStartup: true will auto-start /remote-control.
-  const sshCommand = `cd ${repoPath} && ${engineCommand} --ds`;
+  const isWindows = sshService.isWindowsTarget(target);
+  let sshCommand: string;
+  if (isWindows) {
+    // On Windows, the itachi wrapper lives at $env:USERPROFILE\.claude\itachi.cmd
+    // and may not be in PATH. Use full path, or fall back to claude.
+    // SSH service wraps in powershell.exe, so use PowerShell syntax.
+    sshCommand = [
+      `cd '${repoPath}'`,
+      `$wrapper = Join-Path $env:USERPROFILE '.claude\\${engineCommand}.cmd'`,
+      `if (Test-Path $wrapper) { cmd /c $wrapper --ds } else { claude --dangerously-skip-permissions }`,
+    ].join('; ');
+  } else {
+    sshCommand = `cd ${repoPath} && ${engineCommand} --ds`;
+  }
 
   await topicsService.sendToTopic(
     topicId,
@@ -659,7 +672,7 @@ export async function spawnRemoteControlSession(
     onStderr,
     onExit,
     8 * 60 * 60 * 1000, // 8 hours
-    { usePty: true, closeStdin: false },
+    { usePty: !isWindows, closeStdin: false },
   );
 
   if (!handle) {
