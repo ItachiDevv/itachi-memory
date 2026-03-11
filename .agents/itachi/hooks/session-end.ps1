@@ -368,6 +368,9 @@ function extractCodexTexts(lines) {
         // Generic clients: no transcript extraction (no known format)
         if (!transcriptPath) return;
 
+        // Skip if transcript is too large (>10MB) to avoid hook timeout
+        if (fs.statSync(transcriptPath).size > 10 * 1024 * 1024) return;
+
         const content = fs.readFileSync(transcriptPath, 'utf8');
         const lines = content.split('\n').filter(Boolean);
 
