@@ -195,6 +195,27 @@ try{const d=JSON.parse(process.argv[1]);const l=[];l.push('');l.push('=== Sessio
     [ -n "$BRIEFING_OUTPUT" ] && echo "$BRIEFING_OUTPUT"
 fi
 
+# ============ Decisions & State Facts (inject first — highest priority context) ============
+if [ "$CLIENT" = "claude" ]; then
+    node -e "
+const fs = require('fs'), path = require('path'), os = require('os');
+function enc(p) { return p.replace(/:/g,'').replace(/[\\\\/]/g,'--').replace(/^-+|-+\$/g,''); }
+try {
+    const decisionsFile = path.join(os.homedir(), '.claude', 'projects', enc(process.argv[1]), 'memory', 'decisions.md');
+    if (!fs.existsSync(decisionsFile)) process.exit(0);
+    const content = fs.readFileSync(decisionsFile, 'utf8').trim();
+    if (!content) process.exit(0);
+    // Show last 30 lines (most recent decisions)
+    const lines = content.split('\n').filter(Boolean).slice(-30);
+    console.log('');
+    console.log('=== Recent Decisions & State Facts (read before acting) ===');
+    console.log(lines.join('\n'));
+    console.log('=== End Decisions ===');
+    console.log('');
+} catch(e) {}
+" "$PWD" 2>/dev/null
+fi
+
 # ============ Itachi Init Check ============
 # Remind user if CLAUDE.md exists but /itachi-init hasn't been run yet
 if [ "$CLIENT" = "claude" ] && [ -f "CLAUDE.md" ] && ! grep -q "## Memory System" CLAUDE.md 2>/dev/null; then

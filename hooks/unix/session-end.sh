@@ -3,6 +3,10 @@
 # 1) Logs session end to memory API
 # 2) Posts session complete to code-intel API
 # 3) Extracts conversation insights from transcript (background)
+# 4) Extracts decisions/state changes and writes to decisions.md
+
+# CRITICAL: Ignore termination signals so hook completes even when session is force-closed
+trap '' SIGTERM SIGINT SIGHUP
 
 BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 MEMORY_API="$BASE_API/api/memory"
@@ -312,5 +316,84 @@ function httpPost(url, body) {
     } catch(e) {}
 })();
 " "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" 2>/dev/null &
+
+# ============ Extract Decisions & State Facts (local write, no API dependency) ============
+# Scans the transcript for explicit state changes, decisions, corrections, and "do not" facts.
+# Written locally so they survive API outages and persist across compactions.
+node -e "
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\\\/]/g, '--').replace(/^-+|-+\$/g, ''); }
+
+try {
+    const cwd = process.argv[1];
+    const memDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), 'memory');
+    fs.mkdirSync(memDir, { recursive: true });
+
+    // Find latest transcript
+    const projectDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd));
+    if (!fs.existsSync(projectDir)) process.exit(0);
+    const files = fs.readdirSync(projectDir).filter(f => f.endsWith('.jsonl'))
+        .map(f => ({ name: f, mt: fs.statSync(path.join(projectDir, f)).mtimeMs }))
+        .sort((a, b) => b.mt - a.mt);
+    if (files.length === 0) process.exit(0);
+
+    const content = fs.readFileSync(path.join(projectDir, files[0].name), 'utf8');
+    const lines = content.split('\n').filter(Boolean);
+
+    // Extract all assistant + user text
+    const turns = [];
+    for (const line of lines) {
+        try {
+            const e = JSON.parse(line);
+            const role = e.type === 'assistant' ? 'AI' : e.type === 'human' ? 'USER' : null;
+            if (!role) continue;
+            const parts = Array.isArray(e.message?.content)
+                ? e.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                : (typeof e.message?.content === 'string' ? e.message.content : '');
+            if (parts.length > 10) turns.push({ role, text: parts.substring(0, 500) });
+        } catch {}
+    }
+    if (turns.length === 0) process.exit(0);
+
+    // Pattern-match decisions: state changes, corrections, explicit facts
+    const decisions = [];
+    const statePatterns = [
+        /\b(disabled?|enabled?|turned (off|on)|stopped?|started?|installed?|removed?|deleted?|configured?|set to|changed to|switched to|now using|no longer)\b.{5,80}/gi,
+        /\b(do not|don't|never|always|must not|should not)\b.{5,80}/gi,
+        /\b(the (correct|right|actual|real) (value|key|path|port|host|user|token|password) (is|for))\b.{5,80}/gi,
+        /\b(SSH (is|was) (disabled?|enabled?|blocked?|open))\b.{5,80}/gi,
+        /\b(authorized_keys (is|goes|should be) in)\b.{5,80}/gi,
+    ];
+
+    for (const turn of turns.slice(-60)) { // last 60 turns
+        for (const pat of statePatterns) {
+            const matches = turn.text.match(pat) || [];
+            for (const m of matches) {
+                const clean = m.replace(/\s+/g, ' ').trim();
+                if (clean.length > 15 && clean.length < 200 && !decisions.includes(clean)) {
+                    decisions.push('[' + turn.role + '] ' + clean);
+                }
+            }
+        }
+    }
+
+    if (decisions.length === 0) process.exit(0);
+
+    // Write/append to decisions.md with session date header
+    const decisionsFile = path.join(memDir, 'decisions.md');
+    const date = new Date().toISOString().substring(0, 10);
+    let existing = fs.existsSync(decisionsFile) ? fs.readFileSync(decisionsFile, 'utf8') : '';
+
+    // Keep last 100 lines to avoid unbounded growth
+    const existingLines = existing.split('\n').filter(Boolean).slice(-100);
+    const newEntries = decisions.slice(0, 20).map(d => '- ' + d);
+    const header = '\\n## ' + date;
+    const newContent = existingLines.join('\n') + header + '\\n' + newEntries.join('\n') + '\\n';
+    fs.writeFileSync(decisionsFile, newContent);
+} catch(e) {}
+" "$PWD" 2>/dev/null &
 
 exit 0
