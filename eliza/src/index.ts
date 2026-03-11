@@ -1,9 +1,9 @@
 import type { Project, ProjectAgent, IAgentRuntime } from '@elizaos/core';
 import { character } from './character.js';
-import { itachiMemoryPlugin } from './plugins/itachi-memory/index.js';
+import { itachiMemoryPlugin, transcriptIndexerWorker, registerTranscriptIndexerTask } from './plugins/itachi-memory/index.js';
 import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask, proactiveMonitorWorker, registerProactiveMonitorTask, healthMonitorWorker, registerHealthMonitorTask, brainLoopWorker, registerBrainLoopTask } from './plugins/itachi-tasks/index.js';
 import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
-import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask } from './plugins/itachi-self-improve/index.js';
+import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask, effectivenessWorker, registerEffectivenessTask } from './plugins/itachi-self-improve/index.js';
 import { itachiCodexPlugin } from './plugins/plugin-codex/index.js';
 import { itachiGeminiPlugin } from './plugins/plugin-gemini/index.js';
 import {
@@ -94,6 +94,8 @@ const agent: ProjectAgent = {
       { worker: healthMonitorWorker, register: registerHealthMonitorTask, name: 'health-monitor' },
       { worker: brainLoopWorker, register: registerBrainLoopTask, name: 'brain-loop' },
       { worker: subagentLifecycleWorker, register: registerSubagentLifecycleTask, name: 'subagent-lifecycle' },
+      { worker: effectivenessWorker, register: registerEffectivenessTask, name: 'effectiveness' },
+      { worker: transcriptIndexerWorker, register: registerTranscriptIndexerTask, name: 'transcript-indexer' },
     ];
 
     for (const { worker, register, name } of allWorkers) {
@@ -160,6 +162,13 @@ const agent: ProjectAgent = {
       { name: 'brain-loop', intervalMs: 600_000, delayMs: 120_000,
         validate: (rt) => brainLoopWorker.validate!(rt, {} as any, {} as any),
         execute: (rt) => brainLoopWorker.execute(rt, {}, { name: 'ITACHI_BRAIN_LOOP', tags: [], description: '' }) },
+      // Self-improve: effectiveness review (weekly, start after 7m)
+      { name: 'effectiveness', intervalMs: 604_800_000, delayMs: 420_000,
+        execute: (rt) => effectivenessWorker.execute(rt, {}, { name: 'ITACHI_EFFECTIVENESS', tags: [], description: '' }) },
+      // Memory: transcript indexer (1hr, start after 90s)
+      { name: 'transcript-indexer', intervalMs: 3_600_000, delayMs: 90_000,
+        validate: (rt) => transcriptIndexerWorker.validate!(rt, {} as any, {} as any),
+        execute: (rt) => transcriptIndexerWorker.execute(rt, {}, { name: 'ITACHI_TRANSCRIPT_INDEXER', tags: [], description: '' }) },
     ]);
   },
 };
