@@ -780,6 +780,8 @@ export NVM_DIR="\${HOME}/.nvm"
 ITACHI_KEYS_FILE="\${HOME}/.itachi-api-keys"
 if [ -f "\${ITACHI_KEYS_FILE}" ]; then set -a; source "\${ITACHI_KEYS_FILE}"; set +a; fi
 export ITACHI_API_URL="\${ITACHI_API_URL:-${API_URL}}"
+# Never let an API key override Max subscription auth — Claude CLI uses OAuth, not API billing
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 
 # Shortcut flags
 case "\$1" in
@@ -810,6 +812,9 @@ if exist "%ITACHI_KEYS_FILE%" (
     for /f "usebackq tokens=1,* delims==" %%a in ("%ITACHI_KEYS_FILE%") do set "%%a=%%b"
 )
 if not defined ITACHI_API_URL set "ITACHI_API_URL=${API_URL}"
+:: Never let an API key override Max subscription auth
+set ANTHROPIC_API_KEY=
+set ANTHROPIC_AUTH_TOKEN=
 
 claude %*
 `;
@@ -825,6 +830,9 @@ if (Test-Path $keysFile) {
     }
 }
 if (-not $env:ITACHI_API_URL) { $env:ITACHI_API_URL = "${API_URL}" }
+# Never let an API key override Max subscription auth
+Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+Remove-Item Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
 
 # Shortcut flags
 $rest = @()
