@@ -634,7 +634,7 @@ export async function spawnRemoteControlSession(
     const session = activeSessions.get(topicId);
     if (session && session.transcript.length > 0) {
       analyzeAndStoreTranscript(runtime, session.transcript, {
-        source: 'remote-control',
+        source: 'session',
         project: session.project,
         sessionId: session.sessionId,
         target: session.target,
