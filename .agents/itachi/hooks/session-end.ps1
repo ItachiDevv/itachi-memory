@@ -91,8 +91,17 @@ try {
     # ============ Determine exit reason (client-specific) ============
     $reason = "unknown"
     if ($client -eq 'claude') {
-        # Claude pipes JSON to stdin with {reason: "..."}
-        $raw = [Console]::In.ReadToEnd()
+        # Claude pipes JSON to stdin with {reason: "..."}.
+        # ReadToEnd() blocks if Claude does not close stdin (causes "Hook cancelled" after 1.5s).
+        # Use async read with 1s cancellation token instead.
+        $raw = $null
+        try {
+            $cts = New-Object System.Threading.CancellationTokenSource
+            $cts.CancelAfter(1000)
+            $readTask = [Console]::In.ReadToEndAsync()
+            if ($readTask.Wait(1000)) { $raw = $readTask.Result }
+            $cts.Dispose()
+        } catch {}
         if ($raw) {
             try {
                 $json = $raw | ConvertFrom-Json
