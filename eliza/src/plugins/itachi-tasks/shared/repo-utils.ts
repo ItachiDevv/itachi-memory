@@ -70,6 +70,7 @@ export const DEFAULT_REPO_PATHS: Record<string, string> = {
 export const DEFAULT_REPO_BASES: Record<string, string> = {
   mac: '~/itachi',
   windows: '~/Documents/Crypto/skills-plugins',
+  surface: 'C:/Users/itachi/Documents',
   coolify: '/home/itachi/itachi',
 };
 
@@ -77,6 +78,7 @@ export const DEFAULT_REPO_BASES: Record<string, string> = {
 export const EXTRA_REPO_BASES: Record<string, string[]> = {
   mac: [],
   windows: ['~/Documents/Crypto'],
+  surface: ['C:/Users/itachi/itachi-workspaces'],
   coolify: [],
 };
 
