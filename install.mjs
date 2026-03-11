@@ -771,28 +771,42 @@ function installWrapper() {
   const unixWrapper = `#!/bin/bash
 # Itachi Memory System - Claude Code wrapper
 export ITACHI_ENABLED=1
+export ITACHI_CLIENT=claude
 
-# Source nvm so claude is in PATH
+# Ensure ~/.local/bin is in PATH (claude binary lives here)
+export PATH="\$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:\$PATH"
+
+# Source nvm so node is available
 export NVM_DIR="\${HOME}/.nvm"
 [ -s "\${NVM_DIR}/nvm.sh" ] && . "\${NVM_DIR}/nvm.sh"
 
-# Source API keys
-ITACHI_KEYS_FILE="\${HOME}/.itachi-api-keys"
-if [ -f "\${ITACHI_KEYS_FILE}" ]; then set -a; source "\${ITACHI_KEYS_FILE}"; set +a; fi
-export ITACHI_API_URL="\${ITACHI_API_URL:-${API_URL}}"
+# Load API keys
+if [ -f "\$HOME/.itachi-api-keys" ]; then
+    set -a; source "\$HOME/.itachi-api-keys"; set +a
+fi
+[ -z "\$ITACHI_API_URL" ] && export ITACHI_API_URL="${API_URL}"
 # Never let an API key override Max subscription auth — Claude CLI uses OAuth, not API billing
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 
-# Shortcut flags
-case "\$1" in
-  --cds) shift; exec claude --continue --dangerously-skip-permissions "\$@" ;;
-  --c)   shift; exec claude --continue "\$@" ;;
-  --ds)  shift; exec claude --dangerously-skip-permissions "\$@" ;;
-  clear-failed) exec node "\$(dirname "\$0")/../orchestrator/scripts/clear-tasks.js" failed ;;
-  clear-done)   exec node "\$(dirname "\$0")/../orchestrator/scripts/clear-tasks.js" completed ;;
-esac
+# Load OAuth token ONLY for SSH sessions (local sessions use macOS Keychain automatically)
+# CLAUDE_CODE_OAUTH_TOKEN overrides keychain — only set it when keychain is unavailable (SSH)
+if [ -n "\$SSH_CONNECTION" ] && [ -z "\$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -f "\$HOME/.claude/.auth-token" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN="\$(cat "\$HOME/.claude/.auth-token")"
+fi
 
-exec claude "\$@"
+# Shortcut flags
+DS_FLAGS="--dangerously-skip-permissions"
+case "\$1" in
+    --ds)  shift; exec claude \$DS_FLAGS "\$@" ;;
+    --p)   shift; exec claude -p "\$@" ;;
+    --dp)  shift; exec claude \$DS_FLAGS -p "\$@" ;;
+    --c)   shift; exec claude --continue "\$@" ;;
+    --cds) shift; exec claude --continue \$DS_FLAGS "\$@" ;;
+    --cdp) shift; exec claude --continue \$DS_FLAGS -p "\$@" ;;
+    clear-failed) exec node "\$HOME/itachi/itachi-memory/orchestrator/scripts/clear-tasks.js" failed ;;
+    clear-done)   exec node "\$HOME/itachi/itachi-memory/orchestrator/scripts/clear-tasks.js" completed ;;
+    *)     exec claude "\$@" ;;
+esac
 `;
 
   const windowsCmd = `@echo off
