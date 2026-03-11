@@ -6,6 +6,9 @@ _Last updated: 2026-03-04. Based on git log, existing todo files, and PRIORITIES
 
 ## Bugs to Fix
 
+### High Priority (TOP)
+- [ ] **Telegram Web auth on VPS for browser test suite** — `itachi-tester` browser suite needs a logged-in `web.telegram.org` session on the Hetzner VPS. Login requires your 2FA cloud password. Until done, browser tests are skipped; other 3 suites (SSH, API, task injection) run fine. To complete: open a terminal on the VPS, run `agent-browser --session tg open https://web.telegram.org/k/` and log in manually, then save session state.
+
 ### High Priority
 - [ ] **Bot hallucinating task completion** — Bot says "Checking..." / "Running..." without an action handler actually executing. `handleSessionComplete` false positives. Needs investigation of the full dispatch path. _(Ref: Itachi_Todo.md #2, screenshots attached there)_
 - [ ] **Vector search not enriched with outcome metadata** — Session hooks now capture `outcome` + `exit_reason`, but the RLM vector search path still lacks prompt+response+outcome enrichment. _(Ref: Itachi_Todo.md #1)_
