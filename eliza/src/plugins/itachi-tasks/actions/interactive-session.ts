@@ -573,59 +573,52 @@ export async function spawnRemoteControlSession(
   topicId: number,
   project?: string,
 ): Promise<string | null> {
-  // TUI mode: no -p, no --output-format. Just --ds for dangerously-skip-permissions.
-  // The machine's settings.json remoteControlAtStartup: true will auto-start /remote-control.
+  // Use `claude remote-control` — the official dedicated command.
+  // It stays running, outputs a session URL, and handles reconnection automatically.
+  // The itachi wrapper sources nvm + API keys + OAuth before calling claude.
   const isWindows = sshService.isWindowsTarget(target);
+  const sessionName = project || repoPath.split('/').pop() || 'Remote';
   let sshCommand: string;
   if (isWindows) {
-    // On Windows, the itachi wrapper lives at $env:USERPROFILE\.claude\itachi.cmd
-    // and may not be in PATH. Use full path, or fall back to claude.
-    // SSH service wraps in powershell.exe, so use PowerShell syntax.
     sshCommand = [
       `cd '${repoPath}'`,
       `$wrapper = Join-Path $env:USERPROFILE '.claude\\${engineCommand}.cmd'`,
-      `if (Test-Path $wrapper) { cmd /c $wrapper --ds } else { claude --dangerously-skip-permissions }`,
+      `if (Test-Path $wrapper) { cmd /c $wrapper remote-control --name '${sessionName}' } else { claude remote-control --name '${sessionName}' }`,
     ].join('; ');
   } else {
-    sshCommand = `cd ${repoPath} && ${engineCommand} --ds`;
+    sshCommand = `cd ${repoPath} && ${engineCommand} remote-control --name "${sessionName}"`;
   }
 
   await topicsService.sendToTopic(
     topicId,
-    `Starting Remote Control session on ${target}\nProject: ${project || 'unknown'}\nEngine: ${engineCommand}\n\nWaiting for remote control URL...`,
+    `Starting Remote Control on ${target}...\nProject: ${project || 'unknown'}\n\nWaiting for session URL...`,
   );
 
   const sessionId = `remote-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const sessionTranscript: TranscriptEntry[] = [];
-  let remoteUrlSent = false;
+  let urlSent = false;
 
-  // TUI output handler — parse ANSI-heavy output, look for remote control URL
   const onStdout = (chunk: string) => {
     const clean = stripAnsi(chunk);
     if (!clean.trim()) return;
 
     sessionTranscript.push({ type: 'text', content: clean, timestamp: Date.now() });
 
-    // Detect remote control URL or connection info
-    // Claude Code outputs something like "Remote Control: https://..." or "claude.ai/code"
-    if (!remoteUrlSent) {
+    // `claude remote-control` outputs the session URL directly
+    if (!urlSent) {
       const urlMatch = clean.match(/https:\/\/(?:claude\.ai|code\.claude\.com)\/[^\s)]+/);
       if (urlMatch) {
-        remoteUrlSent = true;
-        topicsService.sendToTopic(topicId, `Remote Control is live!\n\nConnect: ${urlMatch[0]}\n\nYou can interact via claude.ai/code. Send /close in this topic to end the session.`).catch(() => {});
-        return;
-      }
-      // Also detect "remote-control is active" or "Remote Control connecting/connected" messages
-      if (/remote.?control/i.test(clean) && /(active|connect)/i.test(clean)) {
-        remoteUrlSent = true;
-        topicsService.sendToTopic(topicId, `${clean.trim()}\n\nGo to claude.ai/code to connect.`).catch(() => {});
+        urlSent = true;
+        topicsService.sendToTopic(topicId,
+          `Remote Control is live!\n\nConnect: ${urlMatch[0]}\n\nOr open claude.ai/code and find "${sessionName}" in the session list.\nSend /close in this topic to end the session.`,
+        ).catch(() => {});
         return;
       }
     }
 
-    // Forward significant output to Telegram (not every TUI frame)
+    // Forward connection status messages (e.g. "connected", "disconnected")
     const filtered = filterTuiNoise(clean);
-    if (filtered && filtered.length > 10) {
+    if (filtered && filtered.length > 5) {
       topicsService.receiveChunk(sessionId, topicId, filtered).catch(() => {});
     }
   };
@@ -634,7 +627,6 @@ export async function spawnRemoteControlSession(
     const clean = filterTuiNoise(stripAnsi(chunk));
     if (!clean) return;
     sessionTranscript.push({ type: 'text', content: `[stderr] ${clean}`, timestamp: Date.now() });
-    // Forward hook output (session briefings etc) to topic
     if (clean.length > 10) {
       topicsService.receiveChunk(sessionId, topicId, `[stderr] ${clean}`).catch(() => {});
     }
@@ -642,7 +634,7 @@ export async function spawnRemoteControlSession(
 
   const onExit = (code: number) => {
     topicsService.finalFlush(sessionId).then(() => {
-      topicsService.sendToTopic(topicId, `\n--- Remote Control session ended (exit code: ${code}) ---\nUse /remote ${target} to start a new one.`);
+      topicsService.sendToTopic(topicId, `\n--- Remote Control ended (exit code: ${code}) ---\nUse /remote ${target} to start a new one.`);
     }).catch(() => {});
 
     const session = activeSessions.get(topicId);
@@ -665,14 +657,14 @@ export async function spawnRemoteControlSession(
     runtime.logger.info(`[remote] ${sessionId} exited with code ${code}`);
   };
 
-  // Spawn with PTY (TUI mode), very long timeout (8 hours), and stdin open
+  // `claude remote-control` is a long-running process — 8hr timeout, PTY for URL output, stdin open
   const handle = sshService.spawnInteractiveSession(
     target,
     sshCommand,
     onStdout,
     onStderr,
     onExit,
-    8 * 60 * 60 * 1000, // 8 hours
+    8 * 60 * 60 * 1000,
     { usePty: !isWindows, closeStdin: false },
   );
 
@@ -696,12 +688,12 @@ export async function spawnRemoteControlSession(
     lastUsageCheckTime: Date.now(),
   });
 
-  // If remote control URL hasn't been detected after 30s, send a generic message
+  // Fallback if URL not detected after 30s
   setTimeout(() => {
-    if (!remoteUrlSent && activeSessions.has(topicId)) {
-      remoteUrlSent = true;
+    if (!urlSent && activeSessions.has(topicId)) {
+      urlSent = true;
       topicsService.sendToTopic(topicId,
-        'Remote Control should be active. Go to claude.ai/code to connect.\n\nIf it\'s not connecting, the session may still be initializing. Send /close to end and try again.'
+        `Remote Control should be active. Open claude.ai/code and look for "${sessionName}" in your session list.\n\nSend /close to end the session.`,
       ).catch(() => {});
     }
   }, 30_000);
