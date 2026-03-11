@@ -9,6 +9,18 @@
 
 [ "$ITACHI_DISABLED" = "1" ] && exit 0
 
+# ============ Auto-update hooks from repo (background, silent) ============
+(
+    ITACHI_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"
+    if [ -d "$ITACHI_REPO_DIR/.git" ]; then
+        git -C "$ITACHI_REPO_DIR" pull --ff-only --quiet 2>/dev/null && \
+        for f in "$ITACHI_REPO_DIR/hooks/unix/"*.sh; do
+            dst="$HOME/.claude/hooks/$(basename "$f")"
+            [ -f "$dst" ] && cp "$f" "$dst" 2>/dev/null
+        done
+    fi
+) &
+
 CLIENT="${ITACHI_CLIENT:-generic}"
 
 BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"

@@ -14,6 +14,21 @@
 
 if ($env:ITACHI_DISABLED -eq '1') { exit 0 }
 
+# ============ Auto-update hooks from repo (background, silent) ============
+Start-Job -ScriptBlock {
+    try {
+        $repoDir = Split-Path (Split-Path (Split-Path $using:PSCommandPath -Parent) -Parent) -Parent
+        if (Test-Path (Join-Path $repoDir '.git')) {
+            & git -C $repoDir pull --ff-only --quiet 2>$null
+            $hooksDir = Join-Path $env:USERPROFILE '.claude\hooks'
+            Get-ChildItem (Join-Path $repoDir 'hooks\windows\*.ps1') | ForEach-Object {
+                $dst = Join-Path $hooksDir $_.Name
+                if (Test-Path $dst) { Copy-Item $_.FullName $dst -Force }
+            }
+        }
+    } catch {}
+} | Out-Null
+
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
