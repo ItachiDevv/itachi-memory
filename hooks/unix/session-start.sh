@@ -305,4 +305,26 @@ try{
 " "$CLIENT" "$PWD" "$BRIEFING" "$LEARNINGS" "$RLM_LESSONS" 2>/dev/null
 fi
 
+# ============ Refresh SSH auth token from keychain (macOS only, non-SSH sessions) ============
+# Keeps ~/.claude/.auth-token fresh so SSH sessions can use it via CLAUDE_CODE_OAUTH_TOKEN.
+# Only runs locally (not in SSH sessions) where the macOS Keychain is accessible.
+if [ -z "$SSH_CONNECTION" ] && [ "$(uname)" = "Darwin" ]; then
+    (python3 -c "
+import subprocess, json, os, sys
+try:
+    raw = subprocess.check_output(
+        ['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+        stderr=subprocess.DEVNULL
+    ).decode().strip()
+    d = json.loads(raw)
+    token = d.get('claudeAiOauth', {}).get('accessToken', '')
+    if token and token.startswith('sk-ant-'):
+        path = os.path.expanduser('~/.claude/.auth-token')
+        with open(path, 'w') as f:
+            f.write(token)
+except Exception:
+    pass
+" 2>/dev/null) &
+fi
+
 exit 0
