@@ -1,5 +1,8 @@
 import { Service, type IAgentRuntime } from '@elizaos/core';
 import { execFile, spawn, type ChildProcess } from 'child_process';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { tmpdir, homedir } from 'os';
 
 export interface SSHTarget {
   host: string;
@@ -64,49 +67,78 @@ export class SSHService extends Service {
   }
 
   /**
+   * If ITACHI_SSH_DEPLOY_KEY_CONTENT is set, write it to ~/.ssh/itachi_deploy
+   * so all targets can reference it by path. Runs once at startup.
+   */
+  private ensureDeployKey(): string | undefined {
+    const content = process.env.ITACHI_SSH_DEPLOY_KEY_CONTENT;
+    if (!content) return undefined;
+    const sshDir = join(homedir(), '.ssh');
+    const keyPath = join(sshDir, 'itachi_deploy');
+    try {
+      mkdirSync(sshDir, { recursive: true, mode: 0o700 });
+      // Normalize line endings — env vars may have literal \n
+      const normalized = content.replace(/\\n/g, '\n');
+      writeFileSync(keyPath, normalized, { mode: 0o600 });
+    } catch { /* best-effort */ }
+    return keyPath;
+  }
+
+  /**
    * Load SSH targets from environment variables.
    * Format: ITACHI_SSH_<NAME>_HOST, ITACHI_SSH_<NAME>_USER, ITACHI_SSH_<NAME>_KEY, ITACHI_SSH_<NAME>_PORT
-   *
+   * Also supports ITACHI_SSH_<NAME>_KEY_CONTENT for inline key (e.g. in Docker/Coolify).
    * Also loads the special COOLIFY_SSH_* vars for backward compat.
    */
   private loadTargets(): void {
-    // Use process.env directly — getSetting only checks character secrets
-    // and SSH vars aren't in the character config
     const s = (key: string): string => process.env[key] || '';
 
-    // Load COOLIFY_SSH_* as the "coolify" target
-    const coolifyHost = s('COOLIFY_SSH_HOST');
-    const coolifyUser = s('COOLIFY_SSH_USER') || 'root';
-    const coolifyKey = s('COOLIFY_SSH_KEY_PATH');
-    const coolifyPort = parseInt(s('COOLIFY_SSH_PORT') || '22', 10);
+    // Write shared deploy key from env content if provided
+    const deployKeyPath = this.ensureDeployKey();
 
+    // Resolve key path: prefer explicit KEY_PATH, fall back to KEY_CONTENT-written path, then deploy key
+    const resolveKey = (nameUpper: string): string | undefined => {
+      const explicit = s(`ITACHI_SSH_${nameUpper}_KEY`) || s(`ITACHI_SSH_${nameUpper}_KEY_PATH`);
+      if (explicit) return explicit;
+      const content = s(`ITACHI_SSH_${nameUpper}_KEY_CONTENT`);
+      if (content) {
+        const keyPath = join(tmpdir(), `itachi-key-${nameUpper.toLowerCase()}`);
+        try { writeFileSync(keyPath, content.replace(/\\n/g, '\n'), { mode: 0o600 }); } catch { /* best-effort */ }
+        return keyPath;
+      }
+      return deployKeyPath;
+    };
+
+    // Load COOLIFY_SSH_* as the "coolify" target (backward compat)
+    const coolifyHost = s('COOLIFY_SSH_HOST');
     if (coolifyHost) {
+      const coolifyKey = s('COOLIFY_SSH_KEY_PATH') || deployKeyPath;
       this.targets.set('coolify', {
         host: coolifyHost,
-        user: coolifyUser,
-        keyPath: coolifyKey || undefined,
-        port: coolifyPort,
+        user: s('COOLIFY_SSH_USER') || 'root',
+        keyPath: coolifyKey,
+        port: parseInt(s('COOLIFY_SSH_PORT') || '22', 10),
       });
     }
 
     // Scan for ITACHI_SSH_<NAME>_HOST pattern
-    // Since ElizaOS settings don't enumerate, we check common names
-    const knownNames = ['coolify', 'mac', 'windows', 'hetzner', 'vps', 'server', 'itachi-mem', 'linux'];
+    const knownNames = ['coolify', 'mac', 'windows', 'hoodie', 'surface', 'hetzner', 'vps', 'server', 'itachi-mem', 'linux'];
     for (const name of knownNames) {
       if (this.targets.has(name)) continue;
-      const host = s(`ITACHI_SSH_${name.toUpperCase()}_HOST`);
+      const nameUpper = name.toUpperCase().replace(/-/g, '_');
+      const host = s(`ITACHI_SSH_${nameUpper}_HOST`);
       if (!host) continue;
       this.targets.set(name, {
         host,
-        user: s(`ITACHI_SSH_${name.toUpperCase()}_USER`) || 'root',
-        keyPath: s(`ITACHI_SSH_${name.toUpperCase()}_KEY`) || undefined,
-        port: parseInt(s(`ITACHI_SSH_${name.toUpperCase()}_PORT`) || '22', 10),
+        user: s(`ITACHI_SSH_${nameUpper}_USER`) || 'root',
+        keyPath: resolveKey(nameUpper),
+        port: parseInt(s(`ITACHI_SSH_${nameUpper}_PORT`) || '22', 10),
       });
     }
   }
 
   /** Known Windows target names — skip Unix PATH export for these */
-  private static WINDOWS_TARGETS = new Set(['windows', 'win', 'pc', 'desktop']);
+  private static WINDOWS_TARGETS = new Set(['windows', 'win', 'pc', 'desktop', 'surface', 'hoodie']);
 
   /** Check if a target name refers to a Windows machine */
   isWindowsTarget(name: string): boolean {
