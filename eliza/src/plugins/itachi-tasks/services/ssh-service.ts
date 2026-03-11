@@ -223,7 +223,7 @@ export class SSHService extends Service {
     // Windows targets: adapt syntax for PowerShell 5.1, then wrap with powershell.exe.
     const wrappedCommand = this.isWindowsTarget(targetName)
       ? `powershell.exe -NoProfile -Command "${this.adaptForWindows(command).replace(/"/g, '\\"')}"`
-      : `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
+      : `export PATH="$HOME/.claude:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
     args.push(`${target.user}@${target.host}`, wrappedCommand);
 
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -312,7 +312,7 @@ export class SSHService extends Service {
     // Windows targets: adapt syntax for PowerShell 5.1; Unix targets need PATH export
     const wrappedCommand = isWindows
       ? `powershell.exe -NoProfile -Command "${this.adaptForWindows(command).replace(/"/g, '\\"')}"`
-      : `export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
+      : `export PATH="$HOME/.claude:/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:$PATH" && ${command}`;
     args.push(`${target.user}@${target.host}`, wrappedCommand);
 
     return new Promise<SSHResult>((resolve) => {
