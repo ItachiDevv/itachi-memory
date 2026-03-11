@@ -126,12 +126,12 @@ echo '7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' > ~/.telegram-bot-token
 chmod 600 ~/.telegram-bot-token
 ```
 
-### Step 4: Anthropic API Key (Optional - for Claude AI in Telegram bot)
+<!-- ### Step 4: Anthropic API Key (Optional - for Claude AI in Telegram bot)
 
 ```bash
 echo 'ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxx' > ~/.anthropic-key
 chmod 600 ~/.anthropic-key
-```
+``` -->
 
 ---
 
@@ -250,7 +250,6 @@ OPENAI_API_KEY=sk-...
 SUPABASE_URL=https://xxxxx.supabase.co
 SUPABASE_KEY=eyJ...
 TELEGRAM_BOT_TOKEN=7123456789:AAH... (when deploying Telegram bot)
-ANTHROPIC_API_KEY=sk-ant-... (optional, for Claude AI in bot)
 ```
 
 ---

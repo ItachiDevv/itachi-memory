@@ -27,7 +27,6 @@ Provides: TEXT_SMALL, TEXT_LARGE, TEXT_EMBEDDING, IMAGE, TRANSCRIPTION, TEXT_TO_
 elizaos plugins add @elizaos/plugin-anthropic
 ```
 ```env
-ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_SMALL_MODEL=claude-3-haiku-20240307
 ANTHROPIC_LARGE_MODEL=claude-3-5-sonnet-latest
 ```
