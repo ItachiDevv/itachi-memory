@@ -305,23 +305,31 @@ try{
 " "$CLIENT" "$PWD" "$BRIEFING" "$LEARNINGS" "$RLM_LESSONS" 2>/dev/null
 fi
 
-# ============ Refresh SSH auth token from keychain (macOS only, non-SSH sessions) ============
-# Keeps ~/.claude/.auth-token fresh so SSH sessions can use it via CLAUDE_CODE_OAUTH_TOKEN.
-# Only runs locally (not in SSH sessions) where the macOS Keychain is accessible.
+# ============ Refresh SSH auth creds from keychain (macOS only, non-SSH sessions) ============
+# Saves full OAuth creds (access + refresh token) to ~/.claude/.auth-creds for SSH use.
+# The wrapper uses .auth-creds and auto-refreshes when the access token expires.
 if [ -z "$SSH_CONNECTION" ] && [ "$(uname)" = "Darwin" ]; then
     (python3 -c "
-import subprocess, json, os, sys
+import subprocess, json, os
 try:
     raw = subprocess.check_output(
         ['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w'],
         stderr=subprocess.DEVNULL
     ).decode().strip()
     d = json.loads(raw)
-    token = d.get('claudeAiOauth', {}).get('accessToken', '')
-    if token and token.startswith('sk-ant-'):
-        path = os.path.expanduser('~/.claude/.auth-token')
+    oauth = d.get('claudeAiOauth', {})
+    access_token = oauth.get('accessToken', '')
+    refresh_token = oauth.get('refreshToken', '')
+    expires_at = oauth.get('expiresAt', 0)
+    if access_token and access_token.startswith('sk-ant-'):
+        creds = {'accessToken': access_token, 'refreshToken': refresh_token, 'expiresAt': expires_at}
+        path = os.path.expanduser('~/.claude/.auth-creds')
         with open(path, 'w') as f:
-            f.write(token)
+            json.dump(creds, f)
+        os.chmod(path, 0o600)
+        # Also keep raw .auth-token for fallback
+        with open(os.path.expanduser('~/.claude/.auth-token'), 'w') as f:
+            f.write(access_token)
 except Exception:
     pass
 " 2>/dev/null) &
