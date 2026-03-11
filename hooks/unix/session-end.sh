@@ -5,8 +5,12 @@
 # 3) Extracts conversation insights from transcript (background)
 # 4) Extracts decisions/state changes and writes to decisions.md
 
-# CRITICAL: Ignore termination signals so hook completes even when session is force-closed
-trap '' SIGTERM SIGINT SIGHUP
+# Read stdin immediately (before any backgrounding) so Claude Code's pipe is consumed
+INPUT=$(cat)
+
+# Fork all work to background and exit immediately so Claude Code sees success instantly.
+# disown detaches the child from this shell's process group so it survives shutdown signals.
+(
 
 BASE_API="${ITACHI_API_URL:-https://itachisbrainserver.online}"
 MEMORY_API="$BASE_API/api/memory"
@@ -43,9 +47,6 @@ SESSION_ID="${ITACHI_SESSION_ID:-}"
 if [ -z "$SESSION_ID" ]; then
     SESSION_ID="manual-$(date +%Y%m%d-%H%M%S)-$$"
 fi
-
-# Read JSON input from stdin
-INPUT=$(cat)
 
 # Extract reason using node (no jq dependency)
 REASON=$(node -e "try{const j=JSON.parse(process.argv[1]);console.log(j.reason||'unknown')}catch(e){console.log('unknown')}" "$INPUT" 2>/dev/null)
@@ -401,6 +402,8 @@ try {
     const newContent = existingLines.join('\n') + header + '\\n' + newEntries.join('\n') + '\\n';
     fs.writeFileSync(decisionsFile, newContent);
 } catch(e) {}
-" "$PWD" 2>/dev/null &
+" "$PWD" 2>/dev/null
 
+) &
+disown $!
 exit 0
