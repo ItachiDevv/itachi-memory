@@ -671,4 +671,28 @@ catch {
     # Silently ignore - don't block session start
 }
 
+# ============ SSH Session Detection — Notify via Telegram ============
+# If this session was started via SSH, remote-control is auto-enabled (remoteControlAtStartup=true).
+# Send a Telegram message so the user knows to connect via claude.ai/code or the Claude app.
+try {
+    if ($env:SSH_CONNECTION -or $env:SSH_CLIENT) {
+        $telegramToken = $null
+        $chatId = $null
+        $apiKeysFile = Join-Path $env:USERPROFILE ".itachi-api-keys"
+        if (Test-Path $apiKeysFile) {
+            foreach ($line in (Get-Content $apiKeysFile)) {
+                if ($line -match "^TELEGRAM_BOT_TOKEN=(.+)") { $telegramToken = $matches[1].Trim().Trim('"') }
+                if ($line -match "^TELEGRAM_CHAT_ID=(.+)") { $chatId = $matches[1].Trim().Trim('"') }
+            }
+        }
+        if ($telegramToken -and $chatId) {
+            $hostname = $env:COMPUTERNAME
+            $msg = "🖥 Remote session started on $hostname via SSH. Remote Control is active — connect at claude.ai/code or open the Claude mobile app to take over."
+            $body = @{ chat_id = $chatId; text = $msg } | ConvertTo-Json
+            Invoke-RestMethod -Uri "https://api.telegram.org/bot$telegramToken/sendMessage" `
+                -Method POST -ContentType "application/json" -Body $body -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
+} catch {}
+
 exit 0

@@ -195,6 +195,20 @@ try{const d=JSON.parse(process.argv[1]);const l=[];l.push('');l.push('=== Sessio
     [ -n "$BRIEFING_OUTPUT" ] && echo "$BRIEFING_OUTPUT"
 fi
 
+# ============ SSH Session Detection — Notify via Telegram ============
+# If started via SSH, remote-control is auto-enabled. Notify the user to connect.
+if [ -n "$SSH_CONNECTION" ] || [ -n "$SSH_CLIENT" ]; then
+    _TELEGRAM_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' ~/.itachi-api-keys 2>/dev/null | cut -d= -f2- | tr -d '"')
+    _CHAT_ID=$(grep '^TELEGRAM_CHAT_ID=' ~/.itachi-api-keys 2>/dev/null | cut -d= -f2- | tr -d '"')
+    if [ -n "$_TELEGRAM_TOKEN" ] && [ -n "$_CHAT_ID" ]; then
+        _HOST=$(hostname)
+        curl -s -X POST "https://api.telegram.org/bot${_TELEGRAM_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${_CHAT_ID}\",\"text\":\"🖥 Remote session started on ${_HOST} via SSH. Remote Control is active — connect at claude.ai/code or open the Claude mobile app to take over.\"}" \
+            --max-time 5 > /dev/null 2>&1 &
+    fi
+fi
+
 # ============ Decisions & State Facts (inject first — highest priority context) ============
 if [ "$CLIENT" = "claude" ]; then
     node -e "
