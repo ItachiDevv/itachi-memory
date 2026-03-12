@@ -257,9 +257,25 @@ export async function handleTaskStatus(
   // Accept both /status and /taskstatus
   const prefix = text.startsWith('/taskstatus') ? '/taskstatus' : '/status';
   const idArg = text.substring(prefix.length).trim();
+
+  // No ID provided → show recent tasks
   if (!idArg) {
-    if (callback) await callback({ text: 'Usage: /status <task-id>\nProvide the full UUID or first 8 chars.' });
-    return { success: false, error: 'No task ID provided' };
+    const recentTasks = await taskService.listTasks({ limit: 5 });
+    if (recentTasks.length === 0) {
+      if (callback) await callback({ text: 'No recent tasks.' });
+      return { success: true };
+    }
+    const lines = ['**Recent tasks:**'];
+    for (const t of recentTasks) {
+      const task = t as unknown as Record<string, unknown>;
+      const shortId = (task.id as string).substring(0, 8);
+      const emoji = task.status === 'completed' ? '✅' : task.status === 'running' ? '🔄' : task.status === 'queued' ? '⏳' : '❌';
+      const desc = ((task.description as string) || '').substring(0, 60);
+      lines.push(`${emoji} \`${shortId}\` ${task.status} — ${desc}`);
+    }
+    lines.push('', 'Use /status <id> for details.');
+    if (callback) await callback({ text: lines.join('\n') });
+    return { success: true };
   }
 
   // Use centralized prefix lookup (handles UUID type casting reliably)
@@ -396,11 +412,12 @@ export async function handleBrain(runtime: IAgentRuntime, text: string, callback
 export async function handleHelp(callback?: HandlerCallback): Promise<ActionResult> {
   const help = `**Commands**
 /brain — Brain loop status + control (on/off/config)
-/status <id> — Detailed task status (executor, heartbeat, topic)
+/status — Recent tasks (or /status <id> for details)
 /help — Show this message
+/close — Close current topic
 
-**Session Controls** (use inside an active session topic)
-/stop /exit /esc /yes /no /ctrl+c /close
+**Session Controls** (inside an active session topic)
+/stop /esc /yes /no
 
 Everything else is natural language — just tell me what you need.`;
 

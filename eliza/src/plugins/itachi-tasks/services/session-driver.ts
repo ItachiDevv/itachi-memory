@@ -36,6 +36,7 @@ export class SessionDriver {
   private verifyAttempts = 0;
   private maxVerifyAttempts = 3;
   private turnsSinceLastAction = 0;
+  private resultTurnCount = 0;
   private lastAssistantText = '';
   private completionDetected = false;
   private hasToolUsage = false;
@@ -69,30 +70,20 @@ export class SessionDriver {
    * Decides whether to send a follow-up, request verification, or let it finish.
    */
   async onTurnComplete(): Promise<void> {
+    this.resultTurnCount++;
     const text = this.lastAssistantText.toLowerCase();
+    this.log(`Turn ${this.resultTurnCount} complete (phase=${this.phase}, hasTools=${this.hasToolUsage}): "${text.substring(0, 100)}"`);
 
-    // Detect completion signals
-    const completionPatterns = [
-      'changes have been committed',
-      'i\'ve completed',
-      'the implementation is complete',
-      'all changes have been made',
-      'everything is done',
-      'i\'ve finished',
-      'task is complete',
-      'changes are ready',
-      'pushed to',
-      'created a pull request',
-      'pr has been created',
-    ];
+    // Broad completion detection — matches common Claude phrasing
+    const isCompletion = /\b(committed|completed|finished|done|ready|implemented|created|added|pushed|merged|all set)\b/.test(text)
+      && !/\b(not done|not finished|not ready|isn't done|haven't)\b/.test(text);
 
-    const isCompletion = completionPatterns.some(p => text.includes(p));
-    const isError = text.includes('error') && (text.includes('failed') || text.includes('cannot'));
+    const isError = text.includes('error') && (text.includes('failed') || text.includes('cannot') || text.includes('unable'));
     const isBlocked = text.includes('blocked') || text.includes('need access') || text.includes('permission denied');
-    const isQuestion = text.includes('?') && (text.includes('should i') || text.includes('would you'));
+    const isQuestion = text.includes('?') && (text.includes('should i') || text.includes('would you') || text.includes('do you want'));
 
     if (this.phase === 'initial' || this.phase === 'working') {
-      if (isCompletion && !this.completionDetected) {
+      if (isCompletion && this.hasToolUsage && !this.completionDetected) {
         this.completionDetected = true;
         this.phase = 'verifying';
         await this.sendVerification();
@@ -103,37 +94,42 @@ export class SessionDriver {
         return;
       }
       if (isError && this.phase === 'working') {
-        // Let Claude try to fix on its own for 1 more turn
         this.turnsSinceLastAction = 0;
         return;
       }
+
+      // Safety net: if we've had 3+ result turns with tool usage and no explicit
+      // completion signal, assume Claude is done and skip to verification
+      if (this.resultTurnCount >= 3 && this.hasToolUsage && !this.completionDetected) {
+        this.log(`Safety net: ${this.resultTurnCount} turns with tool usage — triggering verification`);
+        this.completionDetected = true;
+        this.phase = 'verifying';
+        await this.sendVerification();
+        return;
+      }
+
       this.phase = 'working';
     }
 
     if (this.phase === 'verifying') {
-      // Check if verification passed
-      const verifyPassed = !text.includes('error') && !text.includes('failed') &&
-                           !text.includes('fail') && !text.includes('FAIL');
       const verifyFailed = text.includes('error') || text.includes('failed') ||
                            text.includes('FAIL') || text.includes('test failed');
 
-      if (verifyPassed && !verifyFailed) {
+      if (!verifyFailed) {
         this.phase = 'done';
-        return; // Session can finish naturally
+        this.log('Verification passed — marking done');
+        return;
       }
 
-      if (verifyFailed && this.verifyAttempts < this.maxVerifyAttempts) {
+      if (this.verifyAttempts < this.maxVerifyAttempts) {
         await this.sendFixPrompt();
         return;
       }
 
-      // Max retries reached — escalate
-      if (this.verifyAttempts >= this.maxVerifyAttempts) {
-        await this.escalateToTelegram(
-          `Verification failed after ${this.verifyAttempts} attempts. Last output:\n${this.lastAssistantText.substring(0, 500)}`
-        );
-        this.phase = 'done';
-      }
+      await this.escalateToTelegram(
+        `Verification failed after ${this.verifyAttempts} attempts. Last output:\n${this.lastAssistantText.substring(0, 500)}`
+      );
+      this.phase = 'done';
     }
   }
 
