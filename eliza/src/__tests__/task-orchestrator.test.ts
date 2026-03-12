@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseReport } from '../plugins/itachi-tasks/services/task-orchestrator';
+import { parseReport, buildPrompt } from '../plugins/itachi-tasks/services/task-orchestrator';
 
 describe('parseReport', () => {
   it('parses a success report', () => {
@@ -61,5 +61,58 @@ learned:
   it('returns null when no report block found', () => {
     const output = 'Just some random output without a report';
     expect(parseReport(output)).toBeNull();
+  });
+});
+
+describe('buildPrompt', () => {
+  it('renders prompt with task and capabilities', () => {
+    const prompt = buildPrompt({
+      task: 'set up a cron job to scrape hacker news daily',
+      capabilities: [
+        'I can set up cron jobs on Hetzner using crontab -e.',
+        'Telegram messages sent via curl to bot API.',
+      ],
+      sshTargets: ['mac', 'windows'],
+      repos: ['itachi-memory', 'gudtek', 'lotitachi'],
+    });
+
+    expect(prompt).toContain('You are Itachi');
+    expect(prompt).toContain('set up a cron job to scrape hacker news daily');
+    expect(prompt).toContain('crontab -e');
+    expect(prompt).toContain('===ITACHI_REPORT===');
+    expect(prompt).toContain('mac');
+    expect(prompt).toContain('itachi-memory');
+    expect(prompt).not.toContain('eyJ');
+    expect(prompt).toContain('$TELEGRAM_BOT_TOKEN');
+  });
+
+  it('renders prompt without capabilities when none exist', () => {
+    const prompt = buildPrompt({
+      task: 'fix the login bug',
+      capabilities: [],
+      sshTargets: [],
+      repos: [],
+    });
+
+    expect(prompt).toContain('fix the login bug');
+    expect(prompt).toContain('No prior capability memories');
+  });
+
+  it('includes retry context when provided', () => {
+    const prompt = buildPrompt({
+      task: 'fix the login bug',
+      capabilities: [],
+      sshTargets: [],
+      repos: [],
+      retryContext: {
+        previousApproach: 'direct',
+        failureSummary: 'Tests failed with timeout errors',
+        forcePlanned: true,
+      },
+    });
+
+    expect(prompt).toContain('PREVIOUS ATTEMPT FAILED');
+    expect(prompt).toContain('Tests failed with timeout');
+    expect(prompt).toContain('You MUST plan first');
   });
 });
