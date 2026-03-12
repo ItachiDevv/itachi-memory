@@ -161,21 +161,31 @@ function fmtMem(m){const s=m.summary||m.content||'';return s.length>150?s.substr
     } catch {}
 
     # Query memory search API (5s timeout) - project-scoped
-    $encodedQuery = [System.Uri]::EscapeDataString($prompt.Substring(0, [Math]::Min($prompt.Length, 500)))
-    $encodedProject = [System.Uri]::EscapeDataString($project)
-    $searchUrl = "$MEMORY_API/search?query=$encodedQuery&project=$encodedProject&limit=3"
+    $searchBody = @{
+        query = $prompt.Substring(0, [Math]::Min($prompt.Length, 500))
+        project = $project
+        limit = 3
+    } | ConvertTo-Json
 
-    $response = Invoke-RestMethod -Uri $searchUrl `
-        -Method Get `
+    $response = Invoke-RestMethod -Uri "$MEMORY_API/search" `
+        -Method Post `
         -Headers $authHeaders `
+        -Body $searchBody `
+        -ContentType "application/json" `
         -TimeoutSec 5
 
     # Query global memory search (cross-project operational knowledge)
     $globalResults = @()
     try {
-        $globalSearchUrl = "$MEMORY_API/search?query=$encodedQuery&project=_global&limit=2"
-        $globalResponse = Invoke-RestMethod -Uri $globalSearchUrl `
-            -Method Get `
+        $globalSearchBody = @{
+            query = $prompt.Substring(0, [Math]::Min($prompt.Length, 500))
+            project = "_global"
+            limit = 2
+        } | ConvertTo-Json
+        $globalResponse = Invoke-RestMethod -Uri "$MEMORY_API/search" `
+            -Method Post `
+            -Body $globalSearchBody `
+            -ContentType "application/json" `
             -Headers $authHeaders `
             -TimeoutSec 3
         if ($globalResponse.results -and $globalResponse.results.Count -gt 0) {

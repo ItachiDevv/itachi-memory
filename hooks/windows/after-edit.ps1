@@ -101,6 +101,9 @@ try {
     elseif ($fileName -match '(package\.json|requirements\.txt|Cargo\.toml|go\.mod|pom\.xml|Gemfile|\.csproj)$') {
         $category = "dependencies"
     }
+    elseif ($fileName -match '(tsconfig.*\.json|\.eslintrc|\.prettierrc|webpack\.config|vite\.config|jest\.config|\.(yaml|yml|toml|ini|cfg)$|Makefile|Dockerfile|docker-compose)') {
+        $category = "config"
+    }
 
     $summary = "Updated $fileName"
 

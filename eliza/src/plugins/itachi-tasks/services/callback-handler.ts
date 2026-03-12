@@ -675,7 +675,7 @@ async function handleTaskFlowCallback(
       return;
     }
 
-    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+    const sshTarget = resolveSSHTarget(flow.machine || 'cool');
     const startDir = getStartingDir(sshTarget);
     const { dirs, error } = await listRemoteDirectory(sshService, sshTarget, startDir);
 
@@ -744,7 +744,7 @@ async function handleTaskFlowCallback(
       const page = parseInt(value.substring(3), 10);
       if (isNaN(page) || page < 0) return;
       const dirs = flow.cachedDirs || [];
-      const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+      const sshTarget = resolveSSHTarget(flow.machine || 'cool');
       const startDir = getStartingDir(sshTarget);
       const keyboard = buildDirKeyboard(dirs, 'tf:r', false, page);
       await topicsService.editMessageWithKeyboard(
@@ -760,7 +760,7 @@ async function handleTaskFlowCallback(
     if (isNaN(idx) || idx < 0 || idx >= dirs.length) return;
 
     const selected = dirs[idx];
-    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+    const sshTarget = resolveSSHTarget(flow.machine || 'cool');
     const startDir = getStartingDir(sshTarget);
     flow.repoPath = `${startDir}/${selected}`;
     flow.project = selected;
@@ -876,7 +876,7 @@ async function handleSessionFlowCallback(
     if (value === 'noop') return;
     if (!sshService) return;
 
-    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+    const sshTarget = resolveSSHTarget(flow.machine || 'cool');
     const startDir = getStartingDir(sshTarget);
 
     // Pagination: re-render repo list at page N
@@ -942,7 +942,7 @@ async function handleSessionFlowCallback(
     if (value === 'noop') return;
     if (!sshService) return;
 
-    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+    const sshTarget = resolveSSHTarget(flow.machine || 'cool');
     const startDir = getStartingDir(sshTarget);
 
     // Go back: re-list repos from startDir
@@ -1003,7 +1003,7 @@ async function handleSessionFlowCallback(
   if (key === 's') {
     if (!sshService) return;
 
-    const sshTarget = resolveSSHTarget(flow.machine || 'mac');
+    const sshTarget = resolveSSHTarget(flow.machine || 'cool');
     const repoPath = flow.repoPath || getStartingDir(sshTarget);
 
     let engineCmd: string;

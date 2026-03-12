@@ -77,17 +77,10 @@ try {
     }
 
     # ============ Determine exit reason (client-specific) ============
+    # DO NOT READ STDIN. Claude Code gives SessionEnd hooks 1.5s hard limit.
+    # Reading stdin causes "Hook cancelled" errors. Default to "unknown".
     $reason = "unknown"
-    if ($client -eq 'claude') {
-        # Claude pipes JSON to stdin with {reason: "..."}
-        $raw = [Console]::In.ReadToEnd()
-        if ($raw) {
-            try {
-                $json = $raw | ConvertFrom-Json
-                if ($json.reason) { $reason = $json.reason }
-            } catch {}
-        }
-    } else {
+    if ($client -ne 'claude') {
         # Other clients: wrapper sets ITACHI_EXIT_CODE env var
         $exitCode = $env:ITACHI_EXIT_CODE
         if (-not $exitCode) { $exitCode = $env:ITACHI_CODEX_EXIT_CODE }
