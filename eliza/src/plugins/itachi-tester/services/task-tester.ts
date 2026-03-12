@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { TestResult } from '../types.js';
 
-const HOSTS = ['mac', 'surface-win', 'hoodie', 'coolify'];
+const HOSTS = ['mac', 'surface', 'hoodie', 'coolify', 'hetzner-vps'];
 const POLL_INTERVAL_MS = 5_000;
 const POLL_TIMEOUT_MS = 120_000;
 

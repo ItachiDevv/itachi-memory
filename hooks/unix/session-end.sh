@@ -99,7 +99,7 @@ try {
 
     // Read summary from latest .jsonl transcript (sessions-index.json no longer exists in Claude Code v2)
     try {
-        function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+$/g, ''); }
+        function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\/]/g, '-'); }
         const projectDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(process.cwd()));
         if (fs.existsSync(projectDir)) {
             const files = fs.readdirSync(projectDir)
@@ -156,7 +156,7 @@ META=$(node -e "
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\\\/]/g, '--').replace(/^-+|-+$/g, ''); }
+function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\\\/]/g, '-'); }
 try {
     const projectDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(process.cwd()));
     if (!fs.existsSync(projectDir)) process.exit(0);
@@ -210,7 +210,7 @@ const durationMs = parseInt(process.argv[6]) || 0;
 const filesChanged = process.argv[7] ? process.argv[7].split(',').filter(Boolean) : [];
 
 function encodeCwd(p) {
-    return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+\$/g, '');
+    return p.replace(/:/g, '').replace(/[\\/]/g, '-');
 }
 
 function httpPost(url, body) {
@@ -294,7 +294,7 @@ function httpPost(url, body) {
                         if (textParts.length > 50) {
                             conversationParts.push('[ASSISTANT] ' + textParts);
                         }
-                    } else if (entry.type === 'human' && entry.message && entry.message.content) {
+                    } else if (entry.type === 'user' && entry.message && entry.message.content) {
                         const textParts = Array.isArray(entry.message.content)
                             ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
                             : (typeof entry.message.content === 'string' ? entry.message.content : '');
@@ -339,7 +339,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\\\/]/g, '--').replace(/^-+|-+\$/g, ''); }
+function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\\\/]/g, '-'); }
 
 try {
     const cwd = process.argv[1];
@@ -364,7 +364,7 @@ try {
     for (const line of lines) {
         try {
             const e = JSON.parse(line);
-            const role = e.type === 'assistant' ? 'AI' : e.type === 'human' ? 'USER' : null;
+            const role = e.type === 'assistant' ? 'AI' : e.type === 'user' ? 'USER' : null;
             if (!role) continue;
             const parts = Array.isArray(e.message?.content)
                 ? e.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
@@ -406,8 +406,8 @@ try {
     // Keep last 100 lines to avoid unbounded growth
     const existingLines = existing.split('\n').filter(Boolean).slice(-100);
     const newEntries = decisions.slice(0, 20).map(d => '- ' + d);
-    const header = '\\n## ' + date;
-    const newContent = existingLines.join('\n') + header + '\\n' + newEntries.join('\n') + '\\n';
+    const header = '\n## ' + date;
+    const newContent = existingLines.join('\n') + header + '\n' + newEntries.join('\n') + '\n';
     fs.writeFileSync(decisionsFile, newContent);
 } catch(e) {}
 " "$PWD" 2>/dev/null

@@ -135,7 +135,7 @@ export const testRunnerWorker: TaskWorker = {
             body: JSON.stringify({
               chat_id: chatId,
               text: telegramReport,
-              parse_mode: 'Markdown',
+              parse_mode: 'HTML',
             }),
           });
           logger.info('[itachi-tester] Reported to Telegram via Bot API fallback');

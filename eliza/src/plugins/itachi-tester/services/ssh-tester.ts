@@ -12,9 +12,9 @@ interface SSHHost {
 }
 
 const SSH_HOSTS: SSHHost[] = [
-  { name: 'mac', user: 'mac', address: '100.103.124.46' },
-  { name: 'surface-win', user: 'surface-win', address: '100.106.148.100', isWindows: true },
-  { name: 'hoodie', user: 'hoodie', address: '100.105.111.11' },
+  { name: 'mac', user: 'itachisan', address: '100.80.217.87' },
+  { name: 'surface', user: 'surface-win', address: '100.106.148.100', isWindows: true },
+  { name: 'hoodie', user: 'hoodie', address: '100.105.111.11', isWindows: true },
 ];
 
 const SSH_KEY = '/root/.ssh/id_ed25519';

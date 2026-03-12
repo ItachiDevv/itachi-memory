@@ -11,13 +11,21 @@
 
 # ============ Auto-update hooks from repo (background, silent) ============
 (
-    ITACHI_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"
+    ITACHI_REPO_DIR="$HOME/itachi/itachi-memory"
     if [ -d "$ITACHI_REPO_DIR/.git" ]; then
-        git -C "$ITACHI_REPO_DIR" pull --ff-only --quiet 2>/dev/null && \
-        for f in "$ITACHI_REPO_DIR/hooks/unix/"*.sh; do
-            dst="$HOME/.claude/hooks/$(basename "$f")"
-            [ -f "$dst" ] && cp "$f" "$dst" 2>/dev/null
-        done
+        # Check if hooks are symlinks (no copy needed) or copies
+        _SELF="$HOME/.claude/hooks/session-start.sh"
+        if [ -L "$_SELF" ]; then
+            # Symlinked: git pull IS the update
+            git -C "$ITACHI_REPO_DIR" pull --rebase --autostash --quiet 2>/dev/null
+        else
+            # Copies: pull then copy
+            git -C "$ITACHI_REPO_DIR" pull --rebase --autostash --quiet 2>/dev/null && \
+            for f in "$ITACHI_REPO_DIR/hooks/unix/"*.sh; do
+                dst="$HOME/.claude/hooks/$(basename "$f")"
+                [ -f "$dst" ] && cp "$f" "$dst" 2>/dev/null
+            done
+        fi
     fi
 ) &
 
@@ -211,7 +219,7 @@ fi
 # If started via SSH, remote-control is auto-enabled. Notify the user to connect.
 if [ -n "$SSH_CONNECTION" ] || [ -n "$SSH_CLIENT" ]; then
     _TELEGRAM_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' ~/.itachi-api-keys 2>/dev/null | cut -d= -f2- | tr -d '"')
-    _CHAT_ID=$(grep '^TELEGRAM_CHAT_ID=' ~/.itachi-api-keys 2>/dev/null | cut -d= -f2- | tr -d '"')
+    _CHAT_ID=$(grep '^TELEGRAM_GROUP_CHAT_ID=' ~/.itachi-api-keys 2>/dev/null | cut -d= -f2- | tr -d '"')
     if [ -n "$_TELEGRAM_TOKEN" ] && [ -n "$_CHAT_ID" ]; then
         _HOST=$(hostname)
         curl -s -X POST "https://api.telegram.org/bot${_TELEGRAM_TOKEN}/sendMessage" \
@@ -225,7 +233,7 @@ fi
 if [ "$CLIENT" = "claude" ]; then
     node -e "
 const fs = require('fs'), path = require('path'), os = require('os');
-function enc(p) { return p.replace(/:/g,'').replace(/[\\\\/]/g,'--').replace(/^-+|-+\$/g,''); }
+function enc(p) { return p.replace(/:/g,'').replace(/[\\\\/]/g,'-'); }
 try {
     const decisionsFile = path.join(os.homedir(), '.claude', 'projects', enc(process.argv[1]), 'memory', 'decisions.md');
     if (!fs.existsSync(decisionsFile)) process.exit(0);
@@ -278,7 +286,7 @@ try{
     if(!briefing&&(!learnings||!learnings.rules||!learnings.rules.length)&&!rlmLessons)return;
     let targetFile;
     if(client==='claude'){
-        function enc(p){return p.replace(/:/g,'').replace(/[\\\\/]/g,'--').replace(/^-+|-+\$/g,'');}
+        function enc(p){return p.replace(/:/g,'').replace(/[\\\\/]/g,'-');}
         const md=path.join(os.homedir(),'.claude','projects',enc(cwd),'memory');
         fs.mkdirSync(md,{recursive:true});
         targetFile=path.join(md,'MEMORY.md');

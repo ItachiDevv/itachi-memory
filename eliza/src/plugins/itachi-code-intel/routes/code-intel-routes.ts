@@ -23,15 +23,15 @@ import { resolveProject } from '../../itachi-sync/middleware/project-resolver.js
  *   provider works better with reusable heuristics, not one-off architectural records.
  * - `bugfix`: Routine fixes rarely produce reusable management lessons.
  *
- * Threshold: significance >= 0.7 (the "technical decisions / architectural choices" tier).
- * This avoids polluting the RLM with routine work while capturing meaningful learnings.
+ * Threshold: significance >= 0.4 (lowered from 0.7 to bootstrap the learning pipeline).
+ * This captures routine bug fixes and minor features alongside meaningful learnings.
  */
 const RLM_CATEGORY_MAP: Record<string, string> = {
   preference: 'user-preference',
   learning: 'error-handling',
   decision: 'project-selection',
 };
-const RLM_SIGNIFICANCE_THRESHOLD = 0.7;
+const RLM_SIGNIFICANCE_THRESHOLD = 0.4;
 
 /**
  * Lesson Category Map: Maps session insight categories to task_lesson metadata categories.

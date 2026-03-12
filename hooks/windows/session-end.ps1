@@ -156,7 +156,7 @@ const path = require('path');
 const os = require('os');
 
 function encodeCwd(p) {
-    return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+$/g, '');
+    return p.replace(/:/g, '').replace(/[\\/]/g, '-');
 }
 
 const cwd = process.argv[1];
@@ -277,7 +277,7 @@ function httpPost(url, body) {
 function findClaudeTranscript(cwd, sessionId) {
     // Claude: ~/.claude/projects/{encoded-cwd}/*.jsonl
     function encodeCwd(p) {
-        return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+$/g, '');
+        return p.replace(/:/g, '').replace(/[\\/]/g, '-');
     }
     const projectDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd));
     if (!fs.existsSync(projectDir)) return null;
@@ -335,7 +335,7 @@ function extractClaudeTexts(lines) {
                     const inputStr = typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {}).substring(0, 300);
                     texts.push('[TOOL_USE] ' + p.name + ': ' + inputStr);
                 }
-            } else if (entry.type === 'human' && entry.message && entry.message.content) {
+            } else if (entry.type === 'user' && entry.message && entry.message.content) {
                 const parts = Array.isArray(entry.message.content) ? entry.message.content : [];
                 const textParts = parts.filter(c => c.type === 'text').map(c => c.text).join(' ');
                 if (textParts.length > 10) texts.push('[USER] ' + textParts);

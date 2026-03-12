@@ -276,7 +276,7 @@ function httpPost(url, body) {
                         if (textParts.length > 50) {
                             conversationParts.push('[ASSISTANT] ' + textParts);
                         }
-                    } else if (entry.type === 'human' && entry.message && entry.message.content) {
+                    } else if (entry.type === 'user' && entry.message && entry.message.content) {
                         const textParts = Array.isArray(entry.message.content)
                             ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
                             : (typeof entry.message.content === 'string' ? entry.message.content : '');

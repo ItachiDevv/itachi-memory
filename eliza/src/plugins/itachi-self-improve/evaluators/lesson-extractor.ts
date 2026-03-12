@@ -51,7 +51,11 @@ export const lessonExtractor: Evaluator = {
     // Run when a task completion notification is in the message
     const hasCompletion = text.includes('completed') || text.includes('failed') || text.includes('timeout');
 
-    return hasTaskResult || hasFeedback || hasCompletion;
+    // Sampling fallback: fire on every 5th message to catch lessons from normal conversation
+    const recentMessages = Array.isArray(state?.data?.recentMessages) ? state.data.recentMessages : [];
+    const isSampleTick = recentMessages.length > 0 && recentMessages.length % 5 === 0;
+
+    return hasTaskResult || hasFeedback || hasCompletion || isSampleTick;
   },
 
   handler: async (runtime: IAgentRuntime, message: Memory, state?: State): Promise<void> => {

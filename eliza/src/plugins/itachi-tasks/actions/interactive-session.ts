@@ -156,6 +156,7 @@ const MACHINE_ALIASES: Record<string, string> = {
   'windows-pc': 'windows', 'windows pc': 'windows',
   windows: 'windows', pc: 'windows', win: 'windows', desktop: 'windows',
   'surface-win': 'surface', surface: 'surface',
+  hoodie: 'hoodie',
   hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify', linux: 'coolify',
 };
 

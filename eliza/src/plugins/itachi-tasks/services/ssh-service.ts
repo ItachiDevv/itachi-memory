@@ -2,7 +2,7 @@ import { Service, type IAgentRuntime } from '@elizaos/core';
 import { execFile, spawn, type ChildProcess } from 'child_process';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { tmpdir, homedir } from 'os';
+import { homedir } from 'os';
 
 export interface SSHTarget {
   host: string;
@@ -80,7 +80,9 @@ export class SSHService extends Service {
       // Normalize line endings — env vars may have literal \n
       const normalized = content.replace(/\\n/g, '\n');
       writeFileSync(keyPath, normalized, { mode: 0o600 });
-    } catch { /* best-effort */ }
+    } catch {
+      return undefined;
+    }
     return keyPath;
   }
 
@@ -102,8 +104,12 @@ export class SSHService extends Service {
       if (explicit) return explicit;
       const content = s(`ITACHI_SSH_${nameUpper}_KEY_CONTENT`);
       if (content) {
-        const keyPath = join(tmpdir(), `itachi-key-${nameUpper.toLowerCase()}`);
-        try { writeFileSync(keyPath, content.replace(/\\n/g, '\n'), { mode: 0o600 }); } catch { /* best-effort */ }
+        const sshDir = join(homedir(), '.ssh');
+        const keyPath = join(sshDir, `itachi-key-${nameUpper.toLowerCase()}`);
+        try {
+          mkdirSync(sshDir, { recursive: true, mode: 0o700 });
+          writeFileSync(keyPath, content.replace(/\\n/g, '\n'), { mode: 0o600 });
+        } catch { /* best-effort */ }
         return keyPath;
       }
       return deployKeyPath;

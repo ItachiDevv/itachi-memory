@@ -47,20 +47,24 @@ export function formatTestRunMarkdown(run: TestRun): string {
   return lines.join('\n');
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export function formatTestRunTelegram(run: TestRun): string {
   const overallIcon = run.totalFail > 0 || run.totalError > 0 ? '❌' : '✅';
   const lines: string[] = [];
-  lines.push(`${overallIcon} *Itachi E2E Test Run*`);
-  lines.push(`Duration: ${formatDuration(run.durationMs)}`);
+  lines.push(`${overallIcon} <b>Itachi E2E Test Run</b>`);
+  lines.push(`Duration: ${escapeHtml(formatDuration(run.durationMs))}`);
   lines.push(`Pass: ${run.totalPass} | Fail: ${run.totalFail} | Skip: ${run.totalSkip} | Error: ${run.totalError}`);
   lines.push('');
   for (const suite of run.suites) {
     const suiteIcon = suite.failCount > 0 || suite.errorCount > 0 ? '❌' : suite.skipCount === suite.results.length ? '⏭' : '✅';
-    lines.push(`${suiteIcon} *${suite.name}*: ${suite.passCount}✅ ${suite.failCount}❌ ${suite.skipCount}⏭`);
+    lines.push(`${suiteIcon} <b>${escapeHtml(suite.name)}</b>: ${suite.passCount}✅ ${suite.failCount}❌ ${suite.skipCount}⏭`);
     // Show failed tests
     for (const r of suite.results) {
       if (r.status === 'fail' || r.status === 'error') {
-        lines.push(`  • ${r.name}: ${r.message || 'no detail'}`);
+        lines.push(`  - ${escapeHtml(r.name)}: ${escapeHtml(r.message || 'no detail')}`);
       }
     }
   }

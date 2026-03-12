@@ -37,15 +37,15 @@ export const effectivenessWorker: TaskWorker = {
         const confidence = typeof meta.confidence === 'number' ? meta.confidence : 0.5;
         const lastOutcome = meta.last_outcome as string | undefined;
 
-        // Only evaluate lessons that have been applied enough times
-        if (timesReinforced < 5) continue;
+        // Only evaluate lessons that have been applied enough times (lowered to 2 for bootstrap)
+        if (timesReinforced < 2) continue;
 
         // Check success/failure pattern from metadata
         const successCount = typeof meta.success_count === 'number' ? meta.success_count : 0;
         const failureCount = typeof meta.failure_count === 'number' ? meta.failure_count : 0;
         const totalApplications = successCount + failureCount;
 
-        if (totalApplications < 5) {
+        if (totalApplications < 2) {
           // Approximate from reinforcement patterns
           if (lastOutcome === 'success' && confidence > 0.7) continue; // Likely fine
           if (lastOutcome === 'failure' && confidence < 0.3) continue; // Already decayed
@@ -54,10 +54,10 @@ export const effectivenessWorker: TaskWorker = {
         const successRate = totalApplications > 0 ? successCount / totalApplications : 0.5;
 
         let newConfidence = confidence;
-        if (totalApplications >= 5 && successRate < 0.3) {
+        if (totalApplications >= 2 && successRate < 0.3) {
           newConfidence = 0.1;
           decayed++;
-        } else if (totalApplications >= 5 && successRate > 0.8) {
+        } else if (totalApplications >= 2 && successRate > 0.8) {
           newConfidence = 0.95;
           boosted++;
         }

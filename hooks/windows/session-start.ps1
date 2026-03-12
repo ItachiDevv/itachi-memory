@@ -568,7 +568,7 @@ const itachiClient = process.argv[5] || '';
 // Encode cwd for Claude's project directory structure
 // Replace :\ or :/ with --, replace remaining \ and / with --, strip leading/trailing --
 function encodeCwd(p) {
-    return p.replace(/:/g, '').replace(/[\\/]/g, '--').replace(/^-+|-+$/g, '');
+    return p.replace(/:/g, '').replace(/[\\/]/g, '-');
 }
 
 try {

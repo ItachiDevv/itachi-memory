@@ -304,12 +304,12 @@ function extractClaudeTexts(lines) {
                         texts.push('[TOOL_USE] ' + summary.substring(0, 120));
                     }
                 }
-            } else if (entry.type === 'human' && entry.message && entry.message.content) {
+            } else if (entry.type === 'user' && entry.message && entry.message.content) {
                 const textParts = Array.isArray(entry.message.content)
                     ? entry.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
                     : (typeof entry.message.content === 'string' ? entry.message.content : '');
                 if (textParts.length > 10) texts.push('[USER] ' + textParts);
-            } else if (entry.type === 'tool_result' || (entry.type === 'human' && entry.message && Array.isArray(entry.message.content) && entry.message.content.some(c => c.type === 'tool_result'))) {
+            } else if (entry.type === 'tool_result' || (entry.type === 'user' && entry.message && Array.isArray(entry.message.content) && entry.message.content.some(c => c.type === 'tool_result'))) {
                 const results = entry.type === 'tool_result'
                     ? [entry]
                     : (entry.message.content || []).filter(c => c.type === 'tool_result');
