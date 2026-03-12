@@ -1,6 +1,6 @@
 import { type TaskWorker, type IAgentRuntime } from '@elizaos/core';
 import { TaskService } from '../services/task-service.js';
-import { MachineRegistryService } from '../services/machine-registry.js';
+// MachineRegistryService removed — TODO: revisit after orchestrator migration
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { SSHService } from '../services/ssh-service.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
@@ -48,7 +48,6 @@ export const healthMonitorWorker: TaskWorker = {
   execute: async (runtime: IAgentRuntime): Promise<void> => {
     try {
       const taskService = runtime.getService<TaskService>('itachi-tasks');
-      const registry = runtime.getService<MachineRegistryService>('machine-registry');
       const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
 
       const status: HealthStatus = {
@@ -80,26 +79,7 @@ export const healthMonitorWorker: TaskWorker = {
         }
       }
 
-      // 2. Check machine registry
-      if (registry) {
-        try {
-          const allMachines = await registry.getAllMachines();
-          status.machines.total = allMachines.length;
-          status.machines.online = allMachines.filter(m => m.status === 'online').length;
-
-          if (status.machines.total > 0 && status.machines.online === 0) {
-            runtime.logger.warn('[health] No machines online');
-            if (shouldAlert('no-machines') && topicsService) {
-              await topicsService.sendMessageWithKeyboard(
-                `[Health Alert] No machines are currently online (${status.machines.total} registered, 0 online).`,
-                [],
-              ).catch((err: unknown) => { runtime.logger.debug(`[health] alert send failed: ${err instanceof Error ? err.message : String(err)}`); });
-            }
-          }
-        } catch (err) {
-          runtime.logger.warn(`[health] Machine registry check failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
+      // 2. Machine registry check removed — TODO: revisit after orchestrator migration
 
       // 3. Check for stale tasks (running >10min without heartbeat)
       if (taskService) {

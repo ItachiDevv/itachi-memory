@@ -1,6 +1,14 @@
 import type { InteractiveSession } from '../services/ssh-service.js';
 import type { TranscriptEntry } from '../utils/transcript-analyzer.js';
-import type { SessionDriver } from '../services/session-driver.js';
+// SessionDriver removed — TODO: revisit after orchestrator migration
+// Inline the minimal interface needed by ActiveSession
+interface SessionDriverLike {
+  onHumanInput(text: string): void;
+  onChunk(chunk: any): void;
+  onTurnComplete(): Promise<void>;
+  isDone(): boolean;
+  sendCompletionSummary(status: string, files: string[], prUrl?: string): Promise<void>;
+}
 
 /** Session output mode */
 export type SessionMode = 'stream-json' | 'tui';
@@ -28,7 +36,7 @@ export interface ActiveSession {
   /** Timestamp of last usage check */
   lastUsageCheckTime?: number;
   /** SessionDriver for multi-turn executor sessions */
-  driver?: SessionDriver;
+  driver?: SessionDriverLike;
 }
 
 // ── globalThis-backed shared state ───────────────────────────────────

@@ -367,6 +367,7 @@ export async function handleBrain(runtime: IAgentRuntime, text: string, callback
     // Dynamic import to avoid circular deps — brain-loop-service may not exist yet
     let brainService: any;
     try {
+      // @ts-ignore brain-loop-service removed — will fail at runtime, caught below
       brainService = await import('../services/brain-loop-service.js');
     } catch {
       if (callback) await callback({ text: 'Brain loop service not yet deployed. Deploy the latest code to enable /brain.' });

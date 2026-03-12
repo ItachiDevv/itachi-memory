@@ -3,7 +3,7 @@ import { registerSlashInterceptor } from './slash-interceptor.js';
 import { SSHService } from './ssh-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import { TaskService } from './task-service.js';
-import { MachineRegistryService } from './machine-registry.js';
+// MachineRegistryService removed — TODO: revisit after orchestrator migration
 import {
   listRemoteDirectory,
   browsingSessionMap,
@@ -1230,6 +1230,7 @@ async function handleBrainProposalCallback(
   if (action === 'a') {
     // Approve: create task from proposal
     try {
+      // @ts-ignore brain-loop-service removed — will fail at runtime, caught below
       const { approveProposal } = await import('./brain-loop-service.js');
 
       const task = await taskService.createTask({
@@ -1267,6 +1268,7 @@ async function handleBrainProposalCallback(
   } else if (action === 'r') {
     // Reject
     try {
+      // @ts-ignore brain-loop-service removed — will fail at runtime, caught below
       const { rejectProposal } = await import('./brain-loop-service.js');
       await rejectProposal(supabase, proposal.id);
 
@@ -1369,16 +1371,9 @@ async function recoverOrphanedSessions(runtime: IAgentRuntime): Promise<void> {
   }
 }
 
-async function resolveEngine(runtime: IAgentRuntime, sshTarget: string): Promise<string> {
-  try {
-    const registry = runtime.getService<MachineRegistryService>('machine-registry');
-    if (!registry) return 'itachi';
-    const { machine } = await registry.resolveMachine(sshTarget);
-    if (!machine?.engine_priority?.length) return 'itachi';
-    return ENGINE_WRAPPERS[machine.engine_priority[0]] || 'itachi';
-  } catch {
-    return 'itachi';
-  }
+async function resolveEngine(_runtime: IAgentRuntime, _sshTarget: string): Promise<string> {
+  // TODO: revisit after orchestrator migration — was using MachineRegistryService
+  return 'itachi';
 }
 
 /**

@@ -2,7 +2,7 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import { SSHService, type InteractiveSession } from '../services/ssh-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { TaskService } from '../services/task-service.js';
-import { MachineRegistryService } from '../services/machine-registry.js';
+// MachineRegistryService removed — TODO: revisit after orchestrator migration
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import {
@@ -171,16 +171,9 @@ const ENGINE_WRAPPERS: Record<string, string> = {
   gemini: 'itachig',
 };
 
-async function resolveEngineCommand(target: string, runtime: IAgentRuntime): Promise<string> {
-  try {
-    const registry = runtime.getService<MachineRegistryService>('machine-registry');
-    if (!registry) return 'itachi';
-    const { machine } = await registry.resolveMachine(target);
-    if (!machine?.engine_priority?.length) return 'itachi';
-    return ENGINE_WRAPPERS[machine.engine_priority[0]] || 'itachi';
-  } catch {
-    return 'itachi';
-  }
+async function resolveEngineCommand(_target: string, _runtime: IAgentRuntime): Promise<string> {
+  // TODO: revisit after orchestrator migration — was using MachineRegistryService
+  return 'itachi';
 }
 
 // Re-export shared types and map for backward compatibility
@@ -473,19 +466,8 @@ export async function handleEngineHandoff(
 ): Promise<void> {
   const fromEngine = session.currentEngine || 'claude';
 
-  // Look up engine priority from machine registry
-  let priority: string[] = ['claude', 'codex', 'gemini'];
-  try {
-    const registry = runtime.getService<MachineRegistryService>('machine-registry');
-    if (registry) {
-      const { machine } = await registry.resolveMachine(session.target);
-      if (machine?.engine_priority?.length) {
-        priority = machine.engine_priority;
-      }
-    }
-  } catch (err) {
-    runtime.logger.warn(`[session] Failed to get engine priority: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  // TODO: revisit after orchestrator migration — was using MachineRegistryService for engine priority
+  const priority: string[] = ['claude', 'codex', 'gemini'];
 
   // Find next engine (skip current, follow priority order)
   let nextEngine: string | null = null;

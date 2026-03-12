@@ -1,12 +1,12 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResult } from '@elizaos/core';
 import { SSHService } from '../services/ssh-service.js';
-import { MachineRegistryService } from '../services/machine-registry.js';
+// MachineRegistryService removed — TODO: revisit after orchestrator migration
 import { TaskService } from '../services/task-service.js';
 import { DEFAULT_REPO_BASES } from '../shared/repo-utils.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { activeSessions } from '../shared/active-sessions.js';
 import { browsingSessionMap } from '../utils/directory-browser.js';
-import { getConfig as getBrainConfig } from '../services/brain-loop-service.js';
+// brain-loop-service removed — inline fallback below
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
@@ -187,19 +187,9 @@ function detectIntent(text: string): string {
  * Detect the OS of a target machine from the machine registry, falling back
  * to the SSH target name alias mapping for well-known names.
  */
-async function detectTargetOS(runtime: IAgentRuntime, target: string): Promise<string | null> {
-  // Try machine registry first
-  try {
-    const registry = runtime.getService<MachineRegistryService>('machine-registry');
-    if (registry) {
-      const { machine } = await registry.resolveMachine(target);
-      if (machine?.os) return machine.os;
-    }
-  } catch {
-    // Registry not available — fall through
-  }
-
-  // Fallback: infer from well-known target names
+async function detectTargetOS(_runtime: IAgentRuntime, target: string): Promise<string | null> {
+  // TODO: revisit after orchestrator migration — was using MachineRegistryService
+  // Infer from well-known target names
   const lower = target.toLowerCase();
   if (lower === 'windows' || lower === 'pc' || lower === 'win' || lower === 'desktop' || lower === 'laptop') return 'windows';
   if (lower === 'mac' || lower === 'macbook' || lower === 'apple') return 'darwin';
@@ -813,7 +803,7 @@ export async function handleSelfInspection(
   }
 
   // Default: /self — full status overview
-  const brainConfig = getBrainConfig();
+  const brainConfig = { enabled: false }; // TODO: revisit after orchestrator migration
   const info = {
     executor_enabled: process.env.ITACHI_EXECUTOR_ENABLED || 'false',
     executor_targets: process.env.ITACHI_EXECUTOR_TARGETS || '(default: all SSH targets)',
