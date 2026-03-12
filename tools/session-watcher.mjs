@@ -39,16 +39,16 @@ function resolveMachineId() {
   const knownMap = {
     'hoodie-prometh': 'hood',
     'surface-win': 'surface',
-    'itachi-mem': 'coolify',
-    'michaels-air': 'mac-air',
-    'macbook-air': 'mac-air',
+    'itachi-mem': 'cool',
+    'michaels-air': 'air',
+    'macbook-air': 'air',
   };
   for (const [pattern, id] of Object.entries(knownMap)) {
     if (h.includes(pattern)) return id;
   }
   // Detect by OS + user
   const user = process.env.USER || process.env.USERNAME || '';
-  if (platform() === 'darwin') return 'mac-air';
+  if (platform() === 'darwin') return 'air';
   if (platform() === 'win32') return 'windows';
   if (platform() === 'linux') return 'linux';
   return h.replace(/[^a-z0-9-]/g, '-').substring(0, 30);
