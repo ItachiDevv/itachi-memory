@@ -66,7 +66,6 @@ mock.module('@elizaos/core', () => ({
 // Now import the real modules
 import { MemoryService } from '../plugins/itachi-memory/services/memory-service';
 import { TaskService } from '../plugins/itachi-tasks/services/task-service';
-import { SyncService } from '../plugins/itachi-sync/services/sync-service';
 import { storeMemoryAction } from '../plugins/itachi-memory/actions/store-memory';
 import { cancelTaskAction } from '../plugins/itachi-tasks/actions/cancel-task';
 import { listTasksAction } from '../plugins/itachi-tasks/actions/list-tasks';

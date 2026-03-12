@@ -2,21 +2,9 @@ import type { Project, ProjectAgent, IAgentRuntime } from '@elizaos/core';
 import { character } from './character.js';
 import { itachiMemoryPlugin, transcriptIndexerWorker, registerTranscriptIndexerTask } from './plugins/itachi-memory/index.js';
 import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask, proactiveMonitorWorker, registerProactiveMonitorTask, healthMonitorWorker, registerHealthMonitorTask, brainLoopWorker, registerBrainLoopTask } from './plugins/itachi-tasks/index.js';
-import { itachiSyncPlugin } from './plugins/itachi-sync/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask, effectivenessWorker, registerEffectivenessTask } from './plugins/itachi-self-improve/index.js';
 import { itachiCodexPlugin } from './plugins/plugin-codex/index.js';
 import { itachiGeminiPlugin } from './plugins/plugin-gemini/index.js';
-import {
-  itachiCodeIntelPlugin,
-  editAnalyzerWorker, registerEditAnalyzerTask,
-  sessionSynthesizerWorker, registerSessionSynthesizerTask,
-  repoExpertiseWorker, registerRepoExpertiseTask,
-  styleExtractorWorker, registerStyleExtractorTask,
-  crossProjectWorker, registerCrossProjectTask,
-  cleanupWorker, registerCleanupTask,
-} from './plugins/itachi-code-intel/index.js';
-import { itachiAgentsPlugin, subagentLifecycleWorker, registerSubagentLifecycleTask } from './plugins/itachi-agents/index.js';
-import { itachiTesterPlugin, testRunnerWorker, registerTestRunnerTask } from './plugins/itachi-tester/index.js';
 
 /**
  * ElizaOS TaskWorker scheduler is non-functional (tasks never execute).
@@ -65,11 +53,7 @@ const agent: ProjectAgent = {
     itachiGeminiPlugin,
     itachiMemoryPlugin,
     itachiTasksPlugin,
-    itachiSyncPlugin,
     itachiSelfImprovePlugin,
-    itachiCodeIntelPlugin,
-    itachiAgentsPlugin,
-    itachiTesterPlugin,
   ],
   init: async (runtime) => {
     runtime.logger.info('Itachi agent initialized');
@@ -83,22 +67,14 @@ const agent: ProjectAgent = {
     // Register workers with ElizaOS TaskWorker system (backup, currently non-functional)
     const allWorkers = [
       { worker: reflectionWorker, register: registerReflectionTask, name: 'reflection' },
-      { worker: editAnalyzerWorker, register: registerEditAnalyzerTask, name: 'edit-analyzer' },
-      { worker: sessionSynthesizerWorker, register: registerSessionSynthesizerTask, name: 'session-synthesizer' },
-      { worker: repoExpertiseWorker, register: registerRepoExpertiseTask, name: 'repo-expertise' },
-      { worker: styleExtractorWorker, register: registerStyleExtractorTask, name: 'style-extractor' },
-      { worker: crossProjectWorker, register: registerCrossProjectTask, name: 'cross-project' },
-      { worker: cleanupWorker, register: registerCleanupTask, name: 'cleanup' },
       { worker: taskDispatcherWorker, register: registerTaskDispatcherTask, name: 'task-dispatcher' },
       { worker: githubRepoSyncWorker, register: registerGithubRepoSyncTask, name: 'github-repo-sync' },
       { worker: reminderPollerWorker, register: registerReminderPollerTask, name: 'reminder-poller' },
       { worker: proactiveMonitorWorker, register: registerProactiveMonitorTask, name: 'proactive-monitor' },
       { worker: healthMonitorWorker, register: registerHealthMonitorTask, name: 'health-monitor' },
       { worker: brainLoopWorker, register: registerBrainLoopTask, name: 'brain-loop' },
-      { worker: subagentLifecycleWorker, register: registerSubagentLifecycleTask, name: 'subagent-lifecycle' },
       { worker: effectivenessWorker, register: registerEffectivenessTask, name: 'effectiveness' },
       { worker: transcriptIndexerWorker, register: registerTranscriptIndexerTask, name: 'transcript-indexer' },
-      { worker: testRunnerWorker, register: registerTestRunnerTask, name: 'test-runner' },
     ];
 
     for (const { worker, register, name } of allWorkers) {
@@ -129,24 +105,6 @@ const agent: ProjectAgent = {
       { name: 'github-sync', intervalMs: 86_400_000, delayMs: 30_000,
         validate: (rt) => githubRepoSyncWorker.validate!(rt, {} as any, {} as any),
         execute: (rt) => githubRepoSyncWorker.execute(rt, {}, { name: 'ITACHI_GITHUB_REPO_SYNC', tags: [], description: '' }) },
-      // Code-intel: edit analyzer (15m, start after 60s)
-      { name: 'edit-analyzer', intervalMs: 900_000, delayMs: 60_000,
-        execute: (rt) => editAnalyzerWorker.execute(rt, {}, { name: 'ITACHI_EDIT_ANALYZER', tags: [], description: '' }) },
-      // Code-intel: session synthesizer (30m, start after 45s)
-      { name: 'session-synthesizer', intervalMs: 1_800_000, delayMs: 45_000,
-        execute: (rt) => sessionSynthesizerWorker.execute(rt, {}, { name: 'ITACHI_SESSION_SYNTHESIZER', tags: [], description: '' }) },
-      // Code-intel: repo expertise (24h, start after 2m)
-      { name: 'repo-expertise', intervalMs: 86_400_000, delayMs: 120_000,
-        execute: (rt) => repoExpertiseWorker.execute(rt, {}, { name: 'ITACHI_REPO_EXPERTISE', tags: [], description: '' }) },
-      // Code-intel: style extractor (weekly, start after 3m)
-      { name: 'style-extractor', intervalMs: 604_800_000, delayMs: 180_000,
-        execute: (rt) => styleExtractorWorker.execute(rt, {}, { name: 'ITACHI_STYLE_EXTRACTOR', tags: [], description: '' }) },
-      // Code-intel: cross-project (weekly, start after 4m)
-      { name: 'cross-project', intervalMs: 604_800_000, delayMs: 240_000,
-        execute: (rt) => crossProjectWorker.execute(rt, {}, { name: 'ITACHI_CROSS_PROJECT', tags: [], description: '' }) },
-      // Code-intel: cleanup (weekly, start after 5m) — capped to fit 32-bit signed int
-      { name: 'cleanup', intervalMs: 604_800_000, delayMs: 300_000,
-        execute: (rt) => cleanupWorker.execute(rt, {}, { name: 'ITACHI_CLEANUP', tags: [], description: '' }) },
       // Self-improve: reflection (weekly, start after 6m)
       { name: 'reflection', intervalMs: 604_800_000, delayMs: 360_000,
         execute: (rt) => reflectionWorker.execute(rt, {}, { name: 'ITACHI_REFLECTION', tags: [], description: '' }) },
@@ -154,9 +112,6 @@ const agent: ProjectAgent = {
       { name: 'reminder-poller', intervalMs: 60_000, delayMs: 15_000,
         validate: (rt) => reminderPollerWorker.validate!(rt, {} as any, {} as any),
         execute: (rt) => reminderPollerWorker.execute(rt, {}, { name: 'ITACHI_REMINDER_POLLER', tags: [], description: '' }) },
-      // Agents: subagent lifecycle (30s, start after 20s)
-      { name: 'subagent-lifecycle', intervalMs: 30_000, delayMs: 20_000,
-        execute: (rt) => subagentLifecycleWorker.execute(rt, {}, { name: 'ITACHI_SUBAGENT_LIFECYCLE', tags: [], description: '' }) },
       // Health monitor (60s, start after 25s)
       { name: 'health-monitor', intervalMs: 60_000, delayMs: 25_000,
         execute: (rt) => healthMonitorWorker.execute(rt, {}, { name: 'ITACHI_HEALTH_MONITOR', tags: [], description: '' }) },
@@ -171,10 +126,6 @@ const agent: ProjectAgent = {
       { name: 'transcript-indexer', intervalMs: 3_600_000, delayMs: 90_000,
         validate: (rt) => transcriptIndexerWorker.validate!(rt, {} as any, {} as any),
         execute: (rt) => transcriptIndexerWorker.execute(rt, {}, { name: 'ITACHI_TRANSCRIPT_INDEXER', tags: [], description: '' }) },
-      // Tester: E2E tests (6h, first run after 5min)
-      { name: 'test-runner', intervalMs: 21_600_000, delayMs: 300_000,
-        validate: (rt) => testRunnerWorker.validate!(rt, {} as any, {} as any),
-        execute: (rt) => testRunnerWorker.execute(rt, {}, { name: 'ITACHI_TEST_RUNNER', tags: [], description: '' }) },
     ]);
   },
 };

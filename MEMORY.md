@@ -28,6 +28,16 @@ When I tell the user to do something that changes state (disable SSH, set a valu
 - Format: `- [date] <what was changed and why>`
 This prevents contradicting myself after context compaction. Do not wait for session-end.
 
+## Telegram /remote Command
+- **`/remote`** — shows machine picker buttons for remote control sessions
+- **`/remote mac`** / **`/remote surface`** — starts Claude in TUI mode (`itachi --ds`) with PTY, auto-starts `/remote-control` via `remoteControlAtStartup: true`
+- Creates a dedicated Telegram topic, streams output, detects remote control URL
+- Code: `interactive-session.ts:spawnRemoteControlSession()` + `telegram-commands.ts:handleRemoteSession()`
+- **Mac Tailscale IP**: `100.80.217.87` (updated 2026-03-11, was `100.103.124.46`)
+- **itachi wrapper locations**: `~/.claude/itachi` (correct, no OAuth override — Claude handles refresh internally)
+- SSH PATH in ssh-service.ts includes `$HOME/.claude` for wrapper resolution
+- Session-end hook uses `python3 select.select` with 1.0s timeout (Claude Code has 1.5s hard limit for SessionEnd hooks)
+
 ## Machine State (as of 2026-03-11)
 - **surface-win SSH**: enabled (sshd service set to auto-start via sc.exe config)
 - **surface-win authorized_keys**: `C:\ProgramData\ssh\administrators_authorized_keys` (NOT ~/.ssh/)
@@ -43,16 +53,16 @@ This prevents contradicting myself after context compaction. Do not wait for ses
 - **Claude Code installed via npm** through nvm: `npm install -g @anthropic-ai/claude-code`
 - **Node**: v24.13.1 via nvm; `which claude` → `~/.nvm/versions/node/v24.13.1/bin/claude`
 - **If wrong claude binary**: check `which claude`; if `~/.local/bin/claude` or `~/.bun/bin/claude` exists, remove it
-- **`~/.claude/.auth-token`**: JSON format `{"accessToken":"sk-ant-oat01-..."}` — for SSH sessions only
-  - For SSH: `CLAUDE_CODE_OAUTH_TOKEN` is set from this file (via `SSH_CONNECTION` guard in wrapper)
-  - For local: keychain auth used automatically (DO NOT set `CLAUDE_CODE_OAUTH_TOKEN` locally)
-  - If SSH shows API mode: refresh with `claude setup-token`, save raw token with `printf '%s' 'sk-ant-...' > ~/.claude/.auth-token`
+- **Wrapper does NOT set `CLAUDE_CODE_OAUTH_TOKEN`** — Claude Code handles OAuth refresh internally via its own HTTP client (bypasses Cloudflare)
+  - Setting an expired token forces Claude into API mode (Sonnet) instead of Max (Opus)
+  - Local sessions: keychain auth used automatically
+  - SSH sessions: Claude Code uses its own stored refresh token automatically
 
 ## itachi Wrapper — Auth Rules
-- **`CLAUDE_CODE_OAUTH_TOKEN` overrides keychain** — setting it on local sessions breaks Max subscription
-- **`SSH_CONNECTION` guard**: wrapper ONLY sets `CLAUDE_CODE_OAUTH_TOKEN` when `$SSH_CONNECTION` is set
+- **NEVER set `CLAUDE_CODE_OAUTH_TOKEN`** — it overrides Claude's internal auth and causes API mode fallback
 - **`unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN`** in wrapper — prevents API billing mode
-- If wrapper shows "Claude API" instead of "Claude Max": check `~/.claude/itachi` — shebang must be line 1, OAuth block must have `SSH_CONNECTION` guard
+- Claude Code handles its own OAuth token refresh internally (even over SSH)
+- If wrapper shows "Claude API" instead of "Claude Max": ensure no env var is overriding auth (check `~/.itachi-api-keys` for stale CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)
 - Wrapper template in `install.mjs` at line ~771 (`const unixWrapper`)
 
 ## Patterns

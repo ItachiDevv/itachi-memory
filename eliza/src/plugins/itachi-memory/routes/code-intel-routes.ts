@@ -1,9 +1,9 @@
 import type { Route, IAgentRuntime } from '@elizaos/core';
 import { ModelType, MemoryType } from '@elizaos/core';
 import { CodeIntelService } from '../services/code-intel-service.js';
-import { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { checkAuth, sanitizeError, truncate, MAX_LENGTHS } from '../../itachi-sync/utils.js';
-import { resolveProject } from '../../itachi-sync/middleware/project-resolver.js';
+import { MemoryService } from '../services/memory-service.js';
+import { checkAuth, sanitizeError, truncate, MAX_LENGTHS } from '../utils/code-intel-utils.js';
+import { resolveProject } from '../middleware/project-resolver.js';
 
 /**
  * RLM Bridge: Maps session insight categories to RLM management-lesson categories.
