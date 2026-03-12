@@ -22,6 +22,7 @@ import { registerCallbackHandler } from './services/callback-handler.js';
 export { TelegramTopicsService } from './services/telegram-topics.js';
 export { MachineRegistryService } from './services/machine-registry.js';
 export { TaskExecutorService } from './services/task-executor-service.js';
+export { SessionDriver } from './services/session-driver.js';
 export { activeSessions, type ActiveSession } from './shared/active-sessions.js';
 export { taskDispatcherWorker, registerTaskDispatcherTask } from './workers/task-dispatcher.js';
 export { githubRepoSyncWorker, registerGithubRepoSyncTask } from './workers/github-repo-sync.js';

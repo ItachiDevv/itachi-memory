@@ -11,6 +11,9 @@ import { getStartingDir } from '../shared/start-dir.js';
 import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transcript-analyzer.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { stripAnsi, filterTuiNoise } from '../utils/tui-filter.js';
+import { parseStreamJsonLine, wrapStreamJsonInput, createNdjsonParser } from '../actions/interactive-session.js';
+import { SessionDriver } from './session-driver.js';
+import type { ParsedChunk } from '../shared/parsed-chunks.js';
 
 // ── Re-queue tracking (prevent infinite loops) ──────────────────────
 // Track how many times a task has been re-queued due to offline machines.
@@ -709,9 +712,22 @@ export class TaskExecutorService extends Service {
         // Fetch project rules
         const rules = await memoryService.searchMemories(task.project, task.project, 5, undefined, 'project_rule');
         if (rules.length > 0) {
-          lines.push('', '--- Project rules ---');
+          lines.push('', '--- Project rules (follow these) ---');
           for (const rule of rules) {
             lines.push(`- ${rule.summary || rule.content?.substring(0, 200)}`);
+          }
+        }
+
+        // Fetch past task lessons for this project
+        const lessons = await memoryService.searchMemories(
+          `${task.project} task outcome`, task.project, 3, undefined, 'task_lesson'
+        );
+        if (lessons.length > 0) {
+          lines.push('', '--- Lessons from past tasks ---');
+          for (const lesson of lessons) {
+            const meta = (lesson as any).metadata || {};
+            const outcome = meta.last_outcome || '';
+            lines.push(`- [${outcome}] ${(lesson.summary || lesson.content || '').substring(0, 150)}`);
           }
         }
       }
@@ -774,56 +790,62 @@ export class TaskExecutorService extends Service {
     // Write prompt to remote temp file via base64 (avoids shell escaping issues)
     const remotePath = await this.writeRemotePrompt(sshTarget, task.id, prompt);
 
-    // Build CLI flags based on engine and whether we're using wrapper or direct CLI
-    const isWrapper = engineCmd !== (ENGINE_DIRECT[engine] || 'claude');
-    let cliFlags: string;
-    if (isWrapper) {
-      // Wrapper handles flag mapping: --dp → --dangerously-skip-permissions -p
-      cliFlags = '--dp';
-    } else {
-      // Direct CLI — use full flags
-      switch (engine) {
-        case 'codex': cliFlags = '--dangerously-bypass-approvals-and-sandbox'; break;
-        case 'gemini': cliFlags = '--yolo'; break;
-        default: cliFlags = '--dangerously-skip-permissions -p'; break;
-      }
-    }
-
-    // Build SSH command: cd to workspace, pipe prompt to engine
-    // Print mode reads prompt from stdin, outputs clean text, exits when done.
+    // Build CLI flags based on engine and platform
     const isWindows = sshService.isWindowsTarget(sshTarget);
+    const isWrapper = engineCmd !== (ENGINE_DIRECT[engine] || 'claude');
+
+    // Determine if this target supports multi-turn stream-json mode.
+    // Windows stays in print mode (PowerShell SSH stdin limitation).
+    const useStreamJson = !isWindows && engine === 'claude';
+
     let sshCommand: string;
-    if (isWindows) {
-      // Windows: PowerShell pipes to external executables don't properly close stdin,
-      // causing `Get-Content file | claude -p` to hang indefinitely via SSH.
-      // Instead, read the prompt file into a variable and pass as -p argument.
-      sshCommand = [
-        `cd '${workspace}'`,
-        `$env:ITACHI_TASK_ID='${task.id}'`,
-        `$env:ITACHI_ENABLED='1'`,
-        // Load OAuth token
-        `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
-        // Load API keys
-        `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
-        // PowerShell pipes to external exes hang via SSH (stdin never closes).
-        // Workaround: write a .cmd script that uses cmd.exe pipe (which works),
-        // then invoke it from PowerShell. Env vars persist into child process.
-        `$batFile = '${remotePath}'.Replace('.txt','.cmd')`,
-        `Set-Content -Path $batFile -Value ('type ' + '${remotePath}' + ' | ${engineCmd} ${cliFlags}') -Encoding ASCII`,
-        `cmd /c $batFile`,
-      ].join('; ');
-    } else {
-      // Check if SSH target connects as root — if so, we need to run claude as a
-      // non-root user because --dangerously-skip-permissions is blocked for root.
+    if (useStreamJson) {
+      // Unix multi-turn: stream-json mode with stdin kept open for follow-ups
+      const streamFlags = isWrapper
+        ? '--ds -p --verbose --output-format stream-json --input-format stream-json'
+        : '--dangerously-skip-permissions -p --verbose --output-format stream-json --input-format stream-json';
+
       const target = sshService.getTarget(sshTarget);
       const isRoot = target?.user === 'root';
-      const coreCmd = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}`;
+      const coreCmd = `cd ${workspace} && ITACHI_TASK_ID=${task.id} ${engineCmd} ${streamFlags}`;
       if (isRoot) {
-        // Use su to switch to 'itachi' user; -l gives login shell with PATH
-        // -c wraps the command; -s /bin/bash ensures bash shell
-        sshCommand = `su - itachi -s /bin/bash -c 'cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}'`;
+        sshCommand = `su - itachi -s /bin/bash -c '${coreCmd.replace(/'/g, "'\\''")}'`;
       } else {
         sshCommand = coreCmd;
+      }
+    } else {
+      // Print mode (Windows + non-claude engines): fire-and-forget via prompt file
+      let cliFlags: string;
+      if (isWrapper) {
+        cliFlags = '--dp';
+      } else {
+        switch (engine) {
+          case 'codex': cliFlags = '--dangerously-bypass-approvals-and-sandbox'; break;
+          case 'gemini': cliFlags = '--yolo'; break;
+          default: cliFlags = '--dangerously-skip-permissions -p'; break;
+        }
+      }
+
+      if (isWindows) {
+        sshCommand = [
+          `cd '${workspace}'`,
+          `$env:ITACHI_TASK_ID='${task.id}'`,
+          `$env:ITACHI_ENABLED='1'`,
+          `$authFile = "$env:USERPROFILE\\.claude\\.auth-token"; if (Test-Path $authFile) { $env:CLAUDE_CODE_OAUTH_TOKEN = (Get-Content $authFile -Raw).Trim() }`,
+          `$keysFile = "$env:USERPROFILE\\.itachi-api-keys"; if (Test-Path $keysFile) { Get-Content $keysFile | ForEach-Object { if ($_ -match '^(.+?)=(.+)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') } } }`,
+          `$batFile = '${remotePath}'.Replace('.txt','.cmd')`,
+          `Set-Content -Path $batFile -Value ('type ' + '${remotePath}' + ' | ${engineCmd} ${cliFlags}') -Encoding ASCII`,
+          `cmd /c $batFile`,
+        ].join('; ');
+      } else {
+        const target = sshService.getTarget(sshTarget);
+        const isRoot = target?.user === 'root';
+        const coreCmd = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}`;
+        if (isRoot) {
+          sshCommand = `su - itachi -s /bin/bash -c 'cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}'`;
+        } else {
+          sshCommand = coreCmd;
+        }
       }
     }
 
@@ -852,11 +874,49 @@ export class TaskExecutorService extends Service {
       if (taskHeartbeat) { clearInterval(taskHeartbeat); taskHeartbeat = null; }
     };
 
-    const handle = sshService.spawnInteractiveSession(
-      sshTarget,
-      sshCommand,
-      // stdout
-      (chunk: string) => {
+    // Create SessionDriver for stream-json sessions (multi-turn judgment layer)
+    let driver: SessionDriver | undefined;
+
+    // Build stdout handler: stream-json uses NDJSON parser, print mode uses plain text
+    let onStdout: (chunk: string) => void;
+    if (useStreamJson) {
+      // NDJSON parser routes chunks to SessionDriver + Telegram
+      const ndjsonHandler = createNdjsonParser((chunk: ParsedChunk) => {
+        chunkCount++;
+        if (driver) driver.onChunk(chunk);
+
+        // Forward displayable content to Telegram topic
+        if (chunk.kind === 'text' || chunk.kind === 'hook_response' || chunk.kind === 'passthrough') {
+          const content = chunk.kind === 'text' ? chunk.text : chunk.text;
+          if (content) {
+            sessionTranscript.push({ type: 'text', content, timestamp: Date.now() });
+            if (topicId && topicsService) {
+              topicsService.receiveTypedChunk(sessionId, topicId, chunk).catch(() => {});
+            }
+          }
+        }
+
+        // result chunks signal turn completion — trigger driver logic
+        if (chunk.kind === 'result') {
+          if (driver) {
+            driver.onTurnComplete().catch(err => {
+              this.runtime.logger.warn(`[executor] Driver turn-complete error: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+          return;
+        }
+
+        // AskUserQuestion → forward to Telegram via typed chunk handler
+        if (chunk.kind === 'ask_user') {
+          if (topicId && topicsService) {
+            topicsService.receiveTypedChunk(sessionId, topicId, chunk).catch(() => {});
+          }
+        }
+      });
+      onStdout = ndjsonHandler;
+    } else {
+      // Print mode: plain text stdout
+      onStdout = (chunk: string) => {
         chunkCount++;
         const clean = filterTuiNoise(stripAnsi(chunk));
         if (!clean) { filteredChunkCount++; return; }
@@ -866,8 +926,14 @@ export class TaskExecutorService extends Service {
             this.runtime.logger.error(`[executor] stdout stream error: ${err instanceof Error ? err.message : String(err)}`);
           });
         }
-      },
-      // stderr
+      };
+    }
+
+    const handle = sshService.spawnInteractiveSession(
+      sshTarget,
+      sshCommand,
+      onStdout,
+      // stderr (same for both modes)
       (chunk: string) => {
         chunkCount++;
         const clean = filterTuiNoise(stripAnsi(chunk));
@@ -922,11 +988,30 @@ export class TaskExecutorService extends Service {
         this.runtime.logger.info(`[executor] Session ${sessionId} exited with code ${code}. Chunks: ${chunkCount} total, ${filteredChunkCount} filtered, ${sessionTranscript.length} in transcript`);
       },
       1_200_000, // 20 minute timeout
+      { usePty: false, closeStdin: !useStreamJson }, // stream-json keeps stdin open
     );
 
     if (!handle) {
       clearTaskHeartbeat();
       throw new Error(`Failed to spawn SSH session on ${sshTarget}`);
+    }
+
+    // For stream-json: create SessionDriver and pipe initial prompt
+    if (useStreamJson) {
+      driver = new SessionDriver({
+        taskId: task.id,
+        project: task.project,
+        description: task.description,
+        topicId,
+        handle,
+        runtime: this.runtime,
+        topicsService: topicsService || undefined,
+        workspace,
+        sshTarget,
+      });
+      // Pipe initial prompt via stream-json protocol
+      handle.write(wrapStreamJsonInput(prompt));
+      this.runtime.logger.info(`[executor] Stream-json session ${sessionId}: initial prompt sent (${prompt.length} chars)`);
     }
 
     // Start heartbeat now that the session is running
@@ -942,9 +1027,10 @@ export class TaskExecutorService extends Service {
         startedAt: Date.now(),
         transcript: sessionTranscript,
         project: task.project,
-        mode: 'tui',
+        mode: useStreamJson ? 'stream-json' : 'tui',
         taskId: task.id,
         workspace,
+        driver,
       });
     }
   }
@@ -1398,6 +1484,12 @@ export class TaskExecutorService extends Service {
       lines.push('', 'Reply in this topic to resume the session or create a follow-up.');
 
       await topicsService.sendToTopic(topicId, lines.join('\n'));
+
+      // Send completion summary to main chat via SessionDriver
+      const session = activeSessions.get(topicId);
+      if (session?.driver) {
+        await session.driver.sendCompletionSummary(finalStatus, filesChanged, prUrl);
+      }
     }
 
     // 6. Record outcome in RLM for future learning

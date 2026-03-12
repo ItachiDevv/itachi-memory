@@ -38,7 +38,9 @@ export const telegramCommandsAction: Action = {
           const content = message.content as Record<string, unknown>;
           if (!content._topicRelayQueued) {
             content._topicRelayQueued = true;
-            if (session.mode === 'stream-json') {
+            if (session.driver) {
+              session.driver.onHumanInput(text);
+            } else if (session.mode === 'stream-json') {
               session.handle.write(wrapStreamJsonInput(text));
             } else {
               session.handle.write(text + '\r');
@@ -53,6 +55,12 @@ export const telegramCommandsAction: Action = {
           runtime.logger.info(`[telegram-commands] validate: claiming spawning topic input (threadId=${threadId})`);
           return true;
         }
+      }
+      // Claim task-like messages in main chat for intent classification
+      const TASK_PATTERNS = /\b(implement|build|create|fix|deploy|add|update|refactor|write|set up|install|configure|migrate|remove|delete|move)\b/i;
+      if (TASK_PATTERNS.test(text)) {
+        const mainThreadId = await getTopicThreadId(runtime, message);
+        if (mainThreadId === null) return true; // Main chat task-like message
       }
       return false;
     }
@@ -172,6 +180,45 @@ export const telegramCommandsAction: Action = {
         // /close in main chat with no topic context
         if (callback) await callback({ text: 'Use /close inside a topic to close it.' });
         return { success: true };
+      }
+
+      // Natural language task detection (non-command messages in main chat)
+      if (!text.startsWith('/') && !_isSessionTopic) {
+        try {
+          const { classifyIntent } = await import('../services/intent-router.js');
+          const machines = ['mac', 'hoodie', 'surface', 'hetzner-vps', 'coolify'];
+          const intent = await classifyIntent(runtime, text, { projects: [], machines });
+
+          if (intent.type === 'task') {
+            const taskService = runtime.getService<TaskService>('itachi-tasks');
+            if (taskService) {
+              const chatId = Number((message.content as Record<string, unknown>).chatId) || 0;
+              const userId = Number((message.content as Record<string, unknown>).userId || (message as any).userId) || 0;
+              const newTask = await taskService.createTask({
+                description: intent.description || text,
+                project: intent.project || 'unknown',
+                assigned_machine: intent.machine || undefined,
+                telegram_chat_id: chatId,
+                telegram_user_id: userId,
+              });
+              if (callback) await callback({
+                text: `Got it — creating task: "${(intent.description || text).substring(0, 80)}"${intent.project ? ` in ${intent.project}` : ''}.\nTask ID: ${newTask.id.substring(0, 8)}`
+              });
+              return { success: true, data: { taskCreated: true, taskId: newTask.id } };
+            }
+          }
+
+          if (intent.type === 'feedback') {
+            if (callback) await callback({ text: `Noted: ${intent.detail || text}` });
+            return { success: true };
+          }
+
+          // conversation or question intent → let ElizaOS handle
+          return { success: false };
+        } catch (err) {
+          runtime.logger.warn(`[telegram-commands] Intent classification failed: ${err instanceof Error ? err.message : String(err)}`);
+          return { success: false };
+        }
       }
 
       // Safety net: if we somehow fell through for a session topic, IGNORE

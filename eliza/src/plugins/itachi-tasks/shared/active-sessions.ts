@@ -1,5 +1,6 @@
 import type { InteractiveSession } from '../services/ssh-service.js';
 import type { TranscriptEntry } from '../utils/transcript-analyzer.js';
+import type { SessionDriver } from '../services/session-driver.js';
 
 /** Session output mode */
 export type SessionMode = 'stream-json' | 'tui';
@@ -26,6 +27,8 @@ export interface ActiveSession {
   totalTurns?: number;
   /** Timestamp of last usage check */
   lastUsageCheckTime?: number;
+  /** SessionDriver for multi-turn executor sessions */
+  driver?: SessionDriver;
 }
 
 // ── globalThis-backed shared state ───────────────────────────────────
