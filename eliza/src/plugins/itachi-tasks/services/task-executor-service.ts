@@ -1023,7 +1023,7 @@ export class TaskExecutorService extends Service {
 
         // Post-completion pipeline
         const wasTimeout = handle?.timedOut || false;
-        this.handleSessionComplete(task, sshTarget, workspace, code, topicId, sessionTranscript, wasTimeout).catch((err) => {
+        this.handleSessionComplete(task, sshTarget, workspace, code, topicId, sessionTranscript, wasTimeout, driver).catch((err) => {
           this.runtime.logger.error(`[executor] Post-completion error: ${err instanceof Error ? err.message : String(err)}`);
         });
 
@@ -1403,6 +1403,7 @@ export class TaskExecutorService extends Service {
     topicId: number,
     transcript?: TranscriptEntry[],
     wasTimeout: boolean = false,
+    driver?: SessionDriver,
   ): Promise<void> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
     const taskService = this.runtime.getService<TaskService>('itachi-tasks')!;
@@ -1590,10 +1591,13 @@ export class TaskExecutorService extends Service {
 
     // Record actual duration and calibrate prediction
     try {
-      const startedAt = task.started_at ? new Date(task.started_at).getTime() : 0;
+      // Re-fetch task to get predicted_duration_minutes (written to DB after the
+      // original task object was claimed, so task.predicted_duration_minutes is stale)
+      const freshTask = await taskService.getTask(task.id);
+      const startedAt = freshTask?.started_at ? new Date(freshTask.started_at).getTime() : 0;
       if (startedAt > 0) {
         const actualMinutes = Math.round((Date.now() - startedAt) / 60_000);
-        const predicted = task.predicted_duration_minutes || 0;
+        const predicted = freshTask?.predicted_duration_minutes || 0;
         const accuracy = predicted > 0
           ? Math.max(0, 1 - Math.abs(actualMinutes - predicted) / Math.max(predicted, actualMinutes))
           : 0;
@@ -1627,11 +1631,14 @@ export class TaskExecutorService extends Service {
       lines.push('', 'Reply in this topic to resume the session or create a follow-up.');
 
       await topicsService.sendToTopic(topicId, lines.join('\n'));
+    }
 
-      // Send completion summary to main chat via SessionDriver
-      const session = activeSessions.get(topicId);
-      if (session?.driver) {
-        await session.driver.sendCompletionSummary(finalStatus, filesChanged, prUrl);
+    // Send completion summary to main chat via SessionDriver
+    if (driver) {
+      try {
+        await driver.sendCompletionSummary(finalStatus, filesChanged, prUrl);
+      } catch (err) {
+        this.runtime.logger.warn(`[executor] Completion summary failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 

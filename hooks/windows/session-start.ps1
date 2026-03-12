@@ -576,6 +576,44 @@ try {
         }
     } catch {}
 
+    # ============ Brain Memory Injection (4 categories) ============
+    $brainRulesJson = ""
+    $brainLessonsJson = ""
+    $brainGuardrailsJson = ""
+    $brainGeneralJson = ""
+    try {
+        $searchHeaders = @{ "Content-Type" = "application/json" }
+        if ($env:ITACHI_API_KEY) { $searchHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }
+
+        try {
+            $brainRulesResponse = Invoke-RestMethod -Uri "$MEMORY_API/search" -Method Post -Headers $searchHeaders `
+                -Body (@{ project = $project; category = "project_rule"; limit = 10; query = "project rules and conventions" } | ConvertTo-Json -Compress) `
+                -TimeoutSec 8
+            if ($brainRulesResponse) { $brainRulesJson = ($brainRulesResponse | ConvertTo-Json -Compress -Depth 5) }
+        } catch {}
+
+        try {
+            $brainLessonsResponse = Invoke-RestMethod -Uri "$MEMORY_API/search" -Method Post -Headers $searchHeaders `
+                -Body (@{ project = $project; category = "task_lesson"; limit = 8; query = "recent task lessons and outcomes" } | ConvertTo-Json -Compress) `
+                -TimeoutSec 8
+            if ($brainLessonsResponse) { $brainLessonsJson = ($brainLessonsResponse | ConvertTo-Json -Compress -Depth 5) }
+        } catch {}
+
+        try {
+            $brainGuardrailsResponse = Invoke-RestMethod -Uri "$MEMORY_API/search" -Method Post -Headers $searchHeaders `
+                -Body (@{ project = $project; category = "guardrail"; limit = 8; query = "guardrails warnings pitfalls" } | ConvertTo-Json -Compress) `
+                -TimeoutSec 8
+            if ($brainGuardrailsResponse) { $brainGuardrailsJson = ($brainGuardrailsResponse | ConvertTo-Json -Compress -Depth 5) }
+        } catch {}
+
+        try {
+            $brainGeneralResponse = Invoke-RestMethod -Uri "$MEMORY_API/search" -Method Post -Headers $searchHeaders `
+                -Body (@{ project = $project; category = "general"; limit = 8; query = "recent context and activity" } | ConvertTo-Json -Compress) `
+                -TimeoutSec 8
+            if ($brainGeneralResponse) { $brainGeneralJson = ($brainGeneralResponse | ConvertTo-Json -Compress -Depth 5) }
+        } catch {}
+    } catch {}
+
     # ============ Write Briefing to Auto-Memory MEMORY.md ============
     try {
         $cwd = (Get-Location).Path
@@ -589,11 +627,26 @@ const briefingJson = process.argv[2];
 const learningsJson = process.argv[3];
 const globalLearningsJson = process.argv[4];
 const itachiClient = process.argv[5] || '';
+const brRulesJson = process.argv[6] || '';
+const brLessonsJson = process.argv[7] || '';
+const brGuardrailsJson = process.argv[8] || '';
+const brGeneralJson = process.argv[9] || '';
 
 // Encode cwd for Claude's project directory structure
-// Replace :\ or :/ with --, replace remaining \ and / with --, strip leading/trailing --
 function encodeCwd(p) {
     return p.replace(/:/g, '').replace(/[\\/]/g, '-');
+}
+
+// Parse brain memory results with confidence filtering (>= 0.4)
+function parseBrain(raw) {
+    try {
+        const d = JSON.parse(raw);
+        const results = d.results || d.memories || [];
+        return results.filter(m => {
+            const conf = (m.metadata && m.metadata.confidence != null) ? m.metadata.confidence : (m.confidence != null ? m.confidence : 1);
+            return conf >= 0.4;
+        });
+    } catch { return []; }
 }
 
 try {
@@ -610,8 +663,14 @@ try {
     let globalLearnings = null;
     try { globalLearnings = globalLearningsJson ? JSON.parse(globalLearningsJson) : null; } catch {}
 
+    const brainRules = parseBrain(brRulesJson);
+    const brainLessons = parseBrain(brLessonsJson);
+    const brainGuardrails = parseBrain(brGuardrailsJson);
+    const brainGeneral = parseBrain(brGeneralJson);
+    const hasBrain = brainRules.length > 0 || brainLessons.length > 0 || brainGuardrails.length > 0 || brainGeneral.length > 0;
+
     // Exit early if nothing to write
-    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0) && (!globalLearnings || !globalLearnings.rules || globalLearnings.rules.length === 0)) return;
+    if (!briefing && (!learnings || !learnings.rules || learnings.rules.length === 0) && (!globalLearnings || !globalLearnings.rules || globalLearnings.rules.length === 0) && !hasBrain) return;
 
     // Build the Itachi Session Context section
     const lines = [];
@@ -708,6 +767,17 @@ try {
         existing = upsertSection(existing, '## Global Operational Rules', globalLines.join('\n'));
     }
 
+    // Brain Memory Briefing - injected from the brain's memory store
+    if (hasBrain) {
+        function fmtMem(m) { const s = m.summary || m.content || ''; return s.length > 150 ? s.substring(0, 147) + '...' : s; }
+        const bl = ['## Session Briefing from Brain', '<!-- auto-injected: brain memory search results (confidence >= 0.4) -->', ''];
+        if (brainRules.length > 0) { bl.push('### Project Rules'); brainRules.forEach(m => bl.push('- ' + fmtMem(m))); bl.push(''); }
+        if (brainLessons.length > 0) { bl.push('### Recent Lessons'); brainLessons.forEach(m => bl.push('- ' + fmtMem(m))); bl.push(''); }
+        if (brainGuardrails.length > 0) { bl.push('### Active Guardrails'); brainGuardrails.forEach(m => bl.push('- ' + fmtMem(m))); bl.push(''); }
+        if (brainGeneral.length > 0) { bl.push('### Recent Context'); brainGeneral.forEach(m => bl.push('- ' + fmtMem(m))); bl.push(''); }
+        existing = upsertSection(existing, '## Session Briefing from Brain', bl.join('\n'));
+    }
+
     fs.writeFileSync(memoryFile, existing);
 
     // Also write to Codex instructions.md (same sections, always - so both CLIs stay in sync)
@@ -738,6 +808,15 @@ try {
                 globalLines2.push('');
                 codexContent = upsertSection(codexContent, '## Global Operational Rules', globalLines2.join('\n'));
             }
+            // Brain briefing for Codex too
+            if (hasBrain) {
+                const bl2 = ['## Session Briefing from Brain', '<!-- auto-injected: brain memory search results (confidence >= 0.4) -->', ''];
+                if (brainRules.length > 0) { bl2.push('### Project Rules'); brainRules.forEach(m => bl2.push('- ' + fmtMem(m))); bl2.push(''); }
+                if (brainLessons.length > 0) { bl2.push('### Recent Lessons'); brainLessons.forEach(m => bl2.push('- ' + fmtMem(m))); bl2.push(''); }
+                if (brainGuardrails.length > 0) { bl2.push('### Active Guardrails'); brainGuardrails.forEach(m => bl2.push('- ' + fmtMem(m))); bl2.push(''); }
+                if (brainGeneral.length > 0) { bl2.push('### Recent Context'); brainGeneral.forEach(m => bl2.push('- ' + fmtMem(m))); bl2.push(''); }
+                codexContent = upsertSection(codexContent, '## Session Briefing from Brain', bl2.join('\n'));
+            }
             fs.writeFileSync(codexInstructionsFile, codexContent);
         }
     } catch(e2) {}
@@ -750,8 +829,12 @@ try {
         $learningsJsonArg = if ($learningsJson) { $learningsJson } else { "" }
         $globalLearningsJsonArg = if ($globalLearningsJson) { $globalLearningsJson } else { "" }
         $clientArg = if ($env:ITACHI_CLIENT) { $env:ITACHI_CLIENT } else { "claude" }
-        if ($briefingJsonArg -or $learningsJsonArg -or $globalLearningsJsonArg) {
-            node -e $memoryMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg $clientArg 2>$null
+        $brRulesArg = if ($brainRulesJson) { $brainRulesJson } else { "" }
+        $brLessonsArg = if ($brainLessonsJson) { $brainLessonsJson } else { "" }
+        $brGuardrailsArg = if ($brainGuardrailsJson) { $brainGuardrailsJson } else { "" }
+        $brGeneralArg = if ($brainGeneralJson) { $brainGeneralJson } else { "" }
+        if ($briefingJsonArg -or $learningsJsonArg -or $globalLearningsJsonArg -or $brRulesArg -or $brLessonsArg -or $brGuardrailsArg -or $brGeneralArg) {
+            node -e $memoryMdScript $cwd $briefingJsonArg $learningsJsonArg $globalLearningsJsonArg $clientArg $brRulesArg $brLessonsArg $brGuardrailsArg $brGeneralArg 2>$null
         }
     } catch {}
 }

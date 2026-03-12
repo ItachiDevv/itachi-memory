@@ -297,16 +297,47 @@ LEARNINGS=$(curl -s -k -H "$AUTH_HEADER" "${BASE_API}/api/project/learnings?proj
 # ============ Fetch RLM Lessons (top task outcome lessons) ============
 RLM_LESSONS=$(curl -s -k -H "$AUTH_HEADER" "${MEMORY_API}/search?project=${PROJECT_NAME}&category=task_lesson&limit=6&query=task+outcome" --max-time 8 2>/dev/null)
 
+# ============ Brain Memory Injection (4 categories) ============
+BRAIN_RULES=$(curl -s -k -X POST "${MEMORY_API}/search" \
+    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
+    -d "{\"project\":\"${PROJECT_NAME}\",\"category\":\"project_rule\",\"limit\":10,\"query\":\"project rules and conventions\"}" \
+    --max-time 8 2>/dev/null)
+
+BRAIN_LESSONS=$(curl -s -k -X POST "${MEMORY_API}/search" \
+    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
+    -d "{\"project\":\"${PROJECT_NAME}\",\"category\":\"task_lesson\",\"limit\":8,\"query\":\"recent task lessons and outcomes\"}" \
+    --max-time 8 2>/dev/null)
+
+BRAIN_GUARDRAILS=$(curl -s -k -X POST "${MEMORY_API}/search" \
+    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
+    -d "{\"project\":\"${PROJECT_NAME}\",\"category\":\"guardrail\",\"limit\":8,\"query\":\"guardrails warnings pitfalls\"}" \
+    --max-time 8 2>/dev/null)
+
+BRAIN_GENERAL=$(curl -s -k -X POST "${MEMORY_API}/search" \
+    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
+    -d "{\"project\":\"${PROJECT_NAME}\",\"category\":\"general\",\"limit\":8,\"query\":\"recent context and activity\"}" \
+    --max-time 8 2>/dev/null)
+
 # ============ Write to Context File ============
-if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ] || [ -n "$RLM_LESSONS" ]; then
+if [ -n "$BRIEFING" ] || [ -n "$LEARNINGS" ] || [ -n "$RLM_LESSONS" ] || [ -n "$BRAIN_RULES" ] || [ -n "$BRAIN_LESSONS" ] || [ -n "$BRAIN_GUARDRAILS" ] || [ -n "$BRAIN_GENERAL" ]; then
     node -e "
 const fs=require('fs'),path=require('path'),os=require('os');
 const client=process.argv[1],cwd=process.argv[2],bj=process.argv[3],lj=process.argv[4],rlmj=process.argv[5];
+const brRules=process.argv[6],brLessons=process.argv[7],brGuardrails=process.argv[8],brGeneral=process.argv[9];
 try{
     const briefing=bj?JSON.parse(bj):null;
     let learnings=null;try{learnings=lj?JSON.parse(lj):null;}catch{}
     let rlmLessons=null;try{const r=rlmj?JSON.parse(rlmj):null;if(r&&r.results&&r.results.length>0)rlmLessons=r.results;}catch{}
-    if(!briefing&&(!learnings||!learnings.rules||!learnings.rules.length)&&!rlmLessons)return;
+
+    // Parse brain memory categories with confidence filtering (>= 0.4)
+    function parseBrain(raw){try{const d=JSON.parse(raw);const results=d.results||d.memories||[];return results.filter(m=>{const conf=(m.metadata&&m.metadata.confidence!=null)?m.metadata.confidence:(m.confidence!=null?m.confidence:1);return conf>=0.4;});}catch{return[];}}
+    const brainRules=parseBrain(brRules);
+    const brainLessons=parseBrain(brLessons);
+    const brainGuardrails=parseBrain(brGuardrails);
+    const brainGeneral=parseBrain(brGeneral);
+    const hasBrain=brainRules.length>0||brainLessons.length>0||brainGuardrails.length>0||brainGeneral.length>0;
+
+    if(!briefing&&(!learnings||!learnings.rules||!learnings.rules.length)&&!rlmLessons&&!hasBrain)return;
     let targetFile;
     if(client==='claude'){
         function enc(p){return p.replace(/:/g,'').replace(/[\\\\/]/g,'-');}
@@ -331,9 +362,22 @@ try{
     if(lines.length>3){lines.push('');existing=upsert(existing,'## Itachi Session Context',lines.join('\n'));}
     if(learnings&&learnings.rules&&learnings.rules.length>0){const rl=['## Project Rules','<!-- auto-updated by itachi session-start hook -->',''];for(const r of learnings.rules){const rf=r.times_reinforced>1?' (reinforced '+r.times_reinforced+'x)':'';rl.push('- '+r.rule+rf);}rl.push('');existing=upsert(existing,'## Project Rules',rl.join('\n'));}
     if(rlmLessons&&rlmLessons.length>0){const ll=['## RLM Lessons','<!-- auto-updated: task outcome lessons from reinforcement learning -->',''];for(const l of rlmLessons){const meta=l.metadata||{};const outcome=meta.last_outcome||meta.outcome||'';const conf=meta.confidence!=null?(' (conf: '+(meta.confidence*100).toFixed(0)+'%)'):'';const tag=outcome?('['+outcome+'] '):'';ll.push('- '+tag+l.summary.substring(0,120)+conf);}ll.push('');existing=upsert(existing,'## RLM Lessons',ll.join('\n'));}
+
+    // Brain Memory Briefing — injected from the brain's memory store
+    if(hasBrain){
+        const proj=briefing&&briefing.project?briefing.project:(client==='claude'?path.basename(cwd):cwd);
+        const bl=['## Session Briefing from Brain','<!-- auto-injected: brain memory search results (confidence >= 0.4) -->',''];
+        function fmtMem(m){const s=m.summary||m.content||'';return s.length>150?s.substring(0,147)+'...':s;}
+        if(brainRules.length>0){bl.push('### Project Rules');brainRules.forEach(m=>bl.push('- '+fmtMem(m)));bl.push('');}
+        if(brainLessons.length>0){bl.push('### Recent Lessons');brainLessons.forEach(m=>bl.push('- '+fmtMem(m)));bl.push('');}
+        if(brainGuardrails.length>0){bl.push('### Active Guardrails');brainGuardrails.forEach(m=>bl.push('- '+fmtMem(m)));bl.push('');}
+        if(brainGeneral.length>0){bl.push('### Recent Context');brainGeneral.forEach(m=>bl.push('- '+fmtMem(m)));bl.push('');}
+        existing=upsert(existing,'## Session Briefing from Brain',bl.join('\n'));
+    }
+
     fs.writeFileSync(targetFile,existing);
 }catch(e){}
-" "$CLIENT" "$PWD" "$BRIEFING" "$LEARNINGS" "$RLM_LESSONS" 2>/dev/null
+" "$CLIENT" "$PWD" "$BRIEFING" "$LEARNINGS" "$RLM_LESSONS" "$BRAIN_RULES" "$BRAIN_LESSONS" "$BRAIN_GUARDRAILS" "$BRAIN_GENERAL" 2>/dev/null
 fi
 
 # ============ Refresh SSH auth creds from keychain (macOS only, non-SSH sessions) ============

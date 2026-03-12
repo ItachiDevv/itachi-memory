@@ -107,8 +107,10 @@ try {
     const https = require('https');
     const http = require('http');
     const path = require('path');
+    const fs = require('fs');
 
     const toolName = input.tool_name || 'unknown';
+    const filePath = process.argv[2];
     let editType = toolName === 'Write' ? 'create' : 'modify';
     let diffContent = null;
     let linesAdded = 0;
@@ -119,6 +121,8 @@ try {
         const newStr = input.tool_input.new_string || input.tool_input.content || '';
 
         if (newStr && !oldStr) {
+            // Write tool: check if file existed before (create vs overwrite)
+            // If content is provided and no old_string, it's a create or full overwrite
             editType = 'create';
             diffContent = newStr.substring(0, 10240);
             linesAdded = newStr.split('\n').length;
@@ -127,11 +131,26 @@ try {
             diffContent = ('--- old\n' + oldStr + '\n+++ new\n' + newStr).substring(0, 10240);
             linesRemoved = oldStr.split('\n').length;
             linesAdded = newStr.split('\n').length;
+        } else if (oldStr && !newStr) {
+            // old_string present but new_string empty = deletion of content
+            editType = 'delete';
+            linesRemoved = oldStr.split('\n').length;
         }
     }
 
+    // Check if file exists on disk to distinguish create vs modify for Write tool
+    if (toolName === 'Write' && editType === 'create') {
+        try {
+            // If the file already existed before this write, it's a modify (overwrite)
+            // We check git to see if the file was tracked
+            const { execSync } = require('child_process');
+            const tracked = execSync('git ls-files -- ' + JSON.stringify(filePath), { encoding: 'utf8', timeout: 2000 }).trim();
+            if (tracked) editType = 'modify';
+        } catch {}
+    }
+
     // Detect language
-    const ext = path.extname(process.argv[2]).toLowerCase();
+    const ext = path.extname(filePath).toLowerCase();
     const langMap = {
         '.ts': 'typescript', '.tsx': 'typescript', '.js': 'javascript', '.jsx': 'javascript',
         '.py': 'python', '.rs': 'rust', '.go': 'go', '.java': 'java',
@@ -140,15 +159,30 @@ try {
         '.md': 'markdown', '.toml': 'toml'
     };
 
+    // Classify file type
+    const basename = path.basename(filePath);
+    const dir = path.dirname(filePath);
+    let fileType = 'source';
+    if (/\.(test|spec)\./i.test(basename) || /^test[_-]/i.test(basename) || /[\/\\]__tests__[\/\\]/i.test(filePath)) {
+        fileType = 'test';
+    } else if (/\.(md|rst|txt)$/i.test(basename) || /^README/i.test(basename)) {
+        fileType = 'docs';
+    } else if (/^(package\.json|requirements\.txt|Cargo\.toml|go\.mod|go\.sum|pom\.xml|Gemfile|\.csproj|yarn\.lock|package-lock\.json)$/i.test(basename)) {
+        fileType = 'dependencies';
+    } else if (/\.(json|yaml|yml|toml|ini|cfg|conf|env)$/i.test(ext) || /^\./i.test(basename) || /^(tsconfig|jest\.config|webpack|vite\.config|\.eslint|\.prettier)/i.test(basename)) {
+        fileType = 'config';
+    }
+
     const body = {
         session_id: process.argv[3],
         project: process.argv[4],
-        file_path: process.argv[2],
+        file_path: filePath,
         edit_type: editType,
         lines_added: linesAdded,
         lines_removed: linesRemoved,
         tool_name: toolName,
-        branch: process.argv[5]
+        branch: process.argv[5],
+        file_type: fileType
     };
     if (diffContent) body.diff_content = diffContent;
     if (langMap[ext]) body.language = langMap[ext];

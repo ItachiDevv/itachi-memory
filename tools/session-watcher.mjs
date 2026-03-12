@@ -61,6 +61,8 @@ const CHECK_INTERVAL_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const MIN_NUDGE_INTERVAL_MS = 120_000;
 const SESSION_REPORT_INTERVAL_MS = 60_000; // report session activity every 60s
+const SUGGESTION_INTERVAL_MS = 300_000; // max 1 suggestion per 5 min per session
+const HEALTH_SUMMARY_INTERVAL_MS = 600_000; // health summary every 10 min
 
 const watchedSessions = new Map();
 let lastHeartbeat = 0;
@@ -241,6 +243,148 @@ async function checkGuardrails(text, project) {
   }
 }
 
+// --- Proactive: search brain for relevant memories ---
+async function searchRelevantMemories(topic, project) {
+  if (!BRAIN_API || !topic || topic.length < 10) return [];
+  try {
+    const res = await apiRequest('POST', '/memory/search', {
+      query: topic.substring(0, 300),
+      project: decodeProjectName(project),
+      limit: 3,
+    });
+    return (res.memories || [])
+      .filter(m => (m.similarity || 0) > 0.7)
+      .map(m => ({
+        summary: m.summary || m.content?.substring(0, 150) || '',
+        category: m.category || 'unknown',
+        similarity: m.similarity,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// --- Proactive: report suggestion to brain ---
+async function reportSuggestionToBrain(session, suggestion) {
+  try {
+    const projectName = decodeProjectName(session.project);
+    await apiRequest('POST', '/memory/create', {
+      project: projectName,
+      category: 'watcher_suggestion',
+      content: `${suggestion.type}: ${suggestion.detail}`,
+      summary: `Watcher suggestion on ${MACHINE_ID}: ${suggestion.detail.substring(0, 100)}`,
+      metadata: {
+        machine_id: MACHINE_ID,
+        session_id: session.sessionId,
+        suggestion_type: suggestion.type,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error(`[watcher] Suggestion report failed: ${err.message}`);
+  }
+}
+
+// --- Proactive: detect coding patterns ---
+function detectPatterns(turns, state) {
+  const suggestions = [];
+
+  // Count tool usage in recent turns
+  const recentTools = state.toolUses.slice(-30);
+  const writeEditCount = recentTools.filter(t =>
+    t === 'Write' || t === 'Edit' || t === 'write' || t === 'edit'
+  ).length;
+  const bashCount = recentTools.filter(t =>
+    t === 'Bash' || t === 'bash'
+  ).length;
+  const readCount = recentTools.filter(t =>
+    t === 'Read' || t === 'read' || t === 'Grep' || t === 'grep' || t === 'Glob' || t === 'glob'
+  ).length;
+
+  // Research phase: lots of reads, few writes — don't interrupt
+  if (readCount > 10 && writeEditCount < 3) {
+    return []; // research phase, stay quiet
+  }
+
+  // Writing without tests: many code edits, no test/bash runs
+  if (writeEditCount >= 8 && bashCount < 2 && state.turnCount >= 15) {
+    suggestions.push({
+      type: 'suggestion',
+      detail: `No tests written in ${state.turnCount} turns of code changes (${writeEditCount} edits, ${bashCount} test runs)`,
+    });
+  }
+
+  // Many small edits to same file: potential refactor needed
+  const fileEditCounts = {};
+  for (const turn of turns) {
+    const content = (turn.message?.content || turn.content || '').toString();
+    // Look for file paths in Edit/Write tool calls
+    const fileMatch = content.match(/file_path['":\s]+([^\s'"]+)/);
+    if (fileMatch && (content.includes('Edit') || content.includes('Write'))) {
+      fileEditCounts[fileMatch[1]] = (fileEditCounts[fileMatch[1]] || 0) + 1;
+    }
+  }
+  for (const [file, count] of Object.entries(fileEditCounts)) {
+    if (count >= 6) {
+      const shortFile = file.split('/').slice(-2).join('/');
+      suggestions.push({
+        type: 'suggestion',
+        detail: `${count} edits to ${shortFile} — consider a larger refactor instead of incremental patches`,
+      });
+    }
+  }
+
+  return suggestions;
+}
+
+// --- Proactive: extract topic/intent from recent turns ---
+function extractTopicIntent(turns) {
+  const userMessages = [];
+  for (const turn of turns.slice(-15)) {
+    if (turn.role === 'user' || turn.type === 'human') {
+      const content = (turn.message?.content || turn.content || '').toString();
+      if (content.length > 5) userMessages.push(content.substring(0, 200));
+    }
+  }
+  // Use the most recent substantive user message as topic
+  return userMessages.slice(-3).join(' ').substring(0, 300);
+}
+
+// --- Proactive: session health summary ---
+async function sendHealthSummary(session, state) {
+  if (!state.healthSummaryStart) state.healthSummaryStart = Date.now();
+
+  const sessionAge = Date.now() - state.healthSummaryStart;
+  // Only send after 5 min of activity, and at 10 min intervals
+  if (sessionAge < HEALTH_SUMMARY_INTERVAL_MS / 2) return;
+  if (Date.now() - (state.lastHealthSummary || 0) < HEALTH_SUMMARY_INTERVAL_MS) return;
+
+  state.lastHealthSummary = Date.now();
+  const projectName = decodeProjectName(session.project);
+  const fileList = [...state.files].slice(0, 5).map(f => f.split('/').pop()).join(', ');
+  const summary = `Session on ${projectName}: ${state.turnCount} turns, ${state.errorCount} errors, files: ${fileList || 'none tracked'}`;
+
+  try {
+    await apiRequest('POST', '/memory/create', {
+      project: projectName,
+      category: 'session_activity',
+      content: summary,
+      summary,
+      metadata: {
+        machine_id: MACHINE_ID,
+        session_id: session.sessionId,
+        turn_count: state.turnCount,
+        error_count: state.errorCount,
+        files: [...state.files].slice(0, 10),
+        timestamp: new Date().toISOString(),
+      },
+    });
+    console.log(`[watcher] Health summary sent for ${projectName}`);
+  } catch (err) {
+    console.error(`[watcher] Health summary failed: ${err.message}`);
+  }
+}
+
 // --- Session parsing ---
 function parseTurns(jsonlChunk) {
   const turns = [];
@@ -326,6 +470,9 @@ async function tailSession(session) {
   const state = watchedSessions.get(session.path) || {
     offset: Math.max(0, session.size - 5000),
     lastNudge: 0,
+    lastSuggestion: 0,
+    lastHealthSummary: 0,
+    healthSummaryStart: Date.now(),
     errorCount: 0,
     errors: [],
     turnCount: 0,
@@ -380,6 +527,50 @@ async function tailSession(session) {
     // Also report to brain for learning
     await reportIssueToBrain(session, allIssues);
   }
+
+  // --- Proactive: suggestions (rate-limited per session) ---
+  const canSuggest = Date.now() - (state.lastSuggestion || 0) > SUGGESTION_INTERVAL_MS;
+  if (canSuggest && state.turnCount >= 5) {
+    const patternSuggestions = detectPatterns(turns, state);
+
+    // Memory-based suggestions: search brain for relevant context
+    const topic = extractTopicIntent(turns);
+    if (topic.length >= 10) {
+      const memories = await searchRelevantMemories(topic, session.project);
+      if (memories.length > 0) {
+        const best = memories[0];
+        // Only suggest if it's not a guardrail (those are already handled above)
+        if (best.category !== 'guardrail') {
+          patternSuggestions.push({
+            type: 'memory_hint',
+            detail: best.summary,
+            similarity: best.similarity,
+          });
+        }
+      }
+    }
+
+    // Send suggestions to Telegram (max 1 per interval)
+    if (patternSuggestions.length > 0) {
+      state.lastSuggestion = Date.now();
+      const projectName = decodeProjectName(session.project);
+      const suggestion = patternSuggestions[0]; // pick the most relevant one
+      const lines = [`💡 *Itachi Suggestion* (${MACHINE_ID})`, `Project: \`${projectName}\``];
+
+      if (suggestion.type === 'memory_hint') {
+        lines.push(`Relevant memory: ${suggestion.detail}`);
+      } else {
+        lines.push(suggestion.detail);
+      }
+
+      sendTelegram(lines.join('\n'));
+      await reportSuggestionToBrain(session, suggestion);
+      console.log(`[watcher] Suggestion sent: ${suggestion.type} — ${suggestion.detail.substring(0, 80)}`);
+    }
+  }
+
+  // --- Proactive: periodic health summary to brain (not Telegram) ---
+  await sendHealthSummary(session, state);
 }
 
 async function tick() {

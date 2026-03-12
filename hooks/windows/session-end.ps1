@@ -309,9 +309,10 @@ try {
     let existing = '';
     if (fs.existsSync(logFile)) existing = fs.readFileSync(logFile, 'utf8');
 
+    // Cap at 30 entries — rotate oldest
     const entries = existing.split(/(?=^### )/m).filter(e => e.trim() && e.startsWith('###'));
     entries.push(entry);
-    while (entries.length > 50) entries.shift();
+    while (entries.length > 30) entries.shift();
 
     const header = '# Session Log\n<!-- auto-updated by session-end hook -->\n\n';
     fs.writeFileSync(logFile, header + entries.join('\n'));
@@ -520,13 +521,13 @@ function extractCodexTexts(lines) {
             }
         });
         if (assistantTexts.length > 0) { signalIndices.add(0); signalIndices.add(assistantTexts.length - 1); }
-        if (signalIndices.size > 0 && signalIndices.size < assistantTexts.length) {
-            const filtered = assistantTexts.filter((_, i) => signalIndices.has(i));
-            assistantTexts.length = 0;
-            assistantTexts.push(...filtered);
-        }
 
-        const conversationText = assistantTexts.join('\n---\n').substring(0, 8000);
+        // Build filtered transcript — this is what gets sent to the brain
+        const filteredTexts = (signalIndices.size > 0 && signalIndices.size < assistantTexts.length)
+            ? assistantTexts.filter((_, i) => signalIndices.has(i))
+            : assistantTexts;
+
+        const conversationText = filteredTexts.join('\n---\n').substring(0, 8000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,

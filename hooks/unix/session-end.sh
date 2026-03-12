@@ -258,10 +258,10 @@ try {
     let existing = '';
     if (fs.existsSync(logFile)) existing = fs.readFileSync(logFile, 'utf8');
 
-    // Cap at 50 entries (each starts with ###)
+    // Cap at 30 entries (each starts with ###) — rotate oldest
     const entries = existing.split(/(?=^### )/m).filter(e => e.trim());
     entries.push(entry);
-    while (entries.length > 50) entries.shift();
+    while (entries.length > 30) entries.shift();
 
     const header = '# Session Log\n<!-- auto-updated by session-end hook -->\n\n';
     fs.writeFileSync(logFile, header + entries.join('\n'));
@@ -404,14 +404,14 @@ function httpPost(url, body) {
         });
         // Always keep first and last parts for request/outcome context
         if (conversationParts.length > 0) { signalIndices.add(0); signalIndices.add(conversationParts.length - 1); }
-        if (signalIndices.size > 0 && signalIndices.size < conversationParts.length) {
-            const filtered = conversationParts.filter((_, i) => signalIndices.has(i));
-            conversationParts.length = 0;
-            conversationParts.push(...filtered);
-        }
+
+        // Build filtered transcript — this is what gets sent to the brain
+        const filteredParts = (signalIndices.size > 0 && signalIndices.size < conversationParts.length)
+            ? conversationParts.filter((_, i) => signalIndices.has(i))
+            : conversationParts;
 
         // Concatenate and truncate to 6000 chars (increased to capture user+assistant)
-        const conversationText = conversationParts.join('\n---\n').substring(0, 6000);
+        const conversationText = filteredParts.join('\n---\n').substring(0, 6000);
 
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,

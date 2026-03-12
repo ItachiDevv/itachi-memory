@@ -141,7 +141,7 @@ try {
         $newStr = $json.tool_input.new_string
 
         if ($newStr -and -not $oldStr) {
-            # Write tool (new file)
+            # Write tool (new file or overwrite)
             $editType = "create"
             $diffContent = $newStr
             $linesAdded = ($newStr -split "`n").Count
@@ -153,11 +153,24 @@ try {
             $linesRemoved = ($oldStr -split "`n").Count
             $linesAdded = ($newStr -split "`n").Count
         }
+        elseif ($oldStr -and -not $newStr) {
+            # old_string present but new_string empty = deletion of content
+            $editType = "delete"
+            $linesRemoved = ($oldStr -split "`n").Count
+        }
 
         # Truncate diff to 10KB
         if ($diffContent -and $diffContent.Length -gt 10240) {
             $diffContent = $diffContent.Substring(0, 10240)
         }
+    }
+
+    # Check if file was already tracked by git (create vs modify for Write tool)
+    if ($toolName -eq "Write" -and $editType -eq "create") {
+        try {
+            $tracked = git ls-files -- $filePath 2>$null
+            if ($tracked) { $editType = "modify" }
+        } catch {}
     }
 
     # Detect language from extension
@@ -172,6 +185,21 @@ try {
     }
     if ($langMap.ContainsKey($ext)) { $language = $langMap[$ext] }
 
+    # Classify file type
+    $fileType = "source"
+    if ($fileName -match '\.(test|spec)\.' -or $fileName -match '^test[_-]' -or $filePath -match '[/\\]__tests__[/\\]') {
+        $fileType = "test"
+    }
+    elseif ($fileName -match '\.(md|rst|txt)$' -or $fileName -match '^README') {
+        $fileType = "docs"
+    }
+    elseif ($fileName -match '^(package\.json|requirements\.txt|Cargo\.toml|go\.mod|go\.sum|pom\.xml|Gemfile|\.csproj|yarn\.lock|package-lock\.json)$') {
+        $fileType = "dependencies"
+    }
+    elseif ($ext -match '\.(json|yaml|yml|toml|ini|cfg|conf|env)$' -or $fileName -match '^\.' -or $fileName -match '^(tsconfig|jest\.config|webpack|vite\.config|\.eslint|\.prettier)') {
+        $fileType = "config"
+    }
+
     $editBody = @{
         session_id    = $sessionId
         project       = $project
@@ -181,6 +209,7 @@ try {
         lines_removed = $linesRemoved
         tool_name     = $toolName
         branch        = $branchName
+        file_type     = $fileType
     }
     if ($diffContent) { $editBody.diff_content = $diffContent }
     if ($language) { $editBody.language = $language }
