@@ -1,3 +1,11 @@
+import { Service, type IAgentRuntime } from '@elizaos/core';
+import { spawn, type ChildProcess } from 'child_process';
+import { writeFileSync, unlinkSync } from 'fs';
+import { TaskService, type ItachiTask } from './task-service.js';
+import { TelegramTopicsService } from './telegram-topics.js';
+import { SSHService } from './ssh-service.js';
+import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
+
 export interface CriterionResult {
   criterion: string;
   passed: boolean;
@@ -167,4 +175,396 @@ sending external messages), STOP and include in your report:
 - If you need to send results to Itachisan, use the Telegram bot API directly via curl.
 - Always clean up after yourself (temp files, test artifacts).
 - You MUST output the ===ITACHI_REPORT=== block at the end. No exceptions.`;
+}
+
+export class TaskOrchestrator extends Service {
+  static serviceType = 'task-orchestrator';
+  capabilityDescription = 'Autonomous task execution via local Claude Code';
+
+  private activeTask: { id: string; process: ChildProcess } | null = null;
+  private maxConcurrent = 1;
+  private timeoutMs = 30 * 60 * 1000; // 30 minutes
+  private pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  static async start(runtime: IAgentRuntime): Promise<TaskOrchestrator> {
+    const service = new TaskOrchestrator(runtime);
+    const useNew = process.env.ITACHI_USE_NEW_ORCHESTRATOR === 'true';
+    if (!useNew) {
+      runtime.logger.info('[orchestrator] Feature flag off — not starting');
+      return service;
+    }
+    service.maxConcurrent = parseInt(process.env.ITACHI_MAX_CONCURRENT || '1', 10);
+    service.timeoutMs = parseInt(process.env.ITACHI_TASK_TIMEOUT_MS || String(30 * 60 * 1000), 10);
+
+    // Recover stale tasks from previous crash
+    await service.recoverStaleTasks();
+
+    // Poll for queued tasks every 5 seconds
+    service.pollInterval = setInterval(() => {
+      service.pollForTasks().catch(err => {
+        runtime.logger.error(`[orchestrator] Poll error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }, 5_000);
+
+    runtime.logger.info(`[orchestrator] Started — timeout: ${service.timeoutMs / 1000}s, max concurrent: ${service.maxConcurrent}`);
+    return service;
+  }
+
+  async stop(): Promise<void> {
+    if (this.pollInterval) clearInterval(this.pollInterval);
+    if (this.activeTask?.process) {
+      try { this.activeTask.process.kill(); } catch { /* best effort */ }
+    }
+    this.runtime.logger.info('[orchestrator] Stopped');
+  }
+
+  private async recoverStaleTasks(): Promise<void> {
+    const taskService = this.runtime.getService<TaskService>('itachi-tasks');
+    if (!taskService) return;
+    const supabase = taskService.getSupabase();
+    const threshold = new Date(Date.now() - this.timeoutMs).toISOString();
+
+    const { data } = await supabase
+      .from('itachi_tasks')
+      .select('id')
+      .in('status', ['claimed', 'running'])
+      .lt('started_at', threshold)
+      .limit(20);
+
+    if (data && data.length > 0) {
+      for (const task of data) {
+        await taskService.updateTask(task.id, {
+          status: 'failed',
+          error_message: 'Orchestrator restarted during execution',
+          completed_at: new Date().toISOString(),
+        });
+      }
+      this.runtime.logger.info(`[orchestrator] Recovered ${data.length} stale task(s)`);
+    }
+  }
+
+  private async pollForTasks(): Promise<void> {
+    if (this.activeTask) return; // Single task at a time
+
+    const taskService = this.runtime.getService<TaskService>('itachi-tasks');
+    if (!taskService) return;
+
+    const supabase = taskService.getSupabase();
+    const { data } = await supabase
+      .from('itachi_tasks')
+      .select('*')
+      .eq('status', 'queued')
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    if (!data || data.length === 0) return;
+
+    const task = data[0] as ItachiTask;
+    await taskService.updateTask(task.id, {
+      status: 'running',
+      started_at: new Date().toISOString(),
+    });
+
+    // Check for retry context from a previous failed attempt
+    let retryContext: PromptInput['retryContext'] | undefined;
+    if (task.retry_context) {
+      try {
+        retryContext = JSON.parse(task.retry_context);
+        await taskService.updateTask(task.id, { retry_context: null as any });
+      } catch { /* ignore parse errors */ }
+    }
+
+    this.runTask(task, retryContext).catch(err => {
+      this.runtime.logger.error(`[orchestrator] Task ${task.id.substring(0, 8)} error: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  async runTask(task: ItachiTask, retryContext?: PromptInput['retryContext']): Promise<void> {
+    const shortId = task.id.substring(0, 8);
+    const taskService = this.runtime.getService<TaskService>('itachi-tasks')!;
+    const topicsService = this.runtime.getService<TelegramTopicsService>('telegram-topics');
+    const memoryService = this.runtime.getService<MemoryService>('itachi-memory');
+
+    // Ensure Telegram topic exists
+    let topicId = task.telegram_topic_id;
+    if (!topicId && topicsService) {
+      const result = await topicsService.createTopicForTask(task);
+      if (result) topicId = result.topicId;
+    }
+
+    // Retrieve capability memories
+    let capabilities: string[] = [];
+    if (memoryService) {
+      try {
+        const memories = await memoryService.searchMemories(
+          task.description, task.project, 10, undefined, 'capability'
+        );
+        capabilities = memories.map(m => m.content || m.summary);
+      } catch { /* non-critical */ }
+    }
+
+    // Get SSH targets and repos for context
+    const sshService = this.runtime.getService<SSHService>('ssh');
+    const sshTargets = sshService ? [...sshService.getTargets().keys()] : [];
+
+    let repos: string[] = [];
+    try {
+      const r = await taskService.getMergedRepos();
+      repos = r.map((repo: any) => repo.name).filter(Boolean);
+    } catch { /* non-critical */ }
+
+    // Build and write prompt
+    const prompt = buildPrompt({
+      task: task.description,
+      capabilities,
+      sshTargets,
+      repos,
+      retryContext,
+    });
+
+    const promptPath = `/tmp/itachi-task-${task.id}.md`;
+    writeFileSync(promptPath, prompt, 'utf-8');
+
+    // Resolve working directory
+    const workingDir = await this.resolveWorkDir(task.project, repos);
+
+    // Spawn Claude Code
+    this.runtime.logger.info(`[orchestrator] Spawning Claude Code for ${shortId} in ${workingDir}`);
+    if (topicId && topicsService) {
+      await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
+    }
+
+    const child = spawn('claude', [
+      '--print',
+      '--prompt-file', promptPath,
+      '--max-turns', '100',
+      '--output-format', 'stream-json',
+    ], {
+      cwd: workingDir,
+      env: {
+        ...process.env,
+        TELEGRAM_BOT_TOKEN: String(this.runtime.getSetting('TELEGRAM_BOT_TOKEN') || ''),
+        SUPABASE_URL: String(this.runtime.getSetting('SUPABASE_URL') || ''),
+        SUPABASE_KEY: String(this.runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || ''),
+      },
+    });
+
+    this.activeTask = { id: task.id, process: child };
+
+    // Collect output and stream to Telegram
+    let fullOutput = '';
+    const streamBuffer: string[] = [];
+    let streamTimer: ReturnType<typeof setInterval> | null = null;
+
+    // Batch Telegram updates every 3 seconds to avoid rate limits
+    if (topicId && topicsService) {
+      streamTimer = setInterval(async () => {
+        if (streamBuffer.length === 0) return;
+        const batch = streamBuffer.splice(0).join('');
+        if (batch.trim()) {
+          await topicsService.sendToTopic(topicId!, batch.substring(0, 4000)).catch(() => {});
+        }
+      }, 3_000);
+    }
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      fullOutput += text;
+
+      // Parse NDJSON lines for text content to stream
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.type === 'assistant' && parsed.message?.content) {
+            for (const block of parsed.message.content) {
+              if (block.type === 'text' && block.text) {
+                streamBuffer.push(block.text);
+              }
+            }
+          }
+        } catch { /* not JSON, skip */ }
+      }
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      fullOutput += chunk.toString();
+    });
+
+    // Timeout
+    const timeout = setTimeout(() => {
+      this.runtime.logger.warn(`[orchestrator] Task ${shortId} timed out after ${this.timeoutMs / 1000}s`);
+      try { child.kill(); } catch { /* best effort */ }
+    }, this.timeoutMs);
+
+    // Wait for exit
+    const exitCode = await new Promise<number>((resolve) => {
+      child.on('close', (code) => resolve(code ?? 1));
+    });
+
+    clearTimeout(timeout);
+    if (streamTimer) clearInterval(streamTimer);
+    this.activeTask = null;
+
+    // Cleanup prompt file
+    try { unlinkSync(promptPath); } catch { /* best effort */ }
+
+    // Parse report
+    const report = parseReport(fullOutput);
+    this.runtime.logger.info(`[orchestrator] Task ${shortId} exited (code=${exitCode}), report=${report?.status || 'none'}`);
+
+    // Handle outcome
+    await this.handleOutcome(task, report, retryContext, fullOutput);
+  }
+
+  private async handleOutcome(
+    task: ItachiTask,
+    report: TaskReport | null,
+    retryContext: PromptInput['retryContext'] | undefined,
+    fullOutput: string,
+  ): Promise<void> {
+    const shortId = task.id.substring(0, 8);
+    const taskService = this.runtime.getService<TaskService>('itachi-tasks')!;
+    const topicsService = this.runtime.getService<TelegramTopicsService>('telegram-topics');
+    const memoryService = this.runtime.getService<MemoryService>('itachi-memory');
+    const topicId = task.telegram_topic_id;
+
+    // No report block — treat as failure
+    if (!report) {
+      if (!retryContext) {
+        this.runtime.logger.warn(`[orchestrator] No report from ${shortId} — queueing retry with planned approach`);
+        await taskService.updateTask(task.id, {
+          status: 'queued',
+          error_message: null as any,
+          started_at: null as any,
+          retry_context: JSON.stringify({
+            previousApproach: 'direct',
+            failureSummary: 'Session ended without producing a report.',
+            forcePlanned: true,
+          }),
+        });
+        return;
+      }
+      // Already retried — escalate
+      await taskService.updateTask(task.id, {
+        status: 'failed',
+        error_message: 'No report produced after retry',
+        completed_at: new Date().toISOString(),
+      });
+      await this.escalate(task, 'Task failed twice without producing a report. Manual intervention needed.');
+      return;
+    }
+
+    // Handle blocked — relay to Telegram for approval
+    if (report.status === 'blocked') {
+      await taskService.updateTask(task.id, { status: 'queued' });
+      if (topicsService) {
+        const msg = `⚠️ Task ${shortId} needs approval:\n${report.blockedReason || report.summary}\n\nReply "approve" to proceed or "cancel" to abort.`;
+        await topicsService.sendMessageWithKeyboard(msg, []).catch(() => {});
+      }
+      return;
+    }
+
+    // Store capability memories from learned field
+    if (report.learned.length > 0 && memoryService) {
+      for (const learning of report.learned) {
+        if (learning.length < 10) continue;
+        try {
+          const existing = await memoryService.searchMemories(learning, task.project, 3, undefined, 'capability');
+          const best = existing.length > 0 ? existing[0] : null;
+
+          if (best && (best.similarity ?? 0) > 0.85) {
+            await memoryService.reinforceMemory(best.id, { source: 'task_report' });
+          } else {
+            await memoryService.storeMemory({
+              project: task.project || 'general',
+              category: 'capability',
+              content: learning,
+              summary: learning.substring(0, 100),
+              files: [],
+              metadata: {
+                confidence: 0.7,
+                times_reinforced: 1,
+                source: 'task_report',
+                task_id: task.id,
+                outcome: report.status,
+                first_seen: new Date().toISOString(),
+                last_reinforced: new Date().toISOString(),
+              },
+            });
+          }
+        } catch (err) {
+          this.runtime.logger.warn(`[orchestrator] Failed to store capability: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    // Success or partial — mark complete, report to Telegram
+    if (report.status === 'success' || report.status === 'partial') {
+      await taskService.updateTask(task.id, {
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+      });
+
+      const emoji = report.status === 'success' ? '✅' : '⚠️';
+      const statusLabel = report.status === 'partial' ? 'Partially completed' : 'Completed';
+      const msg = `${emoji} ${statusLabel}: ${shortId}\n\n${report.summary}`;
+      if (topicId && topicsService) {
+        await topicsService.sendToTopic(topicId, msg).catch(() => {});
+      }
+      if (topicsService) {
+        await topicsService.sendMessageWithKeyboard(msg, []).catch(() => {});
+      }
+      return;
+    }
+
+    // Failed
+    if (report.approach === 'direct' && !retryContext) {
+      this.runtime.logger.info(`[orchestrator] Task ${shortId} failed (direct) — queueing retry with planned approach`);
+      await taskService.updateTask(task.id, {
+        status: 'queued',
+        error_message: null as any,
+        started_at: null as any,
+        retry_context: JSON.stringify({
+          previousApproach: 'direct',
+          failureSummary: report.summary,
+          forcePlanned: true,
+        }),
+      });
+      return;
+    }
+
+    // Planned approach also failed — escalate
+    await taskService.updateTask(task.id, {
+      status: 'failed',
+      error_message: report.summary.substring(0, 2000),
+      completed_at: new Date().toISOString(),
+    });
+    await this.escalate(task, report.summary);
+  }
+
+  private async escalate(task: ItachiTask, reason: string): Promise<void> {
+    const topicsService = this.runtime.getService<TelegramTopicsService>('telegram-topics');
+    if (!topicsService) return;
+
+    const shortId = task.id.substring(0, 8);
+    const msg = `❌ Task ${shortId} failed after retry:\n\n${reason}\n\nI need your help with this one.`;
+
+    if (task.telegram_topic_id) {
+      await topicsService.sendToTopic(task.telegram_topic_id, msg).catch(() => {});
+    }
+    await topicsService.sendMessageWithKeyboard(msg, []).catch(() => {});
+  }
+
+  private async resolveWorkDir(project: string, repos: string[]): Promise<string> {
+    const bases = ['/home/itachi', '/root', '/opt'];
+    for (const base of bases) {
+      try {
+        const { statSync } = await import('fs');
+        const dir = `${base}/${project}`;
+        if (statSync(dir).isDirectory()) return dir;
+      } catch { /* not found */ }
+    }
+    return '/home/itachi';
+  }
 }
