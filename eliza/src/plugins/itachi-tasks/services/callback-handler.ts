@@ -1352,7 +1352,7 @@ async function recoverOrphanedSessions(runtime: IAgentRuntime): Promise<void> {
         } catch { /* best-effort task lookup */ }
       }
 
-      runtime.logger.info(`[callback-handler] Orphaned session topic ${row.topic_id} (${row.title}) — notifying user`);
+      runtime.logger.info(`[callback-handler] Orphaned session topic ${row.topic_id} (${row.title}) — notifying and closing`);
       try {
         await topicsService.sendToTopic(
           row.topic_id,
@@ -1361,6 +1361,13 @@ async function recoverOrphanedSessions(runtime: IAgentRuntime): Promise<void> {
       } catch (sendErr: any) {
         runtime.logger.warn(`[callback-handler] Failed to notify orphaned topic ${row.topic_id}: ${sendErr?.message}`);
       }
+      // Mark topic closed so this message doesn't repeat on every restart
+      try {
+        await supabase
+          .from('itachi_topic_registry')
+          .update({ status: 'closed', updated_at: new Date().toISOString() })
+          .eq('topic_id', row.topic_id);
+      } catch { /* best-effort */ }
     }
 
     if (orphanCount > 0) {
