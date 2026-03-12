@@ -20,18 +20,9 @@ export interface AnalysisContext {
   durationMs?: number;
 }
 
-interface Insight {
-  category: string;
-  summary: string;
-  steps?: string[];
-  error?: string;
-  fix?: string;
-}
-
 interface AnalysisResult {
   significance: number;
-  effective_prompt_score: number;
-  insights: Insight[];
+  capabilities: Array<{ summary: string; detail?: string }>;
 }
 
 /**
@@ -105,43 +96,26 @@ export async function analyzeAndStoreTranscript(
   const sourceLabel = context.source === 'task' ? 'task' : 'session';
   const tag = context.taskId?.substring(0, 8) || context.sessionId?.substring(0, 12) || 'unknown';
 
-  const prompt = `Analyze this Claude Code ${context.source} transcript and extract structured knowledge.
+  const prompt = `Analyze this Claude Code ${context.source} transcript and extract capability knowledge — things learned that would help with similar tasks in the future.
 
 Project: ${context.project}
-Source: ${context.source} (${context.target || 'task queue'})
-Original prompt: ${context.description || 'none'}
+Original task: ${context.description || 'none'}
 Outcome: ${context.outcome || 'unknown'}
 ${context.durationMs ? `Duration: ${Math.round(context.durationMs / 1000)}s` : ''}
 
 Transcript:
 ${transcriptText}
 
-Extract the following categories of knowledge:
+Extract capabilities: practical knowledge about HOW to do things. Focus on:
+- Tools, commands, or techniques that worked (or didn't)
+- Environment-specific knowledge (paths, permissions, dependencies)
+- API endpoints, auth patterns, or integration details discovered
+- Gotchas, workarounds, or non-obvious requirements
 
-1. **workflow**: Step-by-step procedures that could be reused. Format: ordered steps.
-   Example: "To fix a TypeScript build error: 1) Run bun run build 2) Check the error output 3) Fix type errors 4) Rebuild"
+Only include insights clearly evidenced in the transcript. Skip trivial observations.
 
-2. **cli_pattern**: Effective CLI prompts and commands that produced good results.
-   Example: "Using 'itachi --ds' with a specific file path in the prompt helps focus the session"
-
-3. **error_recovery**: How errors were diagnosed and fixed. Include the error and the fix.
-   Example: "When SSH connection fails with 'Permission denied', check that the SSH key is loaded"
-
-4. **project_rule**: Project-specific conventions, gotchas, or constraints discovered.
-   Example: "Always run 'bun run build' before deploying itachi-memory"
-
-5. **decision**: Technical decisions made and why.
-
-6. **pattern**: Code patterns or architectural insights.
-
-Also assess:
-- significance (0.0-1.0): How valuable is this transcript for learning?
-- effective_prompt_score (0.0-1.0): How well did the original prompt guide the session?
-
-Only include insights that are clearly evidenced in the transcript. Skip trivial or obvious observations.
-
-Respond ONLY with valid JSON, no markdown fences:
-{"significance": 0.7, "effective_prompt_score": 0.8, "insights": [{"category": "workflow", "summary": "...", "steps": ["step1", "step2"]}, {"category": "cli_pattern", "summary": "..."}, {"category": "error_recovery", "summary": "...", "error": "...", "fix": "..."}, {"category": "project_rule", "summary": "..."}, {"category": "decision", "summary": "..."}, {"category": "pattern", "summary": "..."}]}`;
+Respond ONLY with valid JSON:
+{"significance": 0.7, "capabilities": [{"summary": "Short description of what was learned", "detail": "Full explanation with specifics"}]}`;
 
   let parsed: AnalysisResult;
   try {
@@ -153,7 +127,7 @@ Respond ONLY with valid JSON, no markdown fences:
     const raw = typeof result === 'string' ? result : String(result);
     parsed = JSON.parse(raw.trim());
 
-    if (typeof parsed.significance !== 'number' || !Array.isArray(parsed.insights)) {
+    if (typeof parsed.significance !== 'number' || !Array.isArray(parsed.capabilities)) {
       runtime.logger.warn(`[transcript-analyzer] Invalid LLM response structure for ${sourceLabel} ${tag}`);
       return;
     }
@@ -163,7 +137,7 @@ Respond ONLY with valid JSON, no markdown fences:
   }
 
   // Skip low-significance transcripts
-  if (parsed.significance < 0.3 && parsed.insights.length === 0) {
+  if (parsed.significance < 0.3 && parsed.capabilities.length === 0) {
     runtime.logger.info(`[transcript-analyzer] Skipping low-significance ${sourceLabel} ${tag} (${parsed.significance})`);
     return;
   }
@@ -172,85 +146,44 @@ Respond ONLY with valid JSON, no markdown fences:
   let reinforced = 0;
   const project = context.project || 'default';
 
-  for (const insight of parsed.insights.slice(0, 15)) {
-    if (!insight.summary || insight.summary.length < 10) continue;
+  for (const cap of parsed.capabilities.slice(0, 10)) {
+    if (!cap.summary || cap.summary.length < 10) continue;
 
     try {
-      if (insight.category === 'project_rule') {
-        // Use reinforcement pattern: search for similar existing rules
-        const existing = await memoryService.searchMemories(
-          insight.summary, project, 3, undefined, 'project_rule'
-        );
-        const bestMatch = existing.length > 0 ? existing[0] : null;
-        const matchSimilarity = bestMatch?.similarity ?? 0;
+      const existing = await memoryService.searchMemories(
+        cap.summary, project, 3, undefined, 'capability'
+      );
+      const best = existing.length > 0 ? existing[0] : null;
 
-        if (bestMatch && matchSimilarity > 0.85) {
-          await memoryService.reinforceMemory(bestMatch.id, {
-            source: `${sourceLabel}_transcript`,
-          });
-          if (insight.summary.length > (bestMatch.summary?.length || 0)) {
-            await memoryService.updateMemorySummary(bestMatch.id, insight.summary);
-          }
-          reinforced++;
-        } else {
-          await memoryService.storeMemory({
-            project,
-            category: 'project_rule',
-            content: insight.summary,
-            summary: insight.summary,
-            files: [],
-            metadata: {
-              confidence: 0.7,
-              times_reinforced: 1,
-              source: `${sourceLabel}_transcript`,
-              first_seen: new Date().toISOString(),
-              last_reinforced: new Date().toISOString(),
-              ...(context.taskId ? { task_id: context.taskId } : {}),
-              ...(context.sessionId ? { session_id: context.sessionId } : {}),
-              ...(context.outcome ? { outcome: context.outcome } : {}),
-            },
-          });
-          stored++;
-        }
+      if (best && (best.similarity ?? 0) > 0.85) {
+        await memoryService.reinforceMemory(best.id, { source: `${sourceLabel}_transcript` });
+        reinforced++;
       } else {
-        // Store other insight types with their category
-        const metadata: Record<string, unknown> = {
-          source: `${sourceLabel}_transcript`,
-          significance: parsed.significance,
-          ...(context.taskId ? { task_id: context.taskId } : {}),
-          ...(context.sessionId ? { session_id: context.sessionId } : {}),
-          ...(context.target ? { target: context.target } : {}),
-          ...(context.outcome ? { outcome: context.outcome } : {}),
-        };
-
-        if (insight.category === 'workflow' && insight.steps) {
-          metadata.steps = insight.steps;
-        }
-        if (insight.category === 'cli_pattern') {
-          metadata.effective_prompt_score = parsed.effective_prompt_score;
-        }
-        if (insight.category === 'error_recovery') {
-          if (insight.error) metadata.error = insight.error;
-          if (insight.fix) metadata.fix = insight.fix;
-        }
-
         await memoryService.storeMemory({
           project,
-          category: insight.category,
-          content: insight.summary + (insight.steps ? '\nSteps: ' + insight.steps.join(' -> ') : ''),
-          summary: insight.summary,
+          category: 'capability',
+          content: cap.detail || cap.summary,
+          summary: cap.summary,
           files: [],
-          metadata,
+          metadata: {
+            confidence: 0.7,
+            times_reinforced: 1,
+            source: `${sourceLabel}_transcript`,
+            task_id: context.taskId,
+            outcome: context.outcome,
+            first_seen: new Date().toISOString(),
+            last_reinforced: new Date().toISOString(),
+          },
         });
         stored++;
       }
     } catch (err) {
-      runtime.logger.warn(`[transcript-analyzer] Failed to store insight: ${err instanceof Error ? err.message : String(err)}`);
+      runtime.logger.warn(`[transcript-analyzer] Failed to store capability: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   runtime.logger.info(
     `[transcript-analyzer] ${sourceLabel} ${tag}: ${stored} stored, ${reinforced} reinforced ` +
-    `(significance: ${parsed.significance}, prompt_score: ${parsed.effective_prompt_score})`
+    `(significance: ${parsed.significance})`
   );
 }
