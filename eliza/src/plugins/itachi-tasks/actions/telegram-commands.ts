@@ -189,7 +189,16 @@ export const telegramCommandsAction: Action = {
         try {
           const { classifyIntent } = await import('../services/intent-router.js');
           const machines = ['air', 'hood', 'surface', 'cool'];
-          const intent = await classifyIntent(runtime, text, { projects: [], machines });
+          // Populate projects from registry for better intent classification
+          let projectNames: string[] = [];
+          try {
+            const taskSvc = runtime.getService<TaskService>('itachi-tasks');
+            if (taskSvc) {
+              const repos = await taskSvc.getMergedRepos();
+              projectNames = repos.map((r: any) => r.name).filter(Boolean);
+            }
+          } catch { /* best-effort */ }
+          const intent = await classifyIntent(runtime, text, { projects: projectNames, machines });
 
           if (intent.type === 'task') {
             const taskService = runtime.getService<TaskService>('itachi-tasks');

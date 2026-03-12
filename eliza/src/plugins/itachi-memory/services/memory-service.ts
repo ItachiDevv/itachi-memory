@@ -209,18 +209,7 @@ export class MemoryService extends Service {
     outcome?: string,
     minConfidence?: number,
   ): Promise<ItachiMemory[]> {
-    let results = await this.searchMemoriesHybrid(query, project, limit, branch, category, outcome);
-
-    // Trust-score filtering (application-side until Supabase RPC is updated)
-    if (minConfidence != null && results.length > 0) {
-      results = results.filter(m => {
-        const conf = (m.metadata as Record<string, unknown>)?.confidence;
-        const confNum = typeof conf === 'number' ? conf : 0.5; // default trust for unscored memories
-        return confNum >= minConfidence;
-      });
-    }
-
-    return results;
+    return await this.searchMemoriesHybrid(query, project, limit, branch, category, outcome, minConfidence);
   }
 
   async searchMemoriesHybrid(
@@ -229,7 +218,8 @@ export class MemoryService extends Service {
     limit = 5,
     branch?: string,
     category?: string,
-    outcome?: string
+    outcome?: string,
+    minConfidence?: number,
   ): Promise<ItachiMemory[]> {
     const embedding = await this.getEmbedding(query);
 
@@ -245,6 +235,7 @@ export class MemoryService extends Service {
         match_branch: branch ?? null,
         match_metadata_outcome: outcome ?? null,
         match_limit: limit,
+        min_confidence: minConfidence ?? null,
       });
 
       if (!error && data) {
@@ -264,6 +255,7 @@ export class MemoryService extends Service {
         match_branch: branch ?? null,
         match_metadata_outcome: outcome ?? null,
         match_limit: limit,
+        min_confidence: minConfidence ?? null,
       });
 
       if (error) throw error;

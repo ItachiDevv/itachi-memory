@@ -229,7 +229,10 @@ export const topicInputRelayEvaluator: Evaluator = {
         // instead of the session topic where the user's message originated.
         suppressNextLLMMessage(chatId, threadId);
         suppressNextLLMMessage(chatId, null);
-        if (session.mode === 'stream-json') {
+        if (session.driver) {
+          // Use SessionDriver to track phase transitions (e.g. waiting_human → working)
+          session.driver.onHumanInput(fullText);
+        } else if (session.mode === 'stream-json') {
           session.handle.write(wrapStreamJsonInput(fullText));
         } else {
           session.handle.write(fullText + '\r');
@@ -336,7 +339,10 @@ export const topicInputRelayEvaluator: Evaluator = {
         }
 
         // Format input based on session mode
-        if (session.mode === 'stream-json') {
+        if (session.driver) {
+          // Use SessionDriver to track phase transitions (e.g. waiting_human → working)
+          session.driver.onHumanInput(text);
+        } else if (session.mode === 'stream-json') {
           // Stream-JSON mode: wrap user text in a JSON message for Claude's stdin
           session.handle.write(wrapStreamJsonInput(text));
         } else {

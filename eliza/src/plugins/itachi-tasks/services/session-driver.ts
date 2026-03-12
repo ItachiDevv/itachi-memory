@@ -113,7 +113,7 @@ export class SessionDriver {
 
     if (this.phase === 'verifying') {
       const verifyFailed = text.includes('error') || text.includes('failed') ||
-                           text.includes('FAIL') || text.includes('test failed');
+                           text.includes('fail') || text.includes('test failed');
 
       if (!verifyFailed) {
         this.phase = 'done';

@@ -302,10 +302,10 @@ try {
     let existing = '';
     if (fs.existsSync(logFile)) existing = fs.readFileSync(logFile, 'utf8');
 
-    // Cap at 30 entries — rotate oldest
+    // Cap at 50 entries — rotate oldest
     const entries = existing.split(/(?=^### )/m).filter(e => e.trim() && e.startsWith('###'));
     entries.push(entry);
-    while (entries.length > 30) entries.shift();
+    while (entries.length > 50) entries.shift();
 
     const header = '# Session Log\n<!-- auto-updated by session-end hook -->\n\n';
     fs.writeFileSync(logFile, header + entries.join('\n'));
@@ -560,7 +560,7 @@ function extractCodexTexts(lines) {
                         '⏱ ' + mins + 'min | 📁 ' + fc + ' files',
                         firstLine.substring(0, 120),
                         completed ? ('✅ ' + completed.substring(0, 120)) : '',
-                    ].filter(Boolean).join('\\n');
+                    ].filter(Boolean).join('\n');
                     await httpPost('https://api.telegram.org/bot' + tgToken + '/sendMessage', {
                         chat_id: chatId, text: msg, parse_mode: 'Markdown'
                     });
