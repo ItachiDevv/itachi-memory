@@ -15,24 +15,8 @@ import { isSessionTopic } from '../shared/active-sessions.js';
 import { SSHService } from './ssh-service.js';
 import {
   handleHelp,
-  handleHealth,
   handleBrain,
-  handleRecall,
-  handleRepos,
-  handleMachines,
-  handleEngines,
-  handleSyncRepos,
   handleTaskStatus,
-  handleFeedback,
-  handleLearn,
-  handleTeach,
-  handleUnteach,
-  handleSpawn,
-  handleAgents,
-  handleMsg,
-  handleCloseAllTopics,
-  handleDeleteTopicsAll,
-  handleDeleteTopics,
 } from '../actions/telegram-commands.js';
 import {
   handleSlashCommand,
@@ -73,33 +57,10 @@ function buildDispatch(
 
   return [
     [/^\/help\b/i, (_rt, _t, cb) => handleHelp(cb)],
-    [/^\/health$/i, (rt, _t, cb) => handleHealth(rt, cb)],
     [/^\/brain\b/i, (rt, t, cb) => handleBrain(rt, t, cb)],
     [/^\/self\b/i, (rt, t, cb) => handleSelfInspection(rt, t, ssh, cb)],
-    [/^\/recall\b/i, (rt, t, cb) => handleRecall(rt, t, cb)],
-    [/^\/repos$/i, async (rt, _t, cb) => {
-      const result = await handleRepos(rt, cb) as any;
-      if (result?.data?.repos?.length > 0) {
-        const lines = result.data.repos.map((r: any) => `- ${r.name}${r.repo_url ? ` (${r.repo_url})` : ''}`);
-        await cb({ text: `Repos (${lines.length}):\n${lines.join('\n')}` });
-      } else if (!result?.success) {
-        await cb({ text: result?.error || 'Failed to fetch repos.' });
-      } else {
-        await cb({ text: 'No repos found.' });
-      }
-    }],
-    [/^\/machines$/i, (rt, _t, cb) => handleMachines(rt, cb)],
-    [/^\/engines\b/i, (rt, t, cb) => handleEngines(rt, t, cb)],
-    [/^\/sync[-_]?repos$/i, (rt, _t, cb) => handleSyncRepos(rt, cb)],
     [/^\/taskstatus\b/i, (rt, t, cb) => handleTaskStatus(rt, t, cb)],
     [/^\/status\b/i, (rt, t, cb) => handleStatus(rt, t, cb)],
-    [/^\/feedback\b/i, (rt, t, cb) => handleFeedback(rt, t, cb)],
-    [/^\/learn\b/i, (rt, t, cb) => handleLearn(rt, t, cb)],
-    [/^\/teach\b/i, (rt, t, cb) => handleTeach(rt, t, cb)],
-    [/^\/unteach\b/i, (rt, t, cb) => handleUnteach(rt, t.replace(/^\/unteach\s*/i, ''), cb)],
-    [/^\/spawn\b/i, (rt, t, cb) => handleSpawn(rt, t, cb)],
-    [/^\/agents$/i, (rt, _t, cb) => handleAgents(rt, cb)],
-    [/^\/msg\b/i, (rt, t, cb) => handleMsg(rt, t, cb)],
     [/^\/logs\b/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
     [/^\/ssh\b/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
     [/^\/deploy\b/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
@@ -110,29 +71,9 @@ function buildDispatch(
     [/^\/ops\b/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
     [/^\/ssh[-_]?test$/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
     [/^\/ssh[-_]?targets$/i, (_rt, t, cb) => handleSlashCommand(t, ssh, runtime, cb)],
-    // Topic management — handled directly (ElizaOS pass-through is unreliable for these)
-    [/^\/close[-_]?all[-_]?topics?$/i, (rt, _t, cb) => handleCloseAllTopics(rt, cb)],
-    [/^\/closealltopics$/i, (rt, _t, cb) => handleCloseAllTopics(rt, cb)],
-    [/^\/delete[-_]?topics?\s+(done|failed|cancelled|completed|timeout)\b/i, (rt, t, cb) => {
-      const statusMatch = t.match(/\s+(done|failed|cancelled|completed|timeout)/i);
-      const status = statusMatch?.[1]?.toLowerCase() || 'all';
-      const mapped = status === 'done' ? 'completed' : status;
-      return handleDeleteTopics(rt, mapped, cb);
-    }],
-    [/^\/delete[-_]?topics?\s+all\b/i, (rt, _t, cb) => handleDeleteTopicsAll(rt, cb)],
-    [/^\/delete[-_]?topics?$/i, (rt, _t, cb) => handleDeleteTopicsAll(rt, cb)],
     // Pass-through markers (null handler → let ElizaOS handle)
     [/^\/session\b/i, null],
-    [/^\/browse\b/i, null],
-    [/^\/task\b/i, null],
-    [/^\/delete\b/i, null],
     [/^\/close\b/i, null],
-    [/^\/cancel\b/i, null],
-    [/^\/remind\b/i, null],
-    [/^\/schedule\b/i, null],
-    [/^\/unremind\b/i, null],
-    [/^\/reminders\b/i, null],
-    [/^\/gh\b/i, null],
   ];
 }
 

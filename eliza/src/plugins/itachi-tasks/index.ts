@@ -1,22 +1,13 @@
 import type { Plugin } from '@elizaos/core';
 import { TaskService } from './services/task-service.js';
-import { TaskPollerService } from './services/task-poller.js';
 import { TelegramTopicsService } from './services/telegram-topics.js';
 import { MachineRegistryService } from './services/machine-registry.js';
 import { ReminderService } from './services/reminder-service.js';
 import { SSHService } from './services/ssh-service.js';
 import { TaskExecutorService } from './services/task-executor-service.js';
-import { spawnSessionAction } from './actions/spawn-session.js';
-import { createTaskAction } from './actions/create-task.js';
-import { listTasksAction } from './actions/list-tasks.js';
-import { cancelTaskAction } from './actions/cancel-task.js';
 import { telegramCommandsAction } from './actions/telegram-commands.js';
 import { topicReplyAction } from './actions/topic-reply.js';
-import { reminderCommandsAction } from './actions/reminder-commands.js';
-import { remoteExecAction } from './actions/remote-exec.js';
-import { coolifyControlAction } from './actions/coolify-control.js';
 import { interactiveSessionAction } from './actions/interactive-session.js';
-import { githubDirectAction } from './actions/github-direct.js';
 import { topicInputRelayEvaluator } from './evaluators/topic-input-relay.js';
 import { activeTasksProvider } from './providers/active-tasks.js';
 import { reposProvider } from './providers/repos.js';
@@ -42,10 +33,10 @@ export { brainLoopWorker, registerBrainLoopTask } from './workers/brain-loop.js'
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',
   description: 'Task queue management, orchestrator integration, and completion notifications',
-  actions: [interactiveSessionAction, githubDirectAction, spawnSessionAction, createTaskAction, listTasksAction, cancelTaskAction, telegramCommandsAction, topicReplyAction, reminderCommandsAction, remoteExecAction, coolifyControlAction],
+  actions: [interactiveSessionAction, telegramCommandsAction, topicReplyAction],
   evaluators: [topicInputRelayEvaluator],
   providers: [commandSuppressorProvider, topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
-  services: [TaskService, TaskPollerService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService],
+  services: [TaskService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService],
   // Routes registered in init() to bypass ElizaOS plugin-name prefix
   init: async (_, runtime) => {
     for (const route of taskStreamRoutes) {
@@ -85,36 +76,9 @@ export const itachiTasksPlugin: Plugin = {
     const botToken = runtime.getSetting('TELEGRAM_BOT_TOKEN');
     if (botToken) {
       const commands = [
-        // Session controls (most needed in-topic, listed first)
-        { command: 'stop', description: 'Interrupt session (Ctrl+C)' },
-        { command: 'exit', description: 'End session input (Ctrl+D)' },
-        { command: 'esc', description: 'Send Escape key to session' },
-        { command: 'yes', description: 'Send y + Enter to session' },
-        { command: 'no', description: 'Send n + Enter to session' },
-        { command: 'close', description: 'Kill session & close topic' },
-        // Core commands
-        { command: 'task', description: 'Create a task — /task <name> or /task <project> <desc>' },
-        { command: 'session', description: 'Interactive CLI session — /session [target] [prompt]' },
-        { command: 'status', description: 'Show task queue status' },
-        { command: 'cancel', description: 'Cancel a task — /cancel <id>' },
-        { command: 'gh', description: 'GitHub queries — /gh prs|issues|branches <repo>' },
-        { command: 'ssh', description: 'Run command — /ssh <target> <cmd>' },
-        { command: 'ops', description: 'Server ops — /ops deploy|logs|restart|update' },
-        { command: 'recall', description: 'Search memories — /recall <query>' },
-        { command: 'teach', description: 'Teach a rule — /teach <instruction>' },
-        { command: 'unteach', description: 'Delete a rule — /unteach <query>' },
-        { command: 'feedback', description: 'Rate a task — /feedback <id> <good|bad> <reason>' },
-        { command: 'remind', description: 'Reminders — /remind <time> <msg> | list | cancel' },
-        { command: 'machines', description: 'Machines, engines, repos' },
-        { command: 'deletetopic', description: 'Pick a topic to delete (buttons)' },
-        { command: 'closealltopics', description: 'Close all open topics' },
-        { command: 'deletetopics', description: 'Delete topics — /deletetopics done|failed|all' },
-        { command: 'spawn', description: 'Spawn subagent — /spawn <profile> <task>' },
-        { command: 'agents', description: 'Subagents — /agents [msg <id> <message>]' },
-        { command: 'health', description: 'System health check' },
         { command: 'brain', description: 'Brain loop status + control' },
-        { command: 'self', description: 'Bot self-inspection (status, env, executor)' },
-        { command: 'help', description: 'Show all commands' },
+        { command: 'status', description: 'Detailed task status — /status <id>' },
+        { command: 'help', description: 'Show commands' },
       ];
       try {
         await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
