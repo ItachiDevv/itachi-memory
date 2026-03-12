@@ -49,17 +49,31 @@ export const syncRoutes: Route[] = [
     },
   },
 
-  // GET /api/sync/pull/:repo/* — pull encrypted file data
+  // GET /api/sync/pull/* — pull encrypted file data
+  // URL format: /api/sync/pull/<repo>/<file_path...>
+  // ElizaOS wildcard routing does literal prefix match, so we parse repo/file from the URL
   {
     type: 'GET',
-    path: '/api/sync/pull/:repo/*',
+    path: '/api/sync/pull/*',
     public: true,
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
         const supabase = getSupabase(rt);
-        const repo = req.params!.repo;
-        const filePath = (req.params as any)![0]; // wildcard capture
+
+        // Extract repo and file_path from URL: /api/sync/pull/<repo>/<file_path>
+        const pullPrefix = '/api/sync/pull/';
+        const reqPath = (req as any).path || (req as any).url || '';
+        const afterPrefix = reqPath.indexOf(pullPrefix) !== -1
+          ? reqPath.substring(reqPath.indexOf(pullPrefix) + pullPrefix.length)
+          : '';
+        const slashIdx = afterPrefix.indexOf('/');
+        if (slashIdx === -1 || !afterPrefix) {
+          res.status(400).json({ error: 'URL format: /api/sync/pull/:repo/:file_path' });
+          return;
+        }
+        const repo = decodeURIComponent(afterPrefix.substring(0, slashIdx));
+        const filePath = decodeURIComponent(afterPrefix.substring(slashIdx + 1));
 
         const { data, error } = await supabase
           .from('sync_files')
