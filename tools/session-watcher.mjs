@@ -29,15 +29,40 @@ const BRAIN_API = process.env.BRAIN_API_URL || keys.ITACHI_API_URL
   ? (process.env.BRAIN_API_URL || keys.ITACHI_API_URL).replace(/\/?$/, '/api').replace(/\/api\/api$/, '/api')
   : 'https://itachisbrainserver.online/api';
 const ITACHI_API_KEY = process.env.ITACHI_API_KEY || keys.ITACHI_API_KEY || '';
-const MACHINE_ID = process.env.ITACHI_MACHINE_ID || keys.ITACHI_ORCHESTRATOR_ID || hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+
+// Machine ID: use explicit env/key, or derive from Tailscale hostname, or map known hostnames
+function resolveMachineId() {
+  if (process.env.ITACHI_MACHINE_ID) return process.env.ITACHI_MACHINE_ID;
+  if (keys.ITACHI_ORCHESTRATOR_ID) return keys.ITACHI_ORCHESTRATOR_ID;
+  // Map known hostnames to clean IDs
+  const h = hostname().toLowerCase();
+  const knownMap = {
+    'hoodie-prometh': 'hoodie-prometh',
+    'surface-win': 'surface',
+    'itachi-mem': 'coolify',
+  };
+  for (const [pattern, id] of Object.entries(knownMap)) {
+    if (h.includes(pattern)) return id;
+  }
+  // Detect by OS + user
+  const user = process.env.USER || process.env.USERNAME || '';
+  if (platform() === 'darwin') return 'mac';
+  if (platform() === 'win32') return 'windows';
+  if (platform() === 'linux') return 'linux';
+  return h.replace(/[^a-z0-9-]/g, '-').substring(0, 30);
+}
+
+const MACHINE_ID = resolveMachineId();
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 const CHECK_INTERVAL_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const MIN_NUDGE_INTERVAL_MS = 120_000;
+const SESSION_REPORT_INTERVAL_MS = 60_000; // report session activity every 60s
 
 const watchedSessions = new Map();
 let lastHeartbeat = 0;
+let lastSessionReport = 0;
 
 // --- HTTP helper ---
 function apiRequest(method, path, body) {
@@ -101,8 +126,7 @@ async function sendHeartbeat(activeSessions) {
 
 async function reportIssueToBrain(session, issues) {
   try {
-    // Decode project name from Claude's encoded directory format
-    const projectName = session.project.replace(/-/g, '/').replace(/^\//, '');
+    const projectName = decodeProjectName(session.project);
     await apiRequest('POST', '/memory/create', {
       project: projectName,
       category: 'watcher_alert',
@@ -118,6 +142,67 @@ async function reportIssueToBrain(session, issues) {
   } catch (err) {
     console.error(`[watcher] Brain report failed: ${err.message}`);
   }
+}
+
+function decodeProjectName(encoded) {
+  // Claude encodes paths like -Users-itachisan-itachi-itachi-memory
+  return encoded.replace(/^-/, '').split('-').pop() || encoded;
+}
+
+async function reportSessionActivity(sessions) {
+  if (Date.now() - lastSessionReport < SESSION_REPORT_INTERVAL_MS) return;
+  lastSessionReport = Date.now();
+  if (sessions.length === 0) return;
+
+  const sessionSummaries = sessions.map(s => {
+    const state = watchedSessions.get(s.path);
+    return {
+      session_id: s.sessionId,
+      project: decodeProjectName(s.project),
+      size_kb: Math.round(s.size / 1024),
+      error_count: state?.errorCount || 0,
+      status: state?.errorCount > 5 ? 'struggling' : 'healthy',
+    };
+  });
+
+  try {
+    await apiRequest('POST', '/machines/heartbeat', {
+      machine_id: MACHINE_ID,
+      active_tasks: sessions.length,
+      watcher_meta: {
+        uptime: process.uptime(),
+        memFreeMB: Math.round(freemem() / 1024 / 1024),
+        activeSessions: sessions.length,
+        watchedFiles: watchedSessions.size,
+        sessions: sessionSummaries,
+      },
+    });
+  } catch (err) {
+    console.error(`[watcher] Session report failed: ${err.message}`);
+  }
+}
+
+function extractSessionSummary(turns) {
+  // Extract what the session is working on from recent turns
+  const toolUses = [];
+  const files = new Set();
+  let lastUserMessage = '';
+
+  for (const turn of turns.slice(-20)) {
+    const content = turn.message?.content || turn.content || '';
+    if (turn.role === 'user' || turn.type === 'human') {
+      lastUserMessage = content.toString().substring(0, 200);
+    }
+    // Track tool usage
+    if (turn.type === 'tool_use' || turn.tool_name) {
+      toolUses.push(turn.tool_name || turn.name || 'unknown');
+    }
+    // Extract file paths
+    const fileMatches = content.toString().match(/[\/\\][\w\-\.\/\\]+\.\w{1,6}/g);
+    if (fileMatches) fileMatches.slice(0, 5).forEach(f => files.add(f));
+  }
+
+  return { lastUserMessage, toolUses: toolUses.slice(-10), files: [...files].slice(0, 10) };
 }
 
 // --- Telegram ---
@@ -241,6 +326,10 @@ async function tailSession(session) {
     lastNudge: 0,
     errorCount: 0,
     errors: [],
+    turnCount: 0,
+    toolUses: [],
+    files: new Set(),
+    lastActivity: Date.now(),
   };
   watchedSessions.set(session.path, state);
 
@@ -255,6 +344,14 @@ async function tailSession(session) {
 
   const turns = parseTurns(newData);
   if (turns.length === 0) return;
+
+  // Track session activity (not just errors)
+  state.turnCount += turns.length;
+  state.lastActivity = Date.now();
+  const summary = extractSessionSummary(turns);
+  summary.toolUses.forEach(t => state.toolUses.push(t));
+  summary.files.forEach(f => state.files.add(f));
+  if (state.toolUses.length > 50) state.toolUses = state.toolUses.slice(-30);
 
   const issues = detectIssues(turns, state);
   const recentText = turns.map(t => (t.message?.content || t.content || '').toString()).join(' ').substring(0, 500);
@@ -288,6 +385,9 @@ async function tick() {
 
   // Heartbeat to brain with active session count
   await sendHeartbeat(sessions.length);
+
+  // Report full session activity to brain periodically
+  await reportSessionActivity(sessions);
 
   for (const session of sessions) {
     try { await tailSession(session); } catch (err) {
