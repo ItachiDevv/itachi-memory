@@ -902,7 +902,13 @@ export class TaskExecutorService extends Service {
         // result chunks signal turn completion — trigger driver logic
         if (chunk.kind === 'result') {
           if (driver) {
-            driver.onTurnComplete().catch(err => {
+            driver.onTurnComplete().then(() => {
+              // If driver is done, kill the session so onExit fires and cleans up
+              if (driver!.isDone()) {
+                this.runtime.logger.info(`[executor] SessionDriver done — ending session`);
+                try { handle?.kill(); } catch { /* already closed */ }
+              }
+            }).catch(err => {
               this.runtime.logger.warn(`[executor] Driver turn-complete error: ${err instanceof Error ? err.message : String(err)}`);
             });
           }
