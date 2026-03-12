@@ -3,7 +3,7 @@ import { Service, type IAgentRuntime } from '@elizaos/core';
 import { SSHService } from './ssh-service.js';
 import { TaskService, type ItachiTask, generateTaskTitle } from './task-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
-import { MachineRegistryService } from './machine-registry.js';
+// MachineRegistryService removed — TODO: revisit after orchestrator migration
 import type { RLMService } from '../../itachi-self-improve/services/rlm-service.js';
 import { activeSessions, markSessionClosed } from '../shared/active-sessions.js';
 import { resolveRepoPathByProject, EXTRA_REPO_BASES, DEFAULT_REPO_BASES, MACHINE_TO_SSH_TARGET } from '../shared/repo-utils.js';
@@ -12,8 +12,7 @@ import { analyzeAndStoreTranscript, type TranscriptEntry } from '../utils/transc
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { stripAnsi, filterTuiNoise } from '../utils/tui-filter.js';
 import { parseStreamJsonLine, wrapStreamJsonInput, createNdjsonParser } from '../actions/interactive-session.js';
-import { SessionDriver } from './session-driver.js';
-import { GuardrailService } from './guardrail-service.js';
+// SessionDriver and GuardrailService removed — TODO: revisit after orchestrator migration
 import type { ParsedChunk } from '../shared/parsed-chunks.js';
 
 // ── Re-queue tracking (prevent infinite loops) ──────────────────────
@@ -72,6 +71,13 @@ export class TaskExecutorService extends Service {
     }
 
     const service = new TaskExecutorService(runtime);
+
+    // If new orchestrator is enabled, this service is a no-op
+    if (process.env.ITACHI_USE_NEW_ORCHESTRATOR === 'true') {
+      runtime.logger.info('TaskExecutorService disabled — new orchestrator active');
+      return service;
+    }
+
     service.resolveManagedMachines();
 
     if (service.managedMachines.length === 0) {
@@ -171,9 +177,10 @@ export class TaskExecutorService extends Service {
    * Runs immediately at startup and every 30s thereafter.
    */
   private async registerAndHeartbeat(): Promise<void> {
-    const registry = this.runtime.getService<MachineRegistryService>('machine-registry');
+    // TODO: revisit after orchestrator migration — MachineRegistryService was removed
+    // Now just checks SSH connectivity for managed machines
     const sshService = this.runtime.getService<SSHService>('ssh');
-    if (!registry || !sshService) return;
+    if (!sshService) return;
 
     for (const machineId of this.managedMachines) {
       try {
@@ -182,62 +189,14 @@ export class TaskExecutorService extends Service {
         const reachable = ping.success && ping.stdout?.includes('OK');
 
         if (!reachable) {
-          // Mark offline and skip — no heartbeat for unreachable machines
-          await registry.markOffline(machineId).catch(() => {});
-          this.runtime.logger.info(`[executor] Machine "${machineId}" unreachable — marked offline`);
+          this.runtime.logger.info(`[executor] Machine "${machineId}" unreachable`);
           continue;
         }
 
-        // Count active tasks on this machine
-        const activeTasks = [...this.activeTasks.values()].filter(t => t.machineId === machineId).length;
-
-        // Determine OS from target name
-        const lower = machineId.toLowerCase();
-        const os = lower === 'mac' ? 'darwin' : lower === 'windows' ? 'win32' : 'linux';
-
-        // Detect projects on this machine (SSH already confirmed reachable)
-        const projects = await this.detectProjectsOnMachine(machineId);
-
-        // Heartbeat or register if new
-        const hbResult = await registry.heartbeat(machineId, activeTasks).catch(() => undefined);
-        if (hbResult === undefined) {
-          // heartbeat() threw — machine not in registry yet, register it fresh
-          try {
-            await registry.registerMachine({
-              machine_id: machineId,
-              display_name: machineId,
-              projects,
-              max_concurrent: this.maxConcurrent,
-              os,
-              engine_priority: ['claude', 'codex', 'gemini'],
-            });
-            this.runtime.logger.info(`[executor] Registered machine "${machineId}" in registry (projects: ${projects.join(', ') || 'none'})`);
-          } catch (regErr) {
-            this.runtime.logger.warn(`[executor] Failed to register machine "${machineId}": ${regErr instanceof Error ? regErr.message : String(regErr)}`);
-          }
-        } else if (hbResult === null) {
-          // SSH confirmed reachable but machine is marked offline — force-revive it
-          this.runtime.logger.info(`[executor] Machine "${machineId}" is offline in registry but SSH-reachable — reviving`);
-          await registry.revive(machineId, activeTasks, projects.length > 0 ? projects : undefined).catch(() => {});
-        } else if (projects.length > 0) {
-          await registry.updateProjects(machineId, projects);
-        }
+        this.runtime.logger.info(`[executor] Machine "${machineId}" reachable`);
       } catch (err) {
         this.runtime.logger.warn(`[executor] Heartbeat failed for ${machineId}: ${err instanceof Error ? err.message : String(err)}`);
       }
-    }
-
-    // Clean up alias entries that should not exist as separate DB rows.
-    // Any key in MACHINE_TO_SSH_TARGET that maps to a DIFFERENT value is an alias.
-    try {
-      const aliasIds = Object.entries(MACHINE_TO_SSH_TARGET)
-        .filter(([key, value]) => key !== value)
-        .map(([key]) => key);
-      if (aliasIds.length > 0) {
-        await registry.deleteByIds(aliasIds);
-      }
-    } catch {
-      // Non-critical
     }
   }
 
@@ -541,15 +500,9 @@ export class TaskExecutorService extends Service {
 
       this.runtime.logger.error(`[executor] Task ${shortId} failed: ${msg}`);
 
-      // If the failure was an SSH connectivity issue, mark the machine offline in the registry
+      // SSH connectivity failure logged — registry marking removed
       if ((err as any).requeue) {
-        try {
-          const registry = this.runtime.getService<MachineRegistryService>('machine-registry');
-          if (registry) {
-            await registry.markOffline(machineId);
-            this.runtime.logger.warn(`[executor] Marked ${machineId} offline in registry after SSH ping failure`);
-          }
-        } catch { /* best-effort */ }
+        this.runtime.logger.warn(`[executor] SSH failure on ${machineId} — task will be re-queued`);
       }
 
       await taskService.updateTask(task.id, {
@@ -753,19 +706,7 @@ export class TaskExecutorService extends Service {
           }
         }
 
-        // Fetch guardrails (failure-derived warnings)
-        try {
-          const guardrailService = this.runtime.getService<GuardrailService>('guardrails');
-          if (guardrailService) {
-            const guardrails = await guardrailService.getGuardrails(task.project, task.description, 5);
-            if (guardrails.length > 0) {
-              lines.push('', '--- Guardrails (known failure patterns — follow these) ---');
-              for (const g of guardrails) {
-                lines.push(`- ${g}`);
-              }
-            }
-          }
-        } catch { /* non-critical */ }
+        // GuardrailService removed — TODO: revisit after orchestrator migration
       }
     } catch (err) {
       this.runtime.logger.warn(`[executor] Failed to fetch memories: ${err instanceof Error ? err.message : String(err)}`);
@@ -777,16 +718,8 @@ export class TaskExecutorService extends Service {
   // ── Engine Resolution ────────────────────────────────────────────────
 
   private async resolveEngineCommand(sshTarget: string): Promise<{ cmd: string; engine: string }> {
-    let engine = 'claude';
-    try {
-      const registry = this.runtime.getService<MachineRegistryService>('machine-registry');
-      if (registry) {
-        const { machine } = await registry.resolveMachine(sshTarget);
-        if (machine?.engine_priority?.length) {
-          engine = machine.engine_priority[0];
-        }
-      }
-    } catch { /* default to claude */ }
+    // TODO: revisit after orchestrator migration — was using MachineRegistryService for engine priority
+    const engine = 'claude';
 
     // Try wrapper first, fall back to direct CLI
     const wrapper = ENGINE_WRAPPERS[engine] || 'itachi';
@@ -916,16 +849,15 @@ export class TaskExecutorService extends Service {
       if (taskHeartbeat) { clearInterval(taskHeartbeat); taskHeartbeat = null; }
     };
 
-    // Create SessionDriver for stream-json sessions (multi-turn judgment layer)
-    let driver: SessionDriver | undefined;
+    // SessionDriver removed — TODO: revisit after orchestrator migration
+    let driver: any = undefined;
 
     // Build stdout handler: stream-json uses NDJSON parser, print mode uses plain text
     let onStdout: (chunk: string) => void;
     if (useStreamJson) {
-      // NDJSON parser routes chunks to SessionDriver + Telegram
+      // NDJSON parser routes chunks to Telegram
       const ndjsonHandler = createNdjsonParser((chunk: ParsedChunk) => {
         chunkCount++;
-        if (driver) driver.onChunk(chunk);
 
         // Forward displayable content to Telegram topic
         if (chunk.kind === 'text' || chunk.kind === 'hook_response' || chunk.kind === 'passthrough') {
@@ -947,7 +879,7 @@ export class TaskExecutorService extends Service {
                 this.runtime.logger.info(`[executor] SessionDriver done — ending session`);
                 try { handle?.kill(); } catch { /* already closed */ }
               }
-            }).catch(err => {
+            }).catch((err: unknown) => {
               this.runtime.logger.warn(`[executor] Driver turn-complete error: ${err instanceof Error ? err.message : String(err)}`);
             });
           }
@@ -1044,20 +976,8 @@ export class TaskExecutorService extends Service {
       throw new Error(`Failed to spawn SSH session on ${sshTarget}`);
     }
 
-    // For stream-json: create SessionDriver and pipe initial prompt
+    // For stream-json: pipe initial prompt (SessionDriver removed)
     if (useStreamJson) {
-      driver = new SessionDriver({
-        taskId: task.id,
-        project: task.project,
-        description: task.description,
-        topicId,
-        handle,
-        runtime: this.runtime,
-        topicsService: topicsService || undefined,
-        workspace,
-        sshTarget,
-      });
-      // Pipe initial prompt via stream-json protocol
       handle.write(wrapStreamJsonInput(prompt));
       this.runtime.logger.info(`[executor] Stream-json session ${sessionId}: initial prompt sent (${prompt.length} chars)`);
     }
@@ -1412,7 +1332,7 @@ export class TaskExecutorService extends Service {
     topicId: number,
     transcript?: TranscriptEntry[],
     wasTimeout: boolean = false,
-    driver?: SessionDriver,
+    driver?: any,
   ): Promise<void> {
     const sshService = this.runtime.getService<SSHService>('ssh')!;
     const taskService = this.runtime.getService<TaskService>('itachi-tasks')!;
@@ -1671,21 +1591,7 @@ export class TaskExecutorService extends Service {
       this.runtime.logger.warn(`[executor] RLM recording failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // 6b. Create guardrail from failure for future prevention
-    if (finalStatus === 'failed' || finalStatus === 'timeout') {
-      try {
-        const guardrailService = this.runtime.getService<GuardrailService>('guardrails');
-        if (guardrailService) {
-          const transcriptText = transcript?.map(t => t.content).join('\n').substring(0, 3000) || '';
-          await guardrailService.createFromFailure(
-            task.id, task.project, task.description, transcriptText,
-            updatePayload.error_message as string | undefined,
-          );
-        }
-      } catch (err) {
-        this.runtime.logger.warn(`[executor] Guardrail extraction failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    // GuardrailService removed — TODO: revisit after orchestrator migration
 
     // 7. Cleanup worktree (keep only for waiting_input tasks that may resume)
     if (finalStatus !== 'waiting_input' && workspace !== task.project) {
