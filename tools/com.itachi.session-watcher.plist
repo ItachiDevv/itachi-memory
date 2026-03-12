@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.itachi.session-watcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/itachisan/itachi/itachi-memory/tools/session-watcher.mjs</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TELEGRAM_BOT_TOKEN</key>
+        <string>FILL_ME</string>
+        <key>TELEGRAM_GROUP_CHAT_ID</key>
+        <string>FILL_ME</string>
+        <key>BRAIN_API_URL</key>
+        <string>https://itachisbrainserver.online/api</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/session-watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/session-watcher.err</string>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>
