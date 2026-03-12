@@ -5,6 +5,7 @@ import { MachineRegistryService } from './services/machine-registry.js';
 import { ReminderService } from './services/reminder-service.js';
 import { SSHService } from './services/ssh-service.js';
 import { TaskExecutorService } from './services/task-executor-service.js';
+import { GuardrailService } from './services/guardrail-service.js';
 import { telegramCommandsAction } from './actions/telegram-commands.js';
 import { topicReplyAction } from './actions/topic-reply.js';
 import { interactiveSessionAction } from './actions/interactive-session.js';
@@ -23,6 +24,7 @@ export { TelegramTopicsService } from './services/telegram-topics.js';
 export { MachineRegistryService } from './services/machine-registry.js';
 export { TaskExecutorService } from './services/task-executor-service.js';
 export { SessionDriver } from './services/session-driver.js';
+export { GuardrailService } from './services/guardrail-service.js';
 export { activeSessions, type ActiveSession } from './shared/active-sessions.js';
 export { taskDispatcherWorker, registerTaskDispatcherTask } from './workers/task-dispatcher.js';
 export { githubRepoSyncWorker, registerGithubRepoSyncTask } from './workers/github-repo-sync.js';
@@ -37,7 +39,7 @@ export const itachiTasksPlugin: Plugin = {
   actions: [interactiveSessionAction, telegramCommandsAction, topicReplyAction],
   evaluators: [topicInputRelayEvaluator],
   providers: [commandSuppressorProvider, topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
-  services: [TaskService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService],
+  services: [TaskService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService, GuardrailService],
   // Routes registered in init() to bypass ElizaOS plugin-name prefix
   init: async (_, runtime) => {
     for (const route of taskStreamRoutes) {

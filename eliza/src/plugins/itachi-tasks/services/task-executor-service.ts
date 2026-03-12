@@ -13,6 +13,7 @@ import type { MemoryService } from '../../itachi-memory/services/memory-service.
 import { stripAnsi, filterTuiNoise } from '../utils/tui-filter.js';
 import { parseStreamJsonLine, wrapStreamJsonInput, createNdjsonParser } from '../actions/interactive-session.js';
 import { SessionDriver } from './session-driver.js';
+import { GuardrailService } from './guardrail-service.js';
 import type { ParsedChunk } from '../shared/parsed-chunks.js';
 
 // ── Re-queue tracking (prevent infinite loops) ──────────────────────
@@ -413,6 +414,24 @@ export class TaskExecutorService extends Service {
         started_at: new Date().toISOString(),
       });
 
+      // Pre-task prediction for calibration
+      try {
+        const rlm = this.runtime.getService<RLMService>('rlm');
+        if (rlm) {
+          const recs = await rlm.getRecommendations(task.project, task.description);
+          const descLen = task.description.length;
+          const difficulty = recs.warnings.length >= 2 ? 'hard' : descLen > 300 ? 'medium' : 'easy';
+          const durationEstimate = difficulty === 'hard' ? 20 : difficulty === 'medium' ? 10 : 5;
+          await taskService.updateTask(task.id, {
+            predicted_difficulty: difficulty,
+            predicted_duration_minutes: durationEstimate,
+          });
+          this.runtime.logger.info(`[executor] Prediction for ${shortId}: ${difficulty}, ~${durationEstimate}min`);
+        }
+      } catch (err) {
+        this.runtime.logger.warn(`[executor] Prediction failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
       // 2. Ensure Telegram topic exists
       // Race condition: task creation flow calls createTopicForTask as fire-and-forget,
       // so telegram_topic_id might not be saved to DB yet when we claim the task.
@@ -704,7 +723,7 @@ export class TaskExecutorService extends Service {
     try {
       const memoryService = this.runtime.getService<MemoryService>('itachi-memory');
       if (memoryService) {
-        const memories = await memoryService.searchMemories(task.description, task.project, 5);
+        const memories = await memoryService.searchMemories(task.description, task.project, 5, undefined, undefined, undefined, 0.4);
         if (memories.length > 0) {
           lines.push('', '--- Relevant context from memory ---');
           for (const mem of memories) {
@@ -713,7 +732,7 @@ export class TaskExecutorService extends Service {
         }
 
         // Fetch project rules
-        const rules = await memoryService.searchMemories(task.project, task.project, 5, undefined, 'project_rule');
+        const rules = await memoryService.searchMemories(task.project, task.project, 5, undefined, 'project_rule', undefined, 0.6);
         if (rules.length > 0) {
           lines.push('', '--- Project rules (follow these) ---');
           for (const rule of rules) {
@@ -723,7 +742,7 @@ export class TaskExecutorService extends Service {
 
         // Fetch past task lessons for this project
         const lessons = await memoryService.searchMemories(
-          `${task.project} task outcome`, task.project, 3, undefined, 'task_lesson'
+          `${task.project} task outcome`, task.project, 3, undefined, 'task_lesson', undefined, 0.5
         );
         if (lessons.length > 0) {
           lines.push('', '--- Lessons from past tasks ---');
@@ -733,6 +752,20 @@ export class TaskExecutorService extends Service {
             lines.push(`- [${outcome}] ${(lesson.summary || lesson.content || '').substring(0, 150)}`);
           }
         }
+
+        // Fetch guardrails (failure-derived warnings)
+        try {
+          const guardrailService = this.runtime.getService<GuardrailService>('guardrails');
+          if (guardrailService) {
+            const guardrails = await guardrailService.getGuardrails(task.project, task.description, 5);
+            if (guardrails.length > 0) {
+              lines.push('', '--- Guardrails (known failure patterns — follow these) ---');
+              for (const g of guardrails) {
+                lines.push(`- ${g}`);
+              }
+            }
+          }
+        } catch { /* non-critical */ }
       }
     } catch (err) {
       this.runtime.logger.warn(`[executor] Failed to fetch memories: ${err instanceof Error ? err.message : String(err)}`);
@@ -1555,6 +1588,27 @@ export class TaskExecutorService extends Service {
 
     await taskService.updateTask(task.id, updatePayload);
 
+    // Record actual duration and calibrate prediction
+    try {
+      const startedAt = task.started_at ? new Date(task.started_at).getTime() : 0;
+      if (startedAt > 0) {
+        const actualMinutes = Math.round((Date.now() - startedAt) / 60_000);
+        const predicted = task.predicted_duration_minutes || 0;
+        const accuracy = predicted > 0
+          ? Math.max(0, 1 - Math.abs(actualMinutes - predicted) / Math.max(predicted, actualMinutes))
+          : 0;
+        await taskService.updateTask(task.id, {
+          actual_duration_minutes: actualMinutes,
+          prediction_accuracy: Math.round(accuracy * 100) / 100,
+        });
+        this.runtime.logger.info(
+          `[executor] Calibration for ${shortId}: predicted ${predicted}min, actual ${actualMinutes}min, accuracy ${(accuracy * 100).toFixed(0)}%`
+        );
+      }
+    } catch (err) {
+      this.runtime.logger.warn(`[executor] Calibration recording failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     // 5. Send result to Telegram
     if (topicId && topicsService) {
       const lines: string[] = [];
@@ -1599,6 +1653,22 @@ export class TaskExecutorService extends Service {
       }
     } catch (err) {
       this.runtime.logger.warn(`[executor] RLM recording failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 6b. Create guardrail from failure for future prevention
+    if (finalStatus === 'failed' || finalStatus === 'timeout') {
+      try {
+        const guardrailService = this.runtime.getService<GuardrailService>('guardrails');
+        if (guardrailService) {
+          const transcriptText = transcript?.map(t => t.content).join('\n').substring(0, 3000) || '';
+          await guardrailService.createFromFailure(
+            task.id, task.project, task.description, transcriptText,
+            updatePayload.error_message as string | undefined,
+          );
+        }
+      } catch (err) {
+        this.runtime.logger.warn(`[executor] Guardrail extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     // 7. Cleanup worktree (keep only for waiting_input tasks that may resume)
