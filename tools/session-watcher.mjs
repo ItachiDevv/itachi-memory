@@ -37,16 +37,18 @@ function resolveMachineId() {
   // Map known hostnames to clean IDs
   const h = hostname().toLowerCase();
   const knownMap = {
-    'hoodie-prometh': 'hoodie-prometh',
+    'hoodie-prometh': 'hood',
     'surface-win': 'surface',
     'itachi-mem': 'coolify',
+    'michaels-air': 'mac-air',
+    'macbook-air': 'mac-air',
   };
   for (const [pattern, id] of Object.entries(knownMap)) {
     if (h.includes(pattern)) return id;
   }
   // Detect by OS + user
   const user = process.env.USER || process.env.USERNAME || '';
-  if (platform() === 'darwin') return 'mac';
+  if (platform() === 'darwin') return 'mac-air';
   if (platform() === 'win32') return 'windows';
   if (platform() === 'linux') return 'linux';
   return h.replace(/[^a-z0-9-]/g, '-').substring(0, 30);
