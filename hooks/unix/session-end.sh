@@ -5,14 +5,12 @@
 # 3) Extracts conversation insights from transcript (background)
 # 4) Extracts decisions/state changes and writes to decisions.md
 
-# Read stdin with bash builtin — ZERO process spawn overhead.
-# Claude Code gives SessionEnd hooks only 1.5s total. Previous attempts with
-# python3 (~0.4s startup) and node (~0.1s startup + 0.5s timeout) both hit
-# the limit. `read -t` is a shell builtin — no fork, no exec, instant.
-# Note: macOS bash 3.2 does NOT support fractional timeouts (read -t 0.3 silently fails).
-# Use integer timeout. 1s read + instant fork+exit = well under 1.5s limit.
-read -t 1 -r INPUT 2>/dev/null || true
-[ -z "$INPUT" ] && INPUT='{}'
+# DO NOT READ STDIN. Claude Code gives SessionEnd hooks 1.5s hard limit.
+# Every previous attempt to read stdin (python3, node, bash read -t) hit
+# the timeout because the pipe doesn't close fast enough. The only data
+# on stdin is {"reason":"..."} which we default to "unknown". Not worth
+# risking "Hook cancelled" for a log field.
+INPUT='{}'
 
 # Fork all work to background and exit immediately so Claude Code sees success instantly.
 # disown detaches the child from this shell's process group so it survives shutdown signals.
