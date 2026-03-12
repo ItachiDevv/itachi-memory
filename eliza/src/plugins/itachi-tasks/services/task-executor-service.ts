@@ -691,9 +691,12 @@ export class TaskExecutorService extends Service {
         '- Make MINIMAL, focused changes — only what the description explicitly asks for.',
         '- Do NOT build entire systems, frameworks, workers, or infrastructure beyond the scope.',
         '- If the description is vague or ambiguous, do the simplest reasonable interpretation.',
+        '- If deps are not installed, install them first (npm install / pip install etc).',
+        '- Always verify your work: run the build, run existing tests, write a quick test if appropriate.',
+        '- Write tests compatible with the tools available on this machine (use node:test or vitest, NOT bun:test unless bun is installed).',
+        '- Do NOT skip verification steps. If something fails, fix it.',
         '- Commit your changes when done.',
         '- If blocked, explain what you need and wait for input.',
-        '- Push to a feature branch and create a PR if appropriate.',
       );
     }
 

@@ -174,12 +174,11 @@ function patchSendMessageForChatterSuppression(runtime: IAgentRuntime, bot: any)
       const preview = String(text).substring(0, 80).replace(/\n/g, ' ');
       const fakeResult = { message_id: 0, date: Math.floor(Date.now() / 1000), chat: { id: chatId, type: 'supergroup' } };
 
-      // Guard 1: Block LLM chatter when ANY session or browsing session is active.
-      // ElizaOS LLM responses go through sendMessage; our own session output uses
-      // sendToTopic() (direct HTTP) which bypasses this patch entirely.
-      // This is the primary defense — no TTL, no race conditions.
-      if (activeSessions.size > 0 || browsingSessionMap.size > 0) {
-        runtime.logger.info(`[chatter-suppression] Blocked (active=${activeSessions.size} browsing=${browsingSessionMap.size}): "${preview}"`);
+      // Guard 1: Block LLM chatter in session topics only.
+      // Only suppress messages that target a topic with an active session —
+      // main chat conversation (threadId=undefined) should always go through.
+      if (threadId && (activeSessions.has(threadId) || browsingSessionMap.has(threadId))) {
+        runtime.logger.info(`[chatter-suppression] Blocked session-topic chatter (threadId=${threadId}, active=${activeSessions.size} browsing=${browsingSessionMap.size}): "${preview}"`);
         return fakeResult;
       }
 
