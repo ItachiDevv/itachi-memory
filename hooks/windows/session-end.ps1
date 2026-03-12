@@ -548,6 +548,32 @@ function extractCodexTexts(lines) {
                 exit_reason: exitReason,
             });
         } catch(e) {}
+
+        // Send post-session Telegram review
+        try {
+            const keyFile = path.join(os.homedir(), '.itachi-api-keys');
+            if (fs.existsSync(keyFile)) {
+                const keys = fs.readFileSync(keyFile, 'utf8');
+                const tgToken = (keys.match(/^TELEGRAM_BOT_TOKEN=(.+)$/m) || [])[1]?.replace(/"/g, '');
+                const chatId = (keys.match(/^TELEGRAM_GROUP_CHAT_ID=(.+)$/m) || [])[1]?.replace(/"/g, '');
+                if (tgToken && chatId && durationMs > 60000) {
+                    const mins = Math.round(durationMs / 60000);
+                    const fc = filesChanged.length;
+                    const firstLine = summary.request || 'session';
+                    const completed = summary.completed || '';
+                    const host = os.hostname();
+                    const msg = [
+                        '📋 *Session ended* on ' + host + ' (' + project + ')',
+                        '⏱ ' + mins + 'min | 📁 ' + fc + ' files',
+                        firstLine.substring(0, 120),
+                        completed ? ('✅ ' + completed.substring(0, 120)) : '',
+                    ].filter(Boolean).join('\\n');
+                    await httpPost('https://api.telegram.org/bot' + tgToken + '/sendMessage', {
+                        chat_id: chatId, text: msg, parse_mode: 'Markdown'
+                    });
+                }
+            }
+        } catch(e) {}
     } catch(e) {}
 })();
 "@

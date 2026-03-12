@@ -5,14 +5,14 @@
 # 3) Extracts conversation insights from transcript (background)
 # 4) Extracts decisions/state changes and writes to decisions.md
 
-# Read stdin with 1s timeout — Claude Code gives SessionEnd hooks only 1.5s total.
-# 'cat' blocks if Claude Code doesn't close stdin (ABORT_ERR after 1.5s = "Hook cancelled").
-# macOS has no 'timeout' command; bash 3.2 'read -t' doesn't work with pipes.
-# python3 select.select() works correctly with real Unix pipes.
-INPUT=$(python3 -c "
-import sys, select
-r, _, _ = select.select([sys.stdin], [], [], 1.0)
-print(sys.stdin.read().strip() if r else '{}', end='')
+# Read stdin with 0.5s timeout — Claude Code gives SessionEnd hooks only 1.5s total.
+# Node starts faster than python3 on this machine (~0.1s vs ~0.4s).
+INPUT=$(node -e "
+let d='';process.stdin.setEncoding('utf8');
+const t=setTimeout(()=>{process.stdout.write(d.trim()||'{}');process.exit(0);},500);
+process.stdin.on('data',c=>d+=c);
+process.stdin.on('end',()=>{clearTimeout(t);process.stdout.write(d.trim()||'{}');process.exit(0);});
+process.stdin.resume();
 " 2>/dev/null) || INPUT='{}'
 [ -z "$INPUT" ] && INPUT='{}'
 
@@ -429,6 +429,30 @@ function httpPost(url, body) {
                 project: project,
             });
         } catch(e) {}
+
+        // Send post-session Telegram review (brief summary of what happened)
+        try {
+            const tgToken = (fs.readFileSync(path.join(os.homedir(), '.itachi-api-keys'), 'utf8')
+                .match(/^TELEGRAM_BOT_TOKEN=(.+)$/m) || [])[1]?.replace(/"/g, '');
+            const chatId = (fs.readFileSync(path.join(os.homedir(), '.itachi-api-keys'), 'utf8')
+                .match(/^TELEGRAM_GROUP_CHAT_ID=(.+)$/m) || [])[1]?.replace(/"/g, '');
+            if (tgToken && chatId && durationMs > 60000) {
+                const mins = Math.round(durationMs / 60000);
+                const fc = filesChanged.length;
+                const firstLine = summary.request || 'session';
+                const completed = summary.completed || '';
+                const host = os.hostname().replace(/-/g, ' ').split('.')[0];
+                const msg = [
+                    '📋 *Session ended* on ' + host + ' (' + project + ')',
+                    '⏱ ' + mins + 'min | 📁 ' + fc + ' files',
+                    firstLine.substring(0, 120),
+                    completed ? ('✅ ' + completed.substring(0, 120)) : '',
+                ].filter(Boolean).join('\\n');
+                await httpPost('https://api.telegram.org/bot' + tgToken + '/sendMessage', {
+                    chat_id: chatId, text: msg, parse_mode: 'Markdown'
+                });
+            }
+        } catch(e) {} // non-critical
     } catch(e) {}
 })();
 " "$SESSION_ID" "$PROJECT_NAME" "$PWD" "$SESSION_API" "$SESSION_SUMMARY" "$DURATION_MS" "$FILES_CHANGED" 2>/dev/null &
