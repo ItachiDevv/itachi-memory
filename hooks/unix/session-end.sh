@@ -194,6 +194,80 @@ if [ -n "$META" ]; then
     DURATION_MS=$(node -e "try{console.log(JSON.parse(process.argv[1]).duration||0)}catch(e){console.log(0)}" "$META" 2>/dev/null)
 fi
 
+# ============ Structured Session Summary → session-log.md (Task 8) ============
+node -e "
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\\\/]/g, '-'); }
+
+try {
+    const cwd = process.argv[1];
+    const project = process.argv[2];
+    const durationMs = parseInt(process.argv[3]) || 0;
+    const filesChanged = process.argv[4] ? process.argv[4].split(',').filter(Boolean) : [];
+    const memDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), 'memory');
+    fs.mkdirSync(memDir, { recursive: true });
+
+    // Find latest transcript
+    const projectDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd));
+    if (!fs.existsSync(projectDir)) process.exit(0);
+    const jsonlFiles = fs.readdirSync(projectDir).filter(f => f.endsWith('.jsonl'))
+        .map(f => ({ name: f, mt: fs.statSync(path.join(projectDir, f)).mtimeMs }))
+        .sort((a, b) => b.mt - a.mt);
+    if (jsonlFiles.length === 0) process.exit(0);
+
+    const filePath = path.join(projectDir, jsonlFiles[0].name);
+    if (fs.statSync(filePath).size > 10 * 1024 * 1024) process.exit(0);
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n').filter(Boolean);
+
+    let firstUserMsg = '', lastAssistantMsg = '';
+    for (const line of lines) {
+        try {
+            const e = JSON.parse(line);
+            const texts = Array.isArray(e.message?.content)
+                ? e.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                : (typeof e.message?.content === 'string' ? e.message.content : '');
+            if (!texts || texts.length < 10) continue;
+            if (e.type === 'user' && !firstUserMsg) firstUserMsg = texts.substring(0, 200).replace(/\n/g, ' ').trim();
+            if (e.type === 'assistant') lastAssistantMsg = texts.substring(0, 200).replace(/\n/g, ' ').trim();
+        } catch {}
+    }
+
+    if (!firstUserMsg && !lastAssistantMsg) process.exit(0);
+
+    // Build compact entry
+    const now = new Date();
+    const dateStr = now.toISOString().substring(0, 16).replace('T', ' ');
+    const durationMin = Math.round(durationMs / 60000);
+    const title = firstUserMsg.substring(0, 60).replace(/[#\n]/g, '');
+    const entry = [
+        '### ' + dateStr + ' — ' + title,
+        '- **Request:** ' + (firstUserMsg || '(none)'),
+        '- **Completed:** ' + (lastAssistantMsg || '(none)'),
+        filesChanged.length > 0 ? '- **Files:** ' + filesChanged.slice(0, 8).join(', ') : '',
+        durationMin > 0 ? '- **Duration:** ' + durationMin + ' min' : '',
+        '- **Project:** ' + project,
+        ''
+    ].filter(Boolean).join('\n');
+
+    // Append to session-log.md
+    const logFile = path.join(memDir, 'session-log.md');
+    let existing = '';
+    if (fs.existsSync(logFile)) existing = fs.readFileSync(logFile, 'utf8');
+
+    // Cap at 50 entries (each starts with ###)
+    const entries = existing.split(/(?=^### )/m).filter(e => e.trim());
+    entries.push(entry);
+    while (entries.length > 50) entries.shift();
+
+    const header = '# Session Log\n<!-- auto-updated by session-end hook -->\n\n';
+    fs.writeFileSync(logFile, header + entries.join('\n'));
+} catch(e) {}
+" "$PWD" "$PROJECT_NAME" "$DURATION_MS" "$FILES_CHANGED" 2>/dev/null
+
 node -e "
 const fs = require('fs');
 const path = require('path');
@@ -307,6 +381,34 @@ function httpPost(url, body) {
         }
 
         if (conversationParts.length === 0) return;
+
+        // Signal keyword filtering — reduce noise, keep high-value turns + surrounding context
+        const SIGNAL_KEYWORDS = [
+            'remember', 'important', 'bug', 'fix', 'solution', 'decision',
+            'pattern', 'convention', 'gotcha', 'workaround', 'todo', 'fixme',
+            'never', 'always', 'critical', 'root cause', 'discovered',
+            'error', 'failed', 'broken', 'wrong', 'correct', 'should',
+            'learned', 'realized', 'turns out', 'actually'
+        ];
+        const hasSignal = (text) => {
+            const lower = text.toLowerCase();
+            return SIGNAL_KEYWORDS.some(kw => lower.includes(kw));
+        };
+        const signalIndices = new Set();
+        conversationParts.forEach((part, i) => {
+            if (hasSignal(part)) {
+                for (let j = Math.max(0, i - 2); j <= Math.min(conversationParts.length - 1, i + 2); j++) {
+                    signalIndices.add(j);
+                }
+            }
+        });
+        // Always keep first and last parts for request/outcome context
+        if (conversationParts.length > 0) { signalIndices.add(0); signalIndices.add(conversationParts.length - 1); }
+        if (signalIndices.size > 0 && signalIndices.size < conversationParts.length) {
+            const filtered = conversationParts.filter((_, i) => signalIndices.has(i));
+            conversationParts.length = 0;
+            conversationParts.push(...filtered);
+        }
 
         // Concatenate and truncate to 6000 chars (increased to capture user+assistant)
         const conversationText = conversationParts.join('\n---\n').substring(0, 6000);

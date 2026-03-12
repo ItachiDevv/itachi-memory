@@ -215,6 +215,29 @@ try{const d=JSON.parse(process.argv[1]);const l=[];l.push('');l.push('=== Sessio
     [ -n "$BRIEFING_OUTPUT" ] && echo "$BRIEFING_OUTPUT"
 fi
 
+# ============ Recent Session Log (from session-end structured summaries) ============
+if [ "$CLIENT" = "claude" ]; then
+    node -e "
+const fs = require('fs'), path = require('path'), os = require('os');
+function enc(p) { return p.replace(/:/g,'').replace(/[\\\\/]/g,'-'); }
+try {
+    const logFile = path.join(os.homedir(), '.claude', 'projects', enc(process.argv[1]), 'memory', 'session-log.md');
+    if (!fs.existsSync(logFile)) process.exit(0);
+    const content = fs.readFileSync(logFile, 'utf8').trim();
+    if (!content) process.exit(0);
+    // Show last 5 entries (each starts with ###)
+    const entries = content.split(/(?=^### )/m).filter(e => e.trim() && e.startsWith('###'));
+    const recent = entries.slice(-5);
+    if (recent.length === 0) process.exit(0);
+    console.log('');
+    console.log('=== Recent Session Log (last ' + recent.length + ' sessions) ===');
+    console.log(recent.join('\n').trim());
+    console.log('=== End Session Log ===');
+    console.log('');
+} catch(e) {}
+" "$PWD" 2>/dev/null
+fi
+
 # ============ SSH Session Detection — Notify via Telegram ============
 # If started via SSH, remote-control is auto-enabled. Notify the user to connect.
 if [ -n "$SSH_CONNECTION" ] || [ -n "$SSH_CLIENT" ]; then

@@ -508,6 +508,31 @@ function decrypt(encB64, saltB64, passphrase) {
         }
     } catch {}
 
+    # ============ Recent Session Log (from session-end structured summaries) ============
+    try {
+        $cwd = (Get-Location).Path
+        $sessionLogScript = @"
+const fs = require('fs'), path = require('path'), os = require('os');
+function enc(p) { return p.replace(/:/g,'').replace(/[\\/]/g,'-'); }
+try {
+    const logFile = path.join(os.homedir(), '.claude', 'projects', enc(process.argv[1]), 'memory', 'session-log.md');
+    if (!fs.existsSync(logFile)) process.exit(0);
+    const content = fs.readFileSync(logFile, 'utf8').trim();
+    if (!content) process.exit(0);
+    const entries = content.split(/(?=^### )/m).filter(e => e.trim() && e.startsWith('###'));
+    const recent = entries.slice(-5);
+    if (recent.length === 0) process.exit(0);
+    console.log('');
+    console.log('=== Recent Session Log (last ' + recent.length + ' sessions) ===');
+    console.log(recent.join('\n').trim());
+    console.log('=== End Session Log ===');
+    console.log('');
+} catch(e) {}
+"@
+        $logOutput = node -e $sessionLogScript $cwd 2>$null
+        if ($logOutput) { Write-Output $logOutput }
+    } catch {}
+
     # ============ Memory Context (fallback) ============
     $memHeaders = @{}
     if ($env:ITACHI_API_KEY) { $memHeaders["Authorization"] = "Bearer $env:ITACHI_API_KEY" }

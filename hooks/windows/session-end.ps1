@@ -226,6 +226,100 @@ console.log(JSON.stringify(result));
             -TimeoutSec 10 | Out-Null
     } catch {}
 
+    # ============ Structured Session Summary → session-log.md (Task 8) ============
+    try {
+        $cwd = (Get-Location).Path
+        $sessionLogScript = @"
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+function encodeCwd(p) { return p.replace(/:/g, '').replace(/[\\/]/g, '-'); }
+
+try {
+    const cwd = process.argv[1];
+    const project = process.argv[2];
+    const client = process.argv[3] || 'claude';
+    const memDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd), 'memory');
+    fs.mkdirSync(memDir, { recursive: true });
+
+    // Find latest transcript
+    let transcriptDir = path.join(os.homedir(), '.claude', 'projects', encodeCwd(cwd));
+    if (client === 'codex') {
+        const now = new Date();
+        transcriptDir = path.join(os.homedir(), '.codex', 'sessions',
+            now.getFullYear().toString(),
+            String(now.getMonth() + 1).padStart(2, '0'),
+            String(now.getDate()).padStart(2, '0'));
+    }
+    if (!fs.existsSync(transcriptDir)) process.exit(0);
+    const jsonlFiles = fs.readdirSync(transcriptDir).filter(f => f.endsWith('.jsonl'))
+        .map(f => ({ name: f, mt: fs.statSync(path.join(transcriptDir, f)).mtimeMs }))
+        .sort((a, b) => b.mt - a.mt);
+    if (jsonlFiles.length === 0) process.exit(0);
+
+    const filePath = path.join(transcriptDir, jsonlFiles[0].name);
+    if (fs.statSync(filePath).size > 10 * 1024 * 1024) process.exit(0);
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n').filter(Boolean);
+
+    let firstUserMsg = '', lastAssistantMsg = '', firstTs = null, lastTs = null;
+    for (const line of lines) {
+        try {
+            const e = JSON.parse(line);
+            if (e.timestamp) { if (!firstTs) firstTs = e.timestamp; lastTs = e.timestamp; }
+            const texts = Array.isArray(e.message?.content)
+                ? e.message.content.filter(c => c.type === 'text').map(c => c.text).join(' ')
+                : (typeof e.message?.content === 'string' ? e.message.content : '');
+            if (!texts || texts.length < 10) continue;
+            if ((e.type === 'user' || (e.type === 'response_item' && e.payload?.role === 'user')) && !firstUserMsg)
+                firstUserMsg = texts.substring(0, 200).replace(/\n/g, ' ').trim();
+            if (e.type === 'assistant' || (e.type === 'response_item' && e.payload?.role === 'assistant'))
+                lastAssistantMsg = texts.substring(0, 200).replace(/\n/g, ' ').trim();
+        } catch {}
+    }
+
+    if (!firstUserMsg && !lastAssistantMsg) process.exit(0);
+
+    const now = new Date();
+    const dateStr = now.toISOString().substring(0, 16).replace('T', ' ');
+    let durationMs = 0;
+    if (firstTs && lastTs) durationMs = new Date(lastTs).getTime() - new Date(firstTs).getTime();
+    const durationMin = Math.round(durationMs / 60000);
+    const title = firstUserMsg.substring(0, 60).replace(/[#\n]/g, '');
+
+    let filesChanged = [];
+    try {
+        const { execSync } = require('child_process');
+        const diff = execSync('git diff --name-only HEAD', { encoding: 'utf8', timeout: 5000, cwd: cwd }).trim();
+        if (diff) filesChanged = diff.split('\n').filter(Boolean);
+    } catch {}
+
+    const entry = [
+        '### ' + dateStr + ' — ' + title,
+        '- **Request:** ' + (firstUserMsg || '(none)'),
+        '- **Completed:** ' + (lastAssistantMsg || '(none)'),
+        filesChanged.length > 0 ? '- **Files:** ' + filesChanged.slice(0, 8).join(', ') : '',
+        durationMin > 0 ? '- **Duration:** ' + durationMin + ' min' : '',
+        '- **Project:** ' + project,
+        ''
+    ].filter(Boolean).join('\n');
+
+    const logFile = path.join(memDir, 'session-log.md');
+    let existing = '';
+    if (fs.existsSync(logFile)) existing = fs.readFileSync(logFile, 'utf8');
+
+    const entries = existing.split(/(?=^### )/m).filter(e => e.trim() && e.startsWith('###'));
+    entries.push(entry);
+    while (entries.length > 50) entries.shift();
+
+    const header = '# Session Log\n<!-- auto-updated by session-end hook -->\n\n';
+    fs.writeFileSync(logFile, header + entries.join('\n'));
+} catch(e) {}
+"@
+        node -e $sessionLogScript $cwd $project $client 2>$null
+    } catch {}
+
     # ============ Extract Insights from Transcript (background) ============
     try {
         $cwd = (Get-Location).Path
@@ -404,6 +498,33 @@ function extractCodexTexts(lines) {
             : extractCodexTexts(lines);
 
         if (assistantTexts.length === 0) return;
+
+        // Signal keyword filtering — reduce noise, keep high-value turns + surrounding context
+        const SIGNAL_KEYWORDS = [
+            'remember', 'important', 'bug', 'fix', 'solution', 'decision',
+            'pattern', 'convention', 'gotcha', 'workaround', 'todo', 'fixme',
+            'never', 'always', 'critical', 'root cause', 'discovered',
+            'error', 'failed', 'broken', 'wrong', 'correct', 'should',
+            'learned', 'realized', 'turns out', 'actually'
+        ];
+        const hasSignal = (text) => {
+            const lower = text.toLowerCase();
+            return SIGNAL_KEYWORDS.some(kw => lower.includes(kw));
+        };
+        const signalIndices = new Set();
+        assistantTexts.forEach((part, i) => {
+            if (hasSignal(part)) {
+                for (let j = Math.max(0, i - 2); j <= Math.min(assistantTexts.length - 1, i + 2); j++) {
+                    signalIndices.add(j);
+                }
+            }
+        });
+        if (assistantTexts.length > 0) { signalIndices.add(0); signalIndices.add(assistantTexts.length - 1); }
+        if (signalIndices.size > 0 && signalIndices.size < assistantTexts.length) {
+            const filtered = assistantTexts.filter((_, i) => signalIndices.has(i));
+            assistantTexts.length = 0;
+            assistantTexts.push(...filtered);
+        }
 
         const conversationText = assistantTexts.join('\n---\n').substring(0, 8000);
 
