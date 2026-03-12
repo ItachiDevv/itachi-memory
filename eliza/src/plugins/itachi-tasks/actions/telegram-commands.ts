@@ -1,7 +1,9 @@
 import type { Action, IAgentRuntime, Memory, State, HandlerCallback, HandlerOptions, ActionResult } from '@elizaos/core';
+import { ModelType } from '@elizaos/core';
 import { TaskService, generateTaskTitle } from '../services/task-service.js';
 import { TaskExecutorService } from '../services/task-executor-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
+import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { activeSessions, markSessionClosed, isSessionTopic, spawningTopics, suppressNextLLMMessage } from '../shared/active-sessions.js';
 import { wrapStreamJsonInput } from './interactive-session.js';
@@ -213,7 +215,55 @@ export const telegramCommandsAction: Action = {
             return { success: true };
           }
 
-          // conversation or question intent → let ElizaOS handle
+          if (intent.type === 'question') {
+            const memService = runtime.getService<MemoryService>('itachi-memory');
+            if (memService) {
+              try {
+                const query = intent.query || text;
+                const project = intent.project;
+                const categories = ['general', 'project_rule', 'task_lesson', 'guardrail'];
+                const searchResults = await Promise.all(
+                  categories.map(cat => memService.searchMemories(query, project, 3, undefined, cat).catch(() => []))
+                );
+                const allMemories = searchResults.flat();
+                // Deduplicate by id
+                const seen = new Set<string>();
+                const unique = allMemories.filter(m => {
+                  if (seen.has(m.id)) return false;
+                  seen.add(m.id);
+                  return true;
+                });
+                // Sort by similarity descending, take top 5
+                const top = unique
+                  .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
+                  .slice(0, 5);
+
+                if (top.length > 0) {
+                  const context = top.map((m, i) => `[${i + 1}] (${m.category}) ${m.summary || m.content}`).join('\n');
+                  const prompt = `You are Itachi, an AI assistant. Answer the following question using ONLY the provided memory context. If the context doesn't contain enough info, say so honestly.
+
+Question: ${query}
+
+Memory context:
+${context}
+
+Answer concisely.`;
+                  const answer = await runtime.useModel(ModelType.TEXT_SMALL, {
+                    prompt,
+                    temperature: 0.3,
+                  });
+                  if (callback) await callback({ text: String(answer) });
+                  return { success: true };
+                }
+              } catch (err) {
+                runtime.logger.warn(`[telegram-commands] Memory-grounded question failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
+            // Fall through to ElizaOS if no memories found or service unavailable
+            return { success: false };
+          }
+
+          // conversation intent → let ElizaOS handle
           return { success: false };
         } catch (err) {
           runtime.logger.warn(`[telegram-commands] Intent classification failed: ${err instanceof Error ? err.message : String(err)}`);

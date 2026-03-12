@@ -25,6 +25,10 @@ export interface ItachiTask {
   assigned_machine?: string;
   workspace_path?: string;
   notified_at?: string;
+  predicted_difficulty?: string;
+  predicted_duration_minutes?: number;
+  actual_duration_minutes?: number;
+  prediction_accuracy?: number;
   created_at: string;
   started_at?: string;
   completed_at?: string;
@@ -237,6 +241,7 @@ export class TaskService extends Service {
       'result_json', 'error_message', 'files_changed', 'pr_url',
       'workspace_path', 'started_at', 'completed_at', 'notified_at',
       'telegram_topic_id', 'assigned_machine',
+      'predicted_difficulty', 'predicted_duration_minutes', 'actual_duration_minutes', 'prediction_accuracy',
     ];
 
     const filtered: Record<string, unknown> = {};
