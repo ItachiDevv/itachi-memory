@@ -1213,6 +1213,8 @@ export class TaskExecutorService extends Service {
     branchName: string,
     title: string,
     sshTarget: string,
+    description?: string,
+    filesChanged?: string[],
   ): Promise<string | undefined> {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
@@ -1270,7 +1272,12 @@ export class TaskExecutorService extends Service {
     const createResp = await fetch(`${apiBase}/pulls`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ title, head: branchName, base: defaultBranch, body: '' }),
+      body: JSON.stringify({
+        title,
+        head: branchName,
+        base: defaultBranch,
+        body: this.buildPRBody(branchName, description, filesChanged),
+      }),
     });
 
     if (createResp.ok) {
@@ -1294,6 +1301,65 @@ export class TaskExecutorService extends Service {
     const errText = await createResp.text().catch(() => '');
     this.runtime.logger.warn(`[executor] PR creation via API failed (${createResp.status}): ${errText}`);
     return undefined;
+  }
+
+  /** Build a descriptive PR body from task info */
+  private buildPRBody(branchName: string, description?: string, filesChanged?: string[]): string {
+    const lines: string[] = ['## Summary'];
+    if (description) {
+      lines.push('', description);
+    }
+    if (filesChanged && filesChanged.length > 0) {
+      lines.push('', '## Files Changed', ...filesChanged.map(f => `- \`${f}\``));
+    }
+    lines.push('', `Branch: \`${branchName}\``, '', '_Automated PR by Itachi task executor_');
+    return lines.join('\n');
+  }
+
+  /**
+   * Check how many open branches/PRs exist for a repo. If > threshold, alert via Telegram.
+   */
+  private async checkBranchCountAlert(ownerRepo: string, topicsService?: TelegramTopicsService): Promise<void> {
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return;
+
+    const THRESHOLD = 3;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+
+    try {
+      const [branchResp, prResp] = await Promise.all([
+        fetch(`https://api.github.com/repos/${ownerRepo}/branches?per_page=100`, { headers }),
+        fetch(`https://api.github.com/repos/${ownerRepo}/pulls?state=open&per_page=100`, { headers }),
+      ]);
+
+      const branches = branchResp.ok ? (await branchResp.json() as Array<{ name: string }>) : [];
+      const prs = prResp.ok ? (await prResp.json() as Array<{ title: string; html_url: string; head: { ref: string } }>) : [];
+
+      const nonDefault = branches.filter(b => b.name !== 'master' && b.name !== 'main');
+
+      if (nonDefault.length > THRESHOLD || prs.length > THRESHOLD) {
+        const lines = [`⚠️ *Branch/PR cleanup needed for ${ownerRepo}*`];
+        if (nonDefault.length > THRESHOLD) {
+          lines.push(``, `🌿 *${nonDefault.length} branches:*`);
+          for (const b of nonDefault) lines.push(`  • \`${b.name}\``);
+        }
+        if (prs.length > THRESHOLD) {
+          lines.push(``, `📋 *${prs.length} open PRs:*`);
+          for (const pr of prs) lines.push(`  • [${pr.title}](${pr.html_url})`);
+        }
+
+        if (topicsService) {
+          await topicsService.sendMessageWithKeyboard(lines.join('\n'), []).catch(() => {});
+        }
+        this.runtime.logger.warn(`[executor] ${ownerRepo} has ${nonDefault.length} branches, ${prs.length} open PRs (threshold: ${THRESHOLD})`);
+      }
+    } catch (err) {
+      this.runtime.logger.warn(`[executor] Branch count check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async handleSessionComplete(
@@ -1369,7 +1435,7 @@ export class TaskExecutorService extends Service {
             // 3. Create PR via GitHub REST API (avoids needing gh CLI auth on SSH host)
             const branchName = `task/${shortId}`;
             const prTitle = `feat: ${task.description.substring(0, 72)}`;
-            prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget);
+            prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget, task.description, filesChanged);
           } else {
             this.runtime.logger.warn(`[executor] Push failed: ${pushResult.stderr || pushResult.stdout}`);
           }
@@ -1392,7 +1458,7 @@ export class TaskExecutorService extends Service {
           // Create PR via GitHub REST API for commits Claude made during the session
           const branchName = `task/${shortId}`;
           const prTitle = `feat: ${task.description.substring(0, 72)}`;
-          prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget);
+          prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget, task.description, filesChanged);
         }
       }
 
@@ -1413,7 +1479,21 @@ export class TaskExecutorService extends Service {
       if (!prUrl) {
         const branchName = `task/${shortId}`;
         const prTitle = `feat: ${task.description.substring(0, 72)}`;
-        prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget);
+        prUrl = await this.createOrFindPR(workspace, branchName, prTitle, sshTarget, task.description, filesChanged);
+      }
+
+      // Check branch/PR count and alert if too many are accumulating
+      if (prUrl) {
+        const remoteResult = await sshService.exec(
+          sshTarget,
+          this.wrapForUser(sshTarget, `cd ${workspace} && git -c safe.directory='*' remote get-url origin 2>/dev/null`),
+          10_000,
+        );
+        const remoteUrl = remoteResult.stdout?.trim();
+        const ownerRepoMatch = remoteUrl?.match(/github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?$/);
+        if (ownerRepoMatch) {
+          await this.checkBranchCountAlert(ownerRepoMatch[1], topicsService ?? undefined);
+        }
       }
     } catch (err) {
       this.runtime.logger.error(`[executor] Post-completion git ops failed: ${err instanceof Error ? err.message : String(err)}`);

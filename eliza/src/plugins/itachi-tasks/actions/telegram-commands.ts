@@ -417,7 +417,7 @@ export async function handleHelp(callback?: HandlerCallback): Promise<ActionResu
 /close — Close current topic
 
 **Session Controls** (inside an active session topic)
-/stop /esc /yes /no
+/stop /esc
 
 Everything else is natural language — just tell me what you need.`;
 

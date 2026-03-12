@@ -48,18 +48,23 @@ export interface RepoInfo {
   repo_url: string | null;
 }
 
-/** Generate a short human-readable title from a task description (e.g. "audit-branches-clean") */
+/** Generate a short human-readable title from a task description (e.g. "add ping route for uptime") */
 export function generateTaskTitle(description: string): string {
-  const stopWords = new Set(['the', 'a', 'an', 'to', 'for', 'in', 'on', 'of', 'and', 'is', 'it', 'that', 'this', 'with', 'all', 'from', 'by', 'at', 'be', 'as']);
   const cleaned = String(description)
     .replace(/\n---\s*Lessons from previous.*$/s, '') // strip enrichWithLessons suffix
-    .replace(/https?:\/\/\S+/g, ''); // strip URLs
-  const words = cleaned
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, '')
-    .split(/\s+/)
-    .filter(w => w.length > 1 && !stopWords.has(w));
-  return words.slice(0, 3).join('-') || 'task';
+    .replace(/https?:\/\/\S+/g, '') // strip URLs
+    .replace(/[^\w\s'-]/g, '') // keep alphanumeric, spaces, hyphens, apostrophes
+    .trim();
+
+  // Take the first sentence or line (whichever is shorter)
+  const firstSentence = cleaned.split(/[.\n]/)[0].trim();
+
+  // Truncate to ~40 chars at a word boundary
+  if (firstSentence.length <= 40) return firstSentence || 'task';
+
+  const truncated = firstSentence.substring(0, 40);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return (lastSpace > 10 ? truncated.substring(0, lastSpace) : truncated).trim() || 'task';
 }
 
 export class TaskService extends Service {
