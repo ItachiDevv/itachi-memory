@@ -188,7 +188,7 @@ export const telegramCommandsAction: Action = {
       if (!text.startsWith('/') && !_isSessionTopic) {
         try {
           const { classifyIntent } = await import('../services/intent-router.js');
-          const machines = ['mac', 'hoodie', 'surface', 'hetzner-vps', 'coolify'];
+          const machines = ['air', 'hood', 'surface', 'cool'];
           const intent = await classifyIntent(runtime, text, { projects: [], machines });
 
           if (intent.type === 'task') {

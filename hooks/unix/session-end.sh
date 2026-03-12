@@ -5,15 +5,13 @@
 # 3) Extracts conversation insights from transcript (background)
 # 4) Extracts decisions/state changes and writes to decisions.md
 
-# Read stdin with 0.5s timeout — Claude Code gives SessionEnd hooks only 1.5s total.
-# Node starts faster than python3 on this machine (~0.1s vs ~0.4s).
-INPUT=$(node -e "
-let d='';process.stdin.setEncoding('utf8');
-const t=setTimeout(()=>{process.stdout.write(d.trim()||'{}');process.exit(0);},500);
-process.stdin.on('data',c=>d+=c);
-process.stdin.on('end',()=>{clearTimeout(t);process.stdout.write(d.trim()||'{}');process.exit(0);});
-process.stdin.resume();
-" 2>/dev/null) || INPUT='{}'
+# Read stdin with bash builtin — ZERO process spawn overhead.
+# Claude Code gives SessionEnd hooks only 1.5s total. Previous attempts with
+# python3 (~0.4s startup) and node (~0.1s startup + 0.5s timeout) both hit
+# the limit. `read -t` is a shell builtin — no fork, no exec, instant.
+# Note: macOS bash 3.2 does NOT support fractional timeouts (read -t 0.3 silently fails).
+# Use integer timeout. 1s read + instant fork+exit = well under 1.5s limit.
+read -t 1 -r INPUT 2>/dev/null || true
 [ -z "$INPUT" ] && INPUT='{}'
 
 # Fork all work to background and exit immediately so Claude Code sees success instantly.
@@ -413,10 +411,40 @@ function httpPost(url, body) {
         // Concatenate and truncate to 6000 chars (increased to capture user+assistant)
         const conversationText = filteredParts.join('\n---\n').substring(0, 6000);
 
+        // Read bash observations from observations.jsonl (written by bash-observer.sh)
+        let bashObservations = [];
+        const obsFile = path.join(os.homedir(), '.claude', 'observations.jsonl');
+        try {
+            if (fs.existsSync(obsFile)) {
+                const obsContent = fs.readFileSync(obsFile, 'utf8');
+                const obsLines = obsContent.split('\n').filter(Boolean);
+                for (const ol of obsLines) {
+                    try {
+                        const obs = JSON.parse(ol);
+                        // Filter to current session if session_id is available
+                        if (sessionId && obs.session_id && obs.session_id !== sessionId) continue;
+                        bashObservations.push(obs);
+                    } catch {}
+                }
+                // Truncate the file after reading
+                try { fs.writeFileSync(obsFile, ''); } catch {}
+            }
+        } catch {}
+
+        // Build a compact bash commands summary (max 1500 chars)
+        let bashSummary = '';
+        if (bashObservations.length > 0) {
+            const cmdLines = bashObservations.map(o => {
+                const exit = o.exit_code != null ? ' [exit:' + o.exit_code + ']' : '';
+                return '$ ' + (o.command || '').substring(0, 120) + exit;
+            });
+            bashSummary = '\n\n[BASH COMMANDS]\n' + cmdLines.join('\n').substring(0, 1500);
+        }
+
         await httpPost(sessionApi + '/extract-insights', {
             session_id: sessionId,
             project: project,
-            conversation_text: conversationText,
+            conversation_text: conversationText + bashSummary,
             files_changed: filesChanged,
             summary: summary,
             duration_ms: durationMs
@@ -433,14 +461,14 @@ function httpPost(url, body) {
         // Send post-session Telegram review (brief summary of what happened)
         try {
             const tgToken = (fs.readFileSync(path.join(os.homedir(), '.itachi-api-keys'), 'utf8')
-                .match(/^TELEGRAM_BOT_TOKEN=(.+)$/m) || [])[1]?.replace(/"/g, '');
+                .match(/^TELEGRAM_BOT_TOKEN=(.+)$/m) || [])[1]?.replace(/[\x22]/g, '');
             const chatId = (fs.readFileSync(path.join(os.homedir(), '.itachi-api-keys'), 'utf8')
-                .match(/^TELEGRAM_GROUP_CHAT_ID=(.+)$/m) || [])[1]?.replace(/"/g, '');
+                .match(/^TELEGRAM_GROUP_CHAT_ID=(.+)$/m) || [])[1]?.replace(/[\x22]/g, '');
             if (tgToken && chatId && durationMs > 60000) {
                 const mins = Math.round(durationMs / 60000);
                 const fc = filesChanged.length;
-                const firstLine = summary.request || 'session';
-                const completed = summary.completed || '';
+                const firstLine = (typeof summary === 'string' && summary) ? summary : 'session';
+                const completed = '';
                 const host = os.hostname().replace(/-/g, ' ').split('.')[0];
                 const msg = [
                     '📋 *Session ended* on ' + host + ' (' + project + ')',

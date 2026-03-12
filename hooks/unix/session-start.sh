@@ -376,6 +376,26 @@ try{
     }
 
     fs.writeFileSync(targetFile,existing);
+
+    // Save injection state for differential context injection (UserPromptSubmit hook)
+    if(client==='claude'&&hasBrain){
+        try{
+            const crypto=require('crypto');
+            function hashBlock(raw){try{return crypto.createHash('sha256').update(raw||'').digest('hex');}catch{return '';}}
+            const stateDir=path.join(os.homedir(),'.claude','projects',enc(cwd));
+            const stateFile=path.join(stateDir,'.injection-state.json');
+            const state={
+                last_injected_at:new Date().toISOString(),
+                block_hashes:{
+                    brain_rules:hashBlock(brRules),
+                    brain_lessons:hashBlock(brLessons),
+                    brain_guardrails:hashBlock(brGuardrails),
+                    brain_general:hashBlock(brGeneral)
+                }
+            };
+            fs.writeFileSync(stateFile,JSON.stringify(state,null,2));
+        }catch(e2){}
+    }
 }catch(e){}
 " "$CLIENT" "$PWD" "$BRIEFING" "$LEARNINGS" "$RLM_LESSONS" "$BRAIN_RULES" "$BRAIN_LESSONS" "$BRAIN_GUARDRAILS" "$BRAIN_GENERAL" 2>/dev/null
 fi

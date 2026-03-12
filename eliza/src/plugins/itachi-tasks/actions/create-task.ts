@@ -2,6 +2,7 @@ import type { Action, IAgentRuntime, Memory, State, HandlerCallback, ActionResul
 import { TaskService, type CreateTaskParams, generateTaskTitle } from '../services/task-service.js';
 import { TelegramTopicsService } from '../services/telegram-topics.js';
 import { MachineRegistryService } from '../services/machine-registry.js';
+import { ReminderService } from '../services/reminder-service.js';
 import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { getFlow } from '../shared/conversation-flows.js';
@@ -102,19 +103,9 @@ export const createTaskAction: Action = {
       }
     }
 
-    // Yield to MANAGE_AGENT_CRON for recurring/scheduled task patterns
-    const hasScheduleVerb = /\b(schedule|set up)\b/i.test(lower);
-    const hasFrequencyKeyword = /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
-    // "schedule" + frequency → cron; "set up" + frequency → cron
-    // "schedule [noun]" (not "schedule a task to/me") → also cron (inherently implies recurring)
-    // "set up [noun]" without frequency → one-shot setup, NOT cron
-    const isScheduleNoun = /\bschedule\b/i.test(lower)
-      && !/\bschedule\s+(a\s+task|me)\b/i.test(lower);
-    const isCronRequest = (hasScheduleVerb && hasFrequencyKeyword) || isScheduleNoun;
-    if (isCronRequest) {
-      runtime.logger.debug(`[CREATE_TASK] validate: "${text.substring(0, 60)}" → false (cron request, yielding to MANAGE_AGENT_CRON)`);
-      return false;
-    }
+    // Cron/recurring/scheduled requests are handled as regular tasks with schedule metadata.
+    // (MANAGE_AGENT_CRON was removed in Phase 1 — these now flow through CREATE_TASK.)
+    // We still detect them here so the handler can extract schedule info.
 
     // Only validate for natural language if there's a task-creation or confirmation signal
     const hasTaskSignal = /\b(task|queue|create|make|add|schedule|work on)\b/i.test(lower)
@@ -445,6 +436,31 @@ export const createTaskAction: Action = {
         });
       }
 
+      // Detect cron/recurring schedule and create a recurring reminder
+      // so the task re-runs on schedule via the reminder poller.
+      let scheduleNote = '';
+      const cronInfo = detectCronSchedule(text);
+      if (cronInfo) {
+        try {
+          const reminderService = runtime.getService<ReminderService>('itachi-reminders');
+          if (reminderService) {
+            await reminderService.createReminder({
+              telegram_chat_id: telegramChatId,
+              telegram_user_id: telegramUserId,
+              message: description,
+              remind_at: cronInfo.firstRun,
+              recurring: cronInfo.recurring,
+              action_type: 'custom',
+              action_data: { command: `/task ${project} ${description}` },
+            });
+            scheduleNote = `\nSchedule: ${cronInfo.label} (recurring: ${cronInfo.recurring})`;
+            runtime.logger.info(`[create-task] Created recurring reminder for cron task: ${cronInfo.label}`);
+          }
+        } catch (err) {
+          runtime.logger.warn(`[create-task] Failed to create recurring reminder: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
       // Check machine availability for honest status
       let availabilityNote = '';
       if (!targetMachine) {
@@ -465,13 +481,13 @@ export const createTaskAction: Action = {
 
       if (callback) {
         await callback({
-          text: `Task QUEUED (not started yet).\n\nID: ${shortId} (${title})\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.${availabilityNote}${warningText}`,
+          text: `Task QUEUED (not started yet).\n\nID: ${shortId} (${title})\nProject: ${project}\nDescription: ${description}\nMachine: ${machineLabel}\nQueue position: ${queuedCount}${scheduleNote}\n\nThe task is waiting in the queue. I'll notify you when it actually completes.${availabilityNote}${warningText}`,
         });
       }
 
       return {
         success: true,
-        data: { taskId: task.id, shortId, project, queuePosition: queuedCount, assignedMachine: machineLabel },
+        data: { taskId: task.id, shortId, project, queuePosition: queuedCount, assignedMachine: machineLabel, schedule: cronInfo?.label },
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -919,4 +935,68 @@ export async function enrichWithLessons(
     // Non-critical — return original description if lesson lookup fails
     return description;
   }
+}
+
+/**
+ * Detect cron/recurring schedule patterns in user text.
+ * Returns schedule info if detected, null otherwise.
+ *
+ * Handles:
+ * - "daily at 11am" / "every day at 3pm"
+ * - "every morning" / "every evening"
+ * - "weekly" / "every Sunday" / "every week"
+ * - "hourly" / "every hour" / "every 2 hours"
+ * - "cron 0 11 * * *"
+ * - "recurring" + time patterns
+ */
+export function detectCronSchedule(
+  text: string,
+): { recurring: 'daily' | 'weekly' | 'weekdays'; firstRun: Date; label: string } | null {
+  const lower = text.toLowerCase();
+
+  // Check for schedule/cron signals
+  const hasScheduleVerb = /\b(schedule|set up)\b/i.test(lower);
+  const hasFrequencyKeyword = /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month|sunday|monday|tuesday|wednesday|thursday|friday|saturday)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
+  const isScheduleNoun = /\bschedule\b/i.test(lower)
+    && !/\bschedule\s+(a\s+task|me)\b/i.test(lower);
+  const isCronRequest = (hasScheduleVerb && hasFrequencyKeyword) || isScheduleNoun || hasFrequencyKeyword;
+
+  if (!isCronRequest) return null;
+
+  // Extract time if specified (e.g. "at 11am", "at 3pm", "at 09:00")
+  let hour = 9; // default: 9am UTC
+  const timeMatch = lower.match(/at\s+(\d{1,2})\s*(am|pm)/i);
+  if (timeMatch) {
+    hour = parseInt(timeMatch[1], 10);
+    if (timeMatch[2].toLowerCase() === 'pm' && hour < 12) hour += 12;
+    if (timeMatch[2].toLowerCase() === 'am' && hour === 12) hour = 0;
+  }
+  const time24Match = lower.match(/at\s+(\d{1,2}):(\d{2})/);
+  if (time24Match) {
+    hour = parseInt(time24Match[1], 10);
+  }
+  if (/\bevery\s+morning\b/.test(lower)) hour = 8;
+  if (/\bevery\s+evening\b/.test(lower)) hour = 18;
+
+  // Determine recurring frequency
+  let recurring: 'daily' | 'weekly' | 'weekdays' = 'daily';
+  let label = `daily at ${hour}:00 UTC`;
+
+  if (/\b(weekly|every\s+(week|sunday|monday|tuesday|wednesday|thursday|friday|saturday))\b/i.test(lower)) {
+    recurring = 'weekly';
+    label = `weekly at ${hour}:00 UTC`;
+  } else if (/\b(weekday|weekdays|every\s+weekday)\b/i.test(lower)) {
+    recurring = 'weekdays';
+    label = `weekdays at ${hour}:00 UTC`;
+  }
+
+  // Compute first run time
+  const now = new Date();
+  const firstRun = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+    hour, 0, 0, 0
+  ));
+  if (firstRun <= now) firstRun.setUTCDate(firstRun.getUTCDate() + 1);
+
+  return { recurring, firstRun, label };
 }

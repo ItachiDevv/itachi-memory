@@ -780,6 +780,25 @@ try {
 
     fs.writeFileSync(memoryFile, existing);
 
+    // Save injection state for differential context injection (UserPromptSubmit hook)
+    if (hasBrain) {
+        try {
+            const crypto2 = require('crypto');
+            function hashBlock(raw) { try { return crypto2.createHash('sha256').update(raw || '').digest('hex'); } catch { return ''; } }
+            const stateFile2 = path.join(memoryDir, '..', '.injection-state.json');
+            const injState = {
+                last_injected_at: new Date().toISOString(),
+                block_hashes: {
+                    brain_rules: hashBlock(brRulesJson),
+                    brain_lessons: hashBlock(brLessonsJson),
+                    brain_guardrails: hashBlock(brGuardrailsJson),
+                    brain_general: hashBlock(brGeneralJson)
+                }
+            };
+            fs.writeFileSync(stateFile2, JSON.stringify(injState, null, 2));
+        } catch (e3) {}
+    }
+
     // Also write to Codex instructions.md (same sections, always - so both CLIs stay in sync)
     try {
         if (fs.existsSync(path.dirname(codexInstructionsFile))) {

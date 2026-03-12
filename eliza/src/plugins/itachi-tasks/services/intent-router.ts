@@ -35,7 +35,7 @@ export async function classifyIntent(
 ): Promise<Intent> {
   const prompt = CLASSIFY_PROMPT
     .replace('{{projects}}', context.projects.join(', ') || 'unknown')
-    .replace('{{machines}}', context.machines.join(', ') || 'mac, hoodie, surface, hetzner-vps')
+    .replace('{{machines}}', context.machines.join(', ') || 'air, hood, surface, cool')
     .replace('{{message}}', message);
 
   try {

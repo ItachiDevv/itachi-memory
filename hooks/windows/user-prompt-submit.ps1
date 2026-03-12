@@ -97,6 +97,69 @@ try {
     # Skip trivial/short prompts
     if ($prompt.Length -lt 30) { exit 0 }
 
+    # ============ Differential Context Injection ============
+    # Re-query brain API, compare hashes with session-start state.
+    # Only inject changed blocks into MEMORY.md.
+    try {
+        $cwd = (Get-Location).Path
+        $diffScript = @"
+const fs=require('fs'),path=require('path'),os=require('os'),crypto=require('crypto');
+const cwd=process.argv[1],project=process.argv[2],baseApi=process.argv[3];
+const apiKey=process.env.ITACHI_API_KEY||'';
+function enc(p){return p.replace(/:/g,'').replace(/[\\/]/g,'-');}
+const stateDir=path.join(os.homedir(),'.claude','projects',enc(cwd));
+const stateFile=path.join(stateDir,'.injection-state.json');
+if(!fs.existsSync(stateFile)){process.exit(0);}
+let state;try{state=JSON.parse(fs.readFileSync(stateFile,'utf8'));}catch{process.exit(0);}
+if(!state.block_hashes){process.exit(0);}
+const memoryApi=baseApi+'/api/memory';
+const httpMod=require(memoryApi.startsWith('https')?'https':'http');
+function postSearch(category,query){
+    return new Promise((resolve)=>{
+        const body=JSON.stringify({project,category,limit:category==='project_rule'?10:8,query});
+        const u=new URL(memoryApi+'/search');
+        const opts={method:'POST',hostname:u.hostname,port:u.port,path:u.pathname,rejectUnauthorized:false,timeout:4000,
+            headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}};
+        if(apiKey)opts.headers['Authorization']='Bearer '+apiKey;
+        const req=httpMod.request(opts,(res)=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>resolve(d));});
+        req.on('error',()=>resolve(''));req.on('timeout',()=>{req.destroy();resolve('');});
+        req.write(body);req.end();
+    });
+}
+function hashBlock(raw){return crypto.createHash('sha256').update(raw||'').digest('hex');}
+function parseBrain(raw){try{const d=JSON.parse(raw);const r=d.results||d.memories||[];return r.filter(m=>{const c=(m.metadata&&m.metadata.confidence!=null)?m.metadata.confidence:(m.confidence!=null?m.confidence:1);return c>=0.4;});}catch{return[];}}
+function fmtMem(m){const s=m.summary||m.content||'';return s.length>150?s.substring(0,147)+'...':s;}
+(async()=>{
+    try{
+        const[rulesRaw,lessonsRaw,guardrailsRaw,generalRaw]=await Promise.all([
+            postSearch('project_rule','project rules and conventions'),
+            postSearch('task_lesson','recent task lessons and outcomes'),
+            postSearch('guardrail','guardrails warnings pitfalls'),
+            postSearch('general','recent context and activity')
+        ]);
+        const newH={brain_rules:hashBlock(rulesRaw),brain_lessons:hashBlock(lessonsRaw),brain_guardrails:hashBlock(guardrailsRaw),brain_general:hashBlock(generalRaw)};
+        const changed={};let any=false;
+        for(const k of Object.keys(newH)){if(newH[k]!==state.block_hashes[k]){changed[k]=true;any=true;}}
+        if(!any){process.exit(0);}
+        const rawMap={brain_rules:rulesRaw,brain_lessons:lessonsRaw,brain_guardrails:guardrailsRaw,brain_general:generalRaw};
+        const labelMap={brain_rules:'Project Rules',brain_lessons:'Recent Lessons',brain_guardrails:'Active Guardrails',brain_general:'Recent Context'};
+        const lines=['## Updated Brain Context','<!-- differential injection: only changed blocks since session start -->',''];
+        for(const k of Object.keys(changed)){const p=parseBrain(rawMap[k]);if(p.length>0){lines.push('### '+labelMap[k]+' (updated)');p.forEach(m=>lines.push('- '+fmtMem(m)));lines.push('');}}
+        if(lines.length<=3){process.exit(0);}
+        const memDir=path.join(stateDir,'memory');const memFile=path.join(memDir,'MEMORY.md');
+        let existing='';if(fs.existsSync(memFile)){existing=fs.readFileSync(memFile,'utf8');}
+        const heading='## Updated Brain Context';const idx=existing.indexOf(heading);const sectionBody=lines.join('\n');
+        if(idx!==-1){const after=existing.substring(idx+heading.length);const nextH=after.match(/\n## /);const endIdx=nextH?idx+heading.length+nextH.index:existing.length;existing=existing.substring(0,idx)+sectionBody+existing.substring(endIdx);}
+        else{const sep=existing.length>0&&!existing.endsWith('\n\n')?'\n\n':(existing.length>0&&!existing.endsWith('\n')?'\n':'');existing+=sep+sectionBody;}
+        fs.writeFileSync(memFile,existing);
+        state.last_injected_at=new Date().toISOString();state.block_hashes=newH;
+        fs.writeFileSync(stateFile,JSON.stringify(state,null,2));
+    }catch(e){process.exit(0);}
+})();
+"@
+        node -e $diffScript $cwd $project $BASE_API 2>$null
+    } catch {}
+
     # Query memory search API (5s timeout) - project-scoped
     $encodedQuery = [System.Uri]::EscapeDataString($prompt.Substring(0, [Math]::Min($prompt.Length, 500)))
     $encodedProject = [System.Uri]::EscapeDataString($project)
