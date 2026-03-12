@@ -285,24 +285,6 @@ export const createTaskAction: Action = {
               }
             } catch {}
 
-            // Check for auto-delegation opportunity
-            try {
-              const profileService = runtime.getService('itachi-agent-profiles') as any;
-              if (profileService) {
-                const profiles = await profileService.listProfiles?.();
-                if (Array.isArray(profiles)) {
-                  const descLower = task.description.toLowerCase();
-                  const match = profiles.find((p: any) => {
-                    const keywords = (p.delegation_keywords || []) as string[];
-                    return keywords.some((k: string) => descLower.includes(k));
-                  });
-                  if (match) {
-                    rlmWarnings.push(`Tip: "${match.name}" agent may be suited for "${task.project}". Use /spawn ${match.id} to delegate.`);
-                  }
-                }
-              }
-            } catch {}
-
             const created = await taskService.createTask({
               description: enrichedDesc,
               project: task.project,
@@ -391,24 +373,6 @@ export const createTaskAction: Action = {
         if (rlm?.getRecommendations) {
           const recs = await rlm.getRecommendations(project, description);
           rlmWarnings = recs.warnings || [];
-        }
-      } catch {}
-
-      // Check for auto-delegation opportunity
-      try {
-        const profileService = runtime.getService('itachi-agent-profiles') as any;
-        if (profileService) {
-          const profiles = await profileService.listProfiles?.();
-          if (Array.isArray(profiles)) {
-            const descLower = description.toLowerCase();
-            const match = profiles.find((p: any) => {
-              const keywords = (p.delegation_keywords || []) as string[];
-              return keywords.some((k: string) => descLower.includes(k));
-            });
-            if (match) {
-              rlmWarnings.push(`Tip: "${match.name}" agent may be suited for this. Use /spawn ${match.id} to delegate.`);
-            }
-          }
         }
       } catch {}
 

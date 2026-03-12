@@ -4,7 +4,7 @@
 // Reports to Itachi brain (machine heartbeat + issue reporting) and Telegram alerts
 // Works on: macOS (launchd), Linux (systemd), Windows (Task Scheduler)
 
-import { readFileSync, statSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, statSync, readdirSync, existsSync, openSync, readSync, closeSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir, hostname, platform, cpus, totalmem, freemem } from 'os';
 import https from 'https';
@@ -486,8 +486,17 @@ async function tailSession(session) {
   try { currentSize = statSync(session.path).size; } catch { return; }
   if (currentSize <= state.offset) return;
 
-  const fd = readFileSync(session.path, 'utf-8');
-  const newData = fd.substring(state.offset);
+  // Read only the new portion using byte offsets to avoid loading entire file
+  const bytesToRead = currentSize - state.offset;
+  const buf = Buffer.alloc(bytesToRead);
+  let fdHandle;
+  try {
+    fdHandle = openSync(session.path, 'r');
+    readSync(fdHandle, buf, 0, bytesToRead, state.offset);
+  } catch { return; } finally {
+    if (fdHandle !== undefined) try { closeSync(fdHandle); } catch {}
+  }
+  const newData = buf.toString('utf-8');
   state.offset = currentSize;
   if (!newData.trim()) return;
 
