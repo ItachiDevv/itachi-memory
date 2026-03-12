@@ -1,4 +1,4 @@
-import { Service, type IAgentRuntime } from '@elizaos/core';
+import { Service, ModelType, type IAgentRuntime } from '@elizaos/core';
 import { spawn, type ChildProcess } from 'child_process';
 import { writeFileSync, unlinkSync } from 'fs';
 import { TaskService, type ItachiTask } from './task-service.js';
@@ -175,6 +175,56 @@ sending external messages), STOP and include in your report:
 - If you need to send results to Itachisan, use the Telegram bot API directly via curl.
 - Always clean up after yourself (temp files, test artifacts).
 - You MUST output the ===ITACHI_REPORT=== block at the end. No exceptions.`;
+}
+
+/**
+ * Fast-path message classification. Returns 'command' for known slash commands,
+ * 'task' for /task prefix. Returns null if LLM classification needed.
+ */
+export function classifyMessage(text: string): 'task' | 'question' | 'conversation' | 'command' | null {
+  const trimmed = text.trim();
+
+  // Known slash commands
+  if (/^\/(help|brain|status|taskstatus|close)(\s|$)/.test(trimmed)) return 'command';
+  if (/^\/(ctrl\+|esc|interrupt|kill|stop|exit|enter|tab|yes|no)$/i.test(trimmed)) return 'command';
+
+  // Explicit /task command
+  if (trimmed.startsWith('/task ')) return 'task';
+
+  // Needs LLM classification
+  return null;
+}
+
+/**
+ * Full classification with LLM fallback.
+ */
+export async function classifyMessageFull(
+  runtime: IAgentRuntime,
+  text: string,
+): Promise<'task' | 'question' | 'conversation' | 'command'> {
+  const fast = classifyMessage(text);
+  if (fast) return fast;
+
+  try {
+    const result = await runtime.useModel(ModelType.TEXT_SMALL, {
+      prompt: `Given this Telegram message from the user, classify it:
+- "task": the user wants something done (build, fix, deploy, set up, create, check, scrape, run, monitor, schedule, etc.)
+- "question": the user is asking about how something works, project status, architecture, etc.
+- "conversation": greeting, chat, feedback, sharing thoughts
+
+Message: ${text}
+
+Respond with ONLY the classification word.`,
+      temperature: 0.0,
+    });
+
+    const classification = String(result).trim().toLowerCase();
+    if (['task', 'question', 'conversation'].includes(classification)) {
+      return classification as 'task' | 'question' | 'conversation';
+    }
+  } catch { /* fallback to conversation */ }
+
+  return 'conversation';
 }
 
 export class TaskOrchestrator extends Service {

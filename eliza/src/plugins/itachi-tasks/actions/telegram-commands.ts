@@ -7,6 +7,7 @@ import type { MemoryService } from '../../itachi-memory/services/memory-service.
 import { stripBotMention, getTopicThreadId } from '../utils/telegram.js';
 import { activeSessions, markSessionClosed, isSessionTopic, spawningTopics, suppressNextLLMMessage } from '../shared/active-sessions.js';
 import { wrapStreamJsonInput } from './interactive-session.js';
+import { classifyMessageFull } from '../services/task-orchestrator.js';
 
 /**
  * Handles /brain, /status, /help, /close Telegram commands.
@@ -58,12 +59,9 @@ export const telegramCommandsAction: Action = {
           return true;
         }
       }
-      // Claim task-like messages in main chat for intent classification
-      const TASK_PATTERNS = /\b(implement|build|create|fix|deploy|add|update|refactor|write|set up|install|configure|migrate|remove|delete|move)\b/i;
-      if (TASK_PATTERNS.test(text)) {
-        const mainThreadId = await getTopicThreadId(runtime, message);
-        if (mainThreadId === null) return true; // Main chat task-like message
-      }
+      // Claim all non-topic messages for classification
+      const mainThreadId = await getTopicThreadId(runtime, message);
+      if (mainThreadId === null) return true; // Main chat message — classify in handler
       return false;
     }
 
@@ -184,65 +182,44 @@ export const telegramCommandsAction: Action = {
         return { success: true };
       }
 
-      // Natural language task detection (non-command messages in main chat)
+      // Natural language — classify with new 3-way system
       if (!text.startsWith('/') && !_isSessionTopic) {
         try {
-          const { classifyIntent } = await import('../services/intent-router.js');
-          const machines = ['air', 'hood', 'surface', 'cool'];
-          // Populate projects from registry for better intent classification
-          let projectNames: string[] = [];
-          try {
-            const taskSvc = runtime.getService<TaskService>('itachi-tasks');
-            if (taskSvc) {
-              const repos = await taskSvc.getMergedRepos();
-              projectNames = repos.map((r: any) => r.name).filter(Boolean);
-            }
-          } catch { /* best-effort */ }
-          const intent = await classifyIntent(runtime, text, { projects: projectNames, machines });
+          const classification = await classifyMessageFull(runtime, text);
 
-          if (intent.type === 'task') {
+          if (classification === 'task') {
             const taskService = runtime.getService<TaskService>('itachi-tasks');
             if (taskService) {
               const chatId = Number((message.content as Record<string, unknown>).chatId) || 0;
               const userId = Number((message.content as Record<string, unknown>).userId || (message as any).userId) || 0;
               const newTask = await taskService.createTask({
-                description: intent.description || text,
-                project: intent.project || 'unknown',
-                assigned_machine: intent.machine || undefined,
+                description: text,
+                project: 'auto',
                 telegram_chat_id: chatId,
                 telegram_user_id: userId,
               });
               if (callback) await callback({
-                text: `Got it — creating task: "${(intent.description || text).substring(0, 80)}"${intent.project ? ` in ${intent.project}` : ''}.\nTask ID: ${newTask.id.substring(0, 8)}`
+                text: `On it — task queued: "${text.substring(0, 80)}"\nTask ID: ${newTask.id.substring(0, 8)}`
               });
               return { success: true, data: { taskCreated: true, taskId: newTask.id } };
             }
           }
 
-          if (intent.type === 'feedback') {
-            if (callback) await callback({ text: `Noted: ${intent.detail || text}` });
-            return { success: true };
-          }
-
-          if (intent.type === 'question') {
+          if (classification === 'question') {
             const memService = runtime.getService<MemoryService>('itachi-memory');
             if (memService) {
               try {
-                const query = intent.query || text;
-                const project = intent.project;
-                const categories = ['general', 'project_rule', 'task_lesson', 'guardrail'];
+                const categories = ['general', 'project_rule', 'capability'];
                 const searchResults = await Promise.all(
-                  categories.map(cat => memService.searchMemories(query, project, 3, undefined, cat).catch(() => []))
+                  categories.map(cat => memService.searchMemories(text, undefined, 3, undefined, cat).catch(() => []))
                 );
                 const allMemories = searchResults.flat();
-                // Deduplicate by id
                 const seen = new Set<string>();
                 const unique = allMemories.filter(m => {
                   if (seen.has(m.id)) return false;
                   seen.add(m.id);
                   return true;
                 });
-                // Sort by similarity descending, take top 5
                 const top = unique
                   .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
                   .slice(0, 5);
@@ -251,7 +228,7 @@ export const telegramCommandsAction: Action = {
                   const context = top.map((m, i) => `[${i + 1}] (${m.category}) ${m.summary || m.content}`).join('\n');
                   const prompt = `You are Itachi, an AI assistant. Answer the following question using ONLY the provided memory context. If the context doesn't contain enough info, say so honestly.
 
-Question: ${query}
+Question: ${text}
 
 Memory context:
 ${context}
@@ -268,14 +245,13 @@ Answer concisely.`;
                 runtime.logger.warn(`[telegram-commands] Memory-grounded question failed: ${err instanceof Error ? err.message : String(err)}`);
               }
             }
-            // Fall through to ElizaOS if no memories found or service unavailable
             return { success: false };
           }
 
-          // conversation intent → let ElizaOS handle
+          // conversation — fall through to ElizaOS
           return { success: false };
         } catch (err) {
-          runtime.logger.warn(`[telegram-commands] Intent classification failed: ${err instanceof Error ? err.message : String(err)}`);
+          runtime.logger.warn(`[telegram-commands] Classification failed: ${err instanceof Error ? err.message : String(err)}`);
           return { success: false };
         }
       }
