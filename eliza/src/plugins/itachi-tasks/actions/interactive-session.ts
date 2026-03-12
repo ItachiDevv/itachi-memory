@@ -256,18 +256,21 @@ export async function spawnSessionInTopic(
   const envMode = process.env.ITACHI_SESSION_MODE?.toLowerCase();
   const mode: SessionMode = envMode === 'tui' ? 'tui' : 'stream-json';
 
+  // Load OAuth token so Claude Code uses Pro subscription, not API billing
+  const authSetup = `[ -f "$HOME/.claude/.auth-token" ] && export CLAUDE_CODE_OAUTH_TOKEN=$(cat "$HOME/.claude/.auth-token"); [ -f "$HOME/.itachi-api-keys" ] && set -a && . "$HOME/.itachi-api-keys" && set +a`;
+
   let sshCommand: string;
   if (mode === 'stream-json') {
     // -p + --verbose required for --output-format stream-json. Stdin stays open for multi-turn
     // via --input-format stream-json (Claude reads additional JSON messages from stdin).
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     const dsFlag = hasFlag ? '' : ' --ds';
-    sshCommand = `cd ${repoPath} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json`;
+    sshCommand = `cd ${repoPath} && ${authSetup} && ${engineCommand}${dsFlag} -p --verbose --output-format stream-json --input-format stream-json`;
   } else {
     const hasFlag = /\s--c?ds\b/.test(engineCommand);
     sshCommand = hasFlag
-      ? `cd ${repoPath} && ${engineCommand} '${escapedPrompt}'`
-      : `cd ${repoPath} && ${engineCommand} --ds '${escapedPrompt}'`;
+      ? `cd ${repoPath} && ${authSetup} && ${engineCommand} '${escapedPrompt}'`
+      : `cd ${repoPath} && ${authSetup} && ${engineCommand} --ds '${escapedPrompt}'`;
   }
 
   await topicsService.sendToTopic(
@@ -587,7 +590,9 @@ export async function spawnRemoteControlSession(
       `if (Test-Path $wrapper) { cmd /c $wrapper remote-control --name '${sessionName}' } else { claude remote-control --name '${sessionName}' }`,
     ].join('; ');
   } else {
-    sshCommand = `cd ${repoPath} && ${engineCommand} remote-control --name "${sessionName}"`;
+    // Load OAuth token so Claude Code uses Pro subscription, not API billing
+    const rcAuth = `[ -f "$HOME/.claude/.auth-token" ] && export CLAUDE_CODE_OAUTH_TOKEN=$(cat "$HOME/.claude/.auth-token"); [ -f "$HOME/.itachi-api-keys" ] && set -a && . "$HOME/.itachi-api-keys" && set +a`;
+    sshCommand = `cd ${repoPath} && ${rcAuth} && ${engineCommand} remote-control --name "${sessionName}"`;
   }
 
   await topicsService.sendToTopic(

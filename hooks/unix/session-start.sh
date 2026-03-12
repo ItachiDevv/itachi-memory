@@ -83,7 +83,7 @@ const project = process.argv[1];
 const keyFile = process.argv[2];
 const syncApi = process.argv[3];
 const cwd = process.argv[4];
-const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS'];
+const machineKeys = ['ITACHI_ORCHESTRATOR_ID', 'ITACHI_WORKSPACE_DIR', 'ITACHI_PROJECT_PATHS', 'ANTHROPIC_API_KEY'];
 
 function httpGet(url) {
     return new Promise((resolve, reject) => {

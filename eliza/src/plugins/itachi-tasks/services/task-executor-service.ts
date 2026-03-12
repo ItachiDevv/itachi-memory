@@ -843,7 +843,10 @@ export class TaskExecutorService extends Service {
 
       const target = sshService.getTarget(sshTarget);
       const isRoot = target?.user === 'root';
-      const coreCmd = `cd ${workspace} && ITACHI_TASK_ID=${task.id} ${engineCmd} ${streamFlags}`;
+      // Load OAuth token so Claude Code uses Pro subscription, not API billing
+      const authPrefix = `[ -f "$HOME/.claude/.auth-token" ] && export CLAUDE_CODE_OAUTH_TOKEN=$(cat "$HOME/.claude/.auth-token")`;
+      const apiKeysPrefix = `[ -f "$HOME/.itachi-api-keys" ] && set -a && . "$HOME/.itachi-api-keys" && set +a`;
+      const coreCmd = `cd ${workspace} && ${authPrefix} && ${apiKeysPrefix} && ITACHI_TASK_ID=${task.id} ${engineCmd} ${streamFlags}`;
       if (isRoot) {
         sshCommand = `su - itachi -s /bin/bash -c '${coreCmd.replace(/'/g, "'\\''")}'`;
       } else {
@@ -876,9 +879,12 @@ export class TaskExecutorService extends Service {
       } else {
         const target = sshService.getTarget(sshTarget);
         const isRoot = target?.user === 'root';
-        const coreCmd = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}`;
+        // Load OAuth token so Claude Code uses Pro subscription, not API billing
+        const authLoad = `[ -f "$HOME/.claude/.auth-token" ] && export CLAUDE_CODE_OAUTH_TOKEN=$(cat "$HOME/.claude/.auth-token")`;
+        const keysLoad = `[ -f "$HOME/.itachi-api-keys" ] && set -a && . "$HOME/.itachi-api-keys" && set +a`;
+        const coreCmd = `cd ${workspace} && ${authLoad} && ${keysLoad} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}`;
         if (isRoot) {
-          sshCommand = `su - itachi -s /bin/bash -c 'cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} ${cliFlags}'`;
+          sshCommand = `su - itachi -s /bin/bash -c '${coreCmd.replace(/'/g, "'\\''")}'`;
         } else {
           sshCommand = coreCmd;
         }
@@ -1155,7 +1161,10 @@ export class TaskExecutorService extends Service {
       : (() => {
           const resumeTarget = sshService.getTarget(sshTarget);
           const resumeIsRoot = resumeTarget?.user === 'root';
-          const resumeCore = `cd ${workspace} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
+          // Load OAuth token so Claude Code uses Pro subscription, not API billing
+          const resumeAuth = `[ -f "$HOME/.claude/.auth-token" ] && export CLAUDE_CODE_OAUTH_TOKEN=$(cat "$HOME/.claude/.auth-token")`;
+          const resumeKeys = `[ -f "$HOME/.itachi-api-keys" ] && set -a && . "$HOME/.itachi-api-keys" && set +a`;
+          const resumeCore = `cd ${workspace} && ${resumeAuth} && ${resumeKeys} && cat ${remotePath} | ITACHI_TASK_ID=${task.id} ${engineCmd} --cds`;
           return resumeIsRoot
             ? `su - itachi -s /bin/bash -c '${resumeCore.replace(/'/g, "'\\''")}'`
             : resumeCore;

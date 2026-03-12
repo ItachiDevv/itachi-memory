@@ -235,7 +235,7 @@ if [ -f "$ITACHI_KEY_FILE" ] && [ -f "$FILE_PATH" ]; then
     fi
 
     if [ -n "$SYNC_REPO" ]; then
-        MACHINE_KEYS="ITACHI_ORCHESTRATOR_ID|ITACHI_WORKSPACE_DIR|ITACHI_PROJECT_PATHS"
+        MACHINE_KEYS="ITACHI_ORCHESTRATOR_ID|ITACHI_WORKSPACE_DIR|ITACHI_PROJECT_PATHS|ANTHROPIC_API_KEY"
 
         node -e "
 const crypto = require('crypto');
