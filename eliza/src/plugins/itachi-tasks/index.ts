@@ -1,11 +1,8 @@
 import type { Plugin } from '@elizaos/core';
 import { TaskService } from './services/task-service.js';
 import { TelegramTopicsService } from './services/telegram-topics.js';
-import { MachineRegistryService } from './services/machine-registry.js';
-import { ReminderService } from './services/reminder-service.js';
 import { SSHService } from './services/ssh-service.js';
 import { TaskExecutorService } from './services/task-executor-service.js';
-import { GuardrailService } from './services/guardrail-service.js';
 import { TaskOrchestrator } from './services/task-orchestrator.js';
 import { telegramCommandsAction } from './actions/telegram-commands.js';
 import { topicReplyAction } from './actions/topic-reply.js';
@@ -23,18 +20,11 @@ import { machineRoutes } from './routes/machine-routes.js';
 import { registerCallbackHandler } from './services/callback-handler.js';
 
 export { TelegramTopicsService } from './services/telegram-topics.js';
-export { MachineRegistryService } from './services/machine-registry.js';
 export { TaskExecutorService } from './services/task-executor-service.js';
-export { SessionDriver } from './services/session-driver.js';
-export { GuardrailService } from './services/guardrail-service.js';
 export { TaskOrchestrator } from './services/task-orchestrator.js';
 export { activeSessions, type ActiveSession } from './shared/active-sessions.js';
-export { taskDispatcherWorker, registerTaskDispatcherTask } from './workers/task-dispatcher.js';
 export { githubRepoSyncWorker, registerGithubRepoSyncTask } from './workers/github-repo-sync.js';
-export { reminderPollerWorker, registerReminderPollerTask } from './workers/reminder-poller.js';
-export { proactiveMonitorWorker, registerProactiveMonitorTask } from './workers/proactive-monitor.js';
 export { healthMonitorWorker, registerHealthMonitorTask } from './workers/health-monitor.js';
-export { brainLoopWorker, registerBrainLoopTask } from './workers/brain-loop.js';
 
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',
@@ -42,7 +32,7 @@ export const itachiTasksPlugin: Plugin = {
   actions: [interactiveSessionAction, telegramCommandsAction, topicReplyAction, createTaskAction],
   evaluators: [topicInputRelayEvaluator],
   providers: [commandSuppressorProvider, topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
-  services: [TaskService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService, GuardrailService, TaskOrchestrator],
+  services: [TaskService, TelegramTopicsService, SSHService, TaskExecutorService, TaskOrchestrator],
   // Routes registered in init() to bypass ElizaOS plugin-name prefix
   init: async (_, runtime) => {
     for (const route of taskStreamRoutes) {

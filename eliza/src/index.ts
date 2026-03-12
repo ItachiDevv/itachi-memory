@@ -1,7 +1,7 @@
 import type { Project, ProjectAgent, IAgentRuntime } from '@elizaos/core';
 import { character } from './character.js';
 import { itachiMemoryPlugin, transcriptIndexerWorker, registerTranscriptIndexerTask } from './plugins/itachi-memory/index.js';
-import { itachiTasksPlugin, taskDispatcherWorker, registerTaskDispatcherTask, githubRepoSyncWorker, registerGithubRepoSyncTask, reminderPollerWorker, registerReminderPollerTask, proactiveMonitorWorker, registerProactiveMonitorTask, healthMonitorWorker, registerHealthMonitorTask, brainLoopWorker, registerBrainLoopTask } from './plugins/itachi-tasks/index.js';
+import { itachiTasksPlugin, githubRepoSyncWorker, registerGithubRepoSyncTask, healthMonitorWorker, registerHealthMonitorTask } from './plugins/itachi-tasks/index.js';
 import { itachiSelfImprovePlugin, reflectionWorker, registerReflectionTask, effectivenessWorker, registerEffectivenessTask } from './plugins/itachi-self-improve/index.js';
 import { itachiCodexPlugin } from './plugins/plugin-codex/index.js';
 import { itachiGeminiPlugin } from './plugins/plugin-gemini/index.js';
@@ -67,12 +67,8 @@ const agent: ProjectAgent = {
     // Register workers with ElizaOS TaskWorker system (backup, currently non-functional)
     const allWorkers = [
       { worker: reflectionWorker, register: registerReflectionTask, name: 'reflection' },
-      { worker: taskDispatcherWorker, register: registerTaskDispatcherTask, name: 'task-dispatcher' },
       { worker: githubRepoSyncWorker, register: registerGithubRepoSyncTask, name: 'github-repo-sync' },
-      { worker: reminderPollerWorker, register: registerReminderPollerTask, name: 'reminder-poller' },
-      { worker: proactiveMonitorWorker, register: registerProactiveMonitorTask, name: 'proactive-monitor' },
       { worker: healthMonitorWorker, register: registerHealthMonitorTask, name: 'health-monitor' },
-      { worker: brainLoopWorker, register: registerBrainLoopTask, name: 'brain-loop' },
       { worker: effectivenessWorker, register: registerEffectivenessTask, name: 'effectiveness' },
       { worker: transcriptIndexerWorker, register: registerTranscriptIndexerTask, name: 'transcript-indexer' },
     ];
@@ -98,9 +94,6 @@ const agent: ProjectAgent = {
     }
     intervalSchedulerStarted = true;
     scheduleWorkers(runtime, [
-      // Critical: task dispatch (10s, start after 10s)
-      { name: 'task-dispatcher', intervalMs: 10_000, delayMs: 10_000,
-        execute: (rt) => taskDispatcherWorker.execute(rt, {}, { name: 'ITACHI_TASK_DISPATCHER', tags: [], description: '' }) },
       // Critical: GitHub repo sync (24h, first run after 30s)
       { name: 'github-sync', intervalMs: 86_400_000, delayMs: 30_000,
         validate: (rt) => githubRepoSyncWorker.validate!(rt, {} as any, {} as any),
@@ -108,17 +101,9 @@ const agent: ProjectAgent = {
       // Self-improve: reflection (weekly, start after 6m)
       { name: 'reflection', intervalMs: 604_800_000, delayMs: 360_000,
         execute: (rt) => reflectionWorker.execute(rt, {}, { name: 'ITACHI_REFLECTION', tags: [], description: '' }) },
-      // Reminders: check for due reminders (60s, start after 15s)
-      { name: 'reminder-poller', intervalMs: 60_000, delayMs: 15_000,
-        validate: (rt) => reminderPollerWorker.validate!(rt, {} as any, {} as any),
-        execute: (rt) => reminderPollerWorker.execute(rt, {}, { name: 'ITACHI_REMINDER_POLLER', tags: [], description: '' }) },
       // Health monitor (60s, start after 25s)
       { name: 'health-monitor', intervalMs: 60_000, delayMs: 25_000,
         execute: (rt) => healthMonitorWorker.execute(rt, {}, { name: 'ITACHI_HEALTH_MONITOR', tags: [], description: '' }) },
-      // Brain loop (10min, start after 2min)
-      { name: 'brain-loop', intervalMs: 600_000, delayMs: 120_000,
-        validate: (rt) => brainLoopWorker.validate!(rt, {} as any, {} as any),
-        execute: (rt) => brainLoopWorker.execute(rt, {}, { name: 'ITACHI_BRAIN_LOOP', tags: [], description: '' }) },
       // Self-improve: effectiveness review (weekly, start after 7m)
       { name: 'effectiveness', intervalMs: 604_800_000, delayMs: 420_000,
         execute: (rt) => effectivenessWorker.execute(rt, {}, { name: 'ITACHI_EFFECTIVENESS', tags: [], description: '' }) },
