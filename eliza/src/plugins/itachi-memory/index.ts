@@ -1,5 +1,6 @@
 import type { Plugin } from '@elizaos/core';
 import { MemoryService } from './services/memory-service.js';
+import { CodeIntelService } from './services/code-intel-service.js';
 import { storeMemoryAction } from './actions/store-memory.js';
 import { recentMemoriesProvider } from './providers/recent-memories.js';
 import { memoryStatsProvider } from './providers/memory-stats.js';
@@ -16,5 +17,5 @@ export const itachiMemoryPlugin: Plugin = {
   actions: [storeMemoryAction],
   evaluators: [conversationMemoryEvaluator],
   providers: [factsContextProvider, brainStateProvider, recentMemoriesProvider, memoryStatsProvider, conversationContextProvider],
-  services: [MemoryService],
+  services: [MemoryService, CodeIntelService],
 };

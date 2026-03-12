@@ -173,18 +173,18 @@ function fmtMem(m){const s=m.summary||m.content||'';return s.length>150?s.substr
 # Don't output as JSON — this is just a side-effect log
 
 # ============ Semantic Memory Search ============
-# URL-encode the query (truncate to 500 chars for URL safety)
-ENCODED_QUERY=$(node -e "console.log(encodeURIComponent(process.argv[1].substring(0,500)))" "$PROMPT" 2>/dev/null)
-ENCODED_PROJECT=$(node -e "console.log(encodeURIComponent(process.argv[1]))" "$PROJECT_NAME" 2>/dev/null)
-
-# Query memory search API (5s timeout) — project-scoped
-SEARCH_RESULT=$(curl -s -k -H "$AUTH_HEADER" \
-    "${MEMORY_API}/search?query=${ENCODED_QUERY}&project=${ENCODED_PROJECT}&limit=3" \
+# API uses POST, not GET — GET returns 404.
+SEARCH_RESULT=$(curl -s -k -X POST \
+    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
+    -d "{\"query\":$(node -e "console.log(JSON.stringify(process.argv[1].substring(0,500)))" "$PROMPT" 2>/dev/null),\"project\":$(node -e "console.log(JSON.stringify(process.argv[1]))" "$PROJECT_NAME" 2>/dev/null),\"limit\":3}" \
+    "${MEMORY_API}/search" \
     --max-time 5 2>/dev/null)
 
 # Query global memory search (cross-project operational knowledge, 3s timeout)
-GLOBAL_SEARCH_RESULT=$(curl -s -k -H "$AUTH_HEADER" \
-    "${MEMORY_API}/search?query=${ENCODED_QUERY}&project=_global&limit=2" \
+GLOBAL_SEARCH_RESULT=$(curl -s -k -X POST \
+    -H "Content-Type: application/json" -H "$AUTH_HEADER" \
+    -d "{\"query\":$(node -e "console.log(JSON.stringify(process.argv[1].substring(0,500)))" "$PROMPT" 2>/dev/null),\"project\":\"_global\",\"limit\":2}" \
+    "${MEMORY_API}/search" \
     --max-time 3 2>/dev/null)
 
 # Format and merge results as additionalContext JSON

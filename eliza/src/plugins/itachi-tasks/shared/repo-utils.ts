@@ -25,24 +25,23 @@ function buildCloneCmd(repoUrl: string, destPath: string): string {
  */
 export const MACHINE_TO_SSH_TARGET: Record<string, string> = {
   // Direct SSH target names
-  mac: 'mac',
-  windows: 'windows',
+  air: 'air',
+  hood: 'hood',
   surface: 'surface',
-  hetzner: 'coolify',
-  coolify: 'coolify',
-  // Machine registry IDs (from orchestrator registration)
-  'itachi-m1': 'mac',
-  'windows-pc': 'windows',
+  cool: 'cool',
+  // Legacy aliases (map old names to new)
+  mac: 'air', macbook: 'air', apple: 'air',
+  'itachi-m1': 'air',
+  windows: 'hood', 'windows-pc': 'hood', hoodie: 'hood',
   'surface-win': 'surface',
-  'hetzner-vps': 'coolify',
+  hetzner: 'cool', coolify: 'cool', 'hetzner-vps': 'cool',
   // Common aliases
-  macbook: 'mac',
-  desktop: 'windows',
-  server: 'coolify',
-  vps: 'coolify',
-  production: 'coolify',
-  prod: 'coolify',
-  linux: 'coolify',
+  desktop: 'hood',
+  server: 'cool',
+  vps: 'cool',
+  production: 'cool',
+  prod: 'cool',
+  linux: 'cool',
 };
 
 /** Resolve a machine identifier to an SSH target name */

@@ -128,7 +128,7 @@ export class SSHService extends Service {
     }
 
     // Scan for ITACHI_SSH_<NAME>_HOST pattern
-    const knownNames = ['coolify', 'mac', 'windows', 'hoodie', 'surface', 'hetzner', 'vps', 'server', 'itachi-mem', 'linux'];
+    const knownNames = ['cool', 'air', 'windows', 'hood', 'surface', 'hetzner', 'vps', 'server', 'itachi-mem', 'linux'];
     for (const name of knownNames) {
       if (this.targets.has(name)) continue;
       const nameUpper = name.toUpperCase().replace(/-/g, '_');
@@ -144,7 +144,7 @@ export class SSHService extends Service {
   }
 
   /** Known Windows target names — skip Unix PATH export for these */
-  private static WINDOWS_TARGETS = new Set(['windows', 'win', 'pc', 'desktop', 'surface', 'hoodie']);
+  private static WINDOWS_TARGETS = new Set(['windows', 'win', 'pc', 'desktop', 'surface', 'hood']);
 
   /** Check if a target name refers to a Windows machine */
   isWindowsTarget(name: string): boolean {

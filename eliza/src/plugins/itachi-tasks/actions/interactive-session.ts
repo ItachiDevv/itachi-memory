@@ -152,12 +152,12 @@ export function createNdjsonParser(onChunk: (chunk: ParsedChunk) => void): (data
 
 // ── Machine name aliases → SSH target names ──────────────────────────
 const MACHINE_ALIASES: Record<string, string> = {
-  mac: 'mac', macbook: 'mac', apple: 'mac',
-  'windows-pc': 'windows', 'windows pc': 'windows',
-  windows: 'windows', pc: 'windows', win: 'windows', desktop: 'windows',
+  air: 'air', mac: 'air', macbook: 'air', apple: 'air',
+  'windows-pc': 'hood', 'windows pc': 'hood',
+  windows: 'hood', pc: 'hood', win: 'hood', desktop: 'hood',
+  hood: 'hood', hoodie: 'hood',
   'surface-win': 'surface', surface: 'surface',
-  hoodie: 'hoodie',
-  hetzner: 'coolify', coolify: 'coolify', server: 'coolify', vps: 'coolify', linux: 'coolify',
+  cool: 'cool', hetzner: 'cool', coolify: 'cool', server: 'cool', vps: 'cool', linux: 'cool',
 };
 
 // ── Engine wrapper resolution ────────────────────────────────────────
