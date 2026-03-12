@@ -300,7 +300,7 @@ export async function spawnSessionInTopic(
           // Trigger proactive handoff if limits are severe
           if (chunk.retryAfter >= 30 || session.rateLimitCount >= 3) {
             runtime.logger.warn(`[session] Rate limit threshold reached — triggering engine handoff`);
-            const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+            const chatId = Number(process.env.TELEGRAM_GROUP_CHAT_ID || '0');
             handleEngineHandoff(session, chatId, topicId, 'rate_limit', runtime, topicsService).catch(err => {
               runtime.logger.error(`[session] Engine handoff failed: ${err instanceof Error ? err.message : String(err)}`);
             });

@@ -139,7 +139,7 @@ export const topicInputRelayEvaluator: Evaluator = {
       }
 
       if (topicsService) {
-        const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+        const chatId = Number(process.env.TELEGRAM_GROUP_CHAT_ID || '0');
         handleEngineHandoff(session, chatId, threadId, `user_request:${targetEngine}`, runtime, topicsService)
           .catch(err => runtime.logger.error(`[topic-relay] /switch error: ${err instanceof Error ? err.message : String(err)}`));
       }
@@ -170,7 +170,7 @@ export const topicInputRelayEvaluator: Evaluator = {
             runtime.logger.info(`[topic-relay] Skipping duplicate ${ctrl.label} for session ${session.sessionId}`);
             // Still suppress LLM chatter on the duplicate delivery
             if (session.topicId !== threadId) {
-              const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+              const chatId = Number(process.env.TELEGRAM_GROUP_CHAT_ID || '0');
               suppressNextLLMMessage(chatId, threadId);
             }
             return true;
@@ -197,7 +197,7 @@ export const topicInputRelayEvaluator: Evaluator = {
             topicsService.sendToTopic(session.topicId, `Sent ${ctrl.label}`).catch((err: unknown) => { runtime.logger.debug(`[topic-relay] sendToTopic failed: ${err instanceof Error ? err.message : String(err)}`); });
             // Suppress LLM chatter in source thread if routed from different topic
             if (session.topicId !== threadId) {
-              const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+              const chatId = Number(process.env.TELEGRAM_GROUP_CHAT_ID || '0');
               suppressNextLLMMessage(chatId, threadId);
             }
           }
@@ -223,7 +223,7 @@ export const topicInputRelayEvaluator: Evaluator = {
       const session = activeSessions.get(threadId);
       if (session) {
         content._topicRelayQueued = true;
-        const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+        const chatId = Number(process.env.TELEGRAM_GROUP_CHAT_ID || '0');
         // Suppress chatter in BOTH the session topic AND General — the ElizaOS
         // Telegram plugin sometimes routes LLM responses to General (threadId=undefined)
         // instead of the session topic where the user's message originated.
@@ -245,7 +245,7 @@ export const topicInputRelayEvaluator: Evaluator = {
       const closedMeta = getClosedSessionMeta(threadId);
       if (closedMeta && !activeSessions.has(threadId) && !browsingSessionMap.has(threadId) && !spawningTopics.has(threadId)) {
         content._topicRelayQueued = true;
-        const chatId = Number(process.env.TELEGRAM_CHAT_ID || '0');
+        const chatId = Number(process.env.TELEGRAM_GROUP_CHAT_ID || '0');
         suppressNextLLMMessage(chatId, threadId);
         respawnSessionFromMeta(runtime, closedMeta, fullText, threadId)
           .catch(err => runtime.logger.error(`[topic-relay] Respawn error: ${err instanceof Error ? err.message : String(err)}`));
