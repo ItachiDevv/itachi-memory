@@ -23,14 +23,6 @@ import {
   handleSelfInspection,
 } from '../actions/coolify-control.js';
 import { TaskService, generateTaskTitle } from './task-service.js';
-import { TelegramTopicsService } from './telegram-topics.js';
-import { MachineRegistryService } from './machine-registry.js';
-import {
-  extractTaskFromUserMessage,
-  detectSelfReference,
-  enrichWithLessons,
-} from '../actions/create-task.js';
-import { resolveSSHTarget } from '../shared/repo-utils.js';
 
 const TAG = '[slash-interceptor]';
 
@@ -205,139 +197,6 @@ async function sendDirect(
   }
 }
 
-// ── Priority 2: Direct Execution Mode ───────────────────────────────
-
-/** Cache known project names to avoid querying Supabase on every message */
-let repoNameCache: { names: string[]; ts: number } | null = null;
-const REPO_CACHE_TTL = 60_000; // 60 seconds
-
-async function getCachedRepoNames(runtime: IAgentRuntime): Promise<string[]> {
-  if (repoNameCache && Date.now() - repoNameCache.ts < REPO_CACHE_TTL) {
-    return repoNameCache.names;
-  }
-  const taskService = runtime.getService<TaskService>('itachi-tasks');
-  if (!taskService) return [];
-  const repos = await taskService.getMergedRepos();
-  const names = repos.map(r => r.name);
-  repoNameCache = { names, ts: Date.now() };
-  return names;
-}
-
-/**
- * Detect if a natural language message is a direct task instruction.
- * Returns { project, description } if it matches, null otherwise.
- *
- * Detection strategies:
- * 1. extractTaskFromUserMessage: action verb + known project name (not a question)
- * 2. detectSelfReference: "fix your code", "improve yourself" → itachi-memory
- */
-async function detectDirectTask(
-  runtime: IAgentRuntime,
-  text: string,
-): Promise<{ project: string; description: string; machine?: string } | null> {
-  const repoNames = await getCachedRepoNames(runtime);
-  if (repoNames.length === 0) return null;
-
-  // Cron/recurring/scheduled requests flow through to CREATE_TASK now
-  // (MANAGE_AGENT_CRON was removed in Phase 1)
-  const lower = text.toLowerCase();
-
-  // Yield to ElizaOS STORE_MEMORY for "remember that..." (fact storage)
-  // but NOT "remember to..." (action request / reminder)
-  const trimmedLower = text.trim().toLowerCase();
-  const isFactStorage = /^remember\s+that\b/.test(trimmedLower)
-    || /^(note[:\s]|don't forget\s+that|keep in mind)/i.test(trimmedLower);
-  if (isFactStorage) {
-    runtime.logger.info(`${TAG} Yielding to STORE_MEMORY for: "${text.substring(0, 60)}"`);
-    return null;
-  }
-
-  // Strategy 0: action verb + known project name (or SSH target)
-  const parsed = extractTaskFromUserMessage(text, repoNames);
-  if (parsed && parsed.length > 0) return parsed[0];
-
-  // Strategy -1: self-reference (text-only, no conversation context needed)
-  const selfRef = detectSelfReference(text, [], repoNames);
-  if (selfRef && selfRef.length > 0) return selfRef[0];
-
-  return null;
-}
-
-/**
- * Create a task directly and send confirmation via Telegram API.
- * Used by the direct execution mode for natural language instructions.
- */
-async function createAndNotifyTask(
-  runtime: IAgentRuntime,
-  task: { project: string; description: string; machine?: string },
-  chatId: number,
-  threadId: number | undefined,
-  botToken: string,
-  msg: any,
-): Promise<void> {
-  const taskService = runtime.getService<TaskService>('itachi-tasks');
-  if (!taskService) return;
-
-  const telegramUserId = msg.from?.id || 0;
-  const telegramChatId = msg.chat?.id || chatId;
-
-  // Resolve machine hint to canonical SSH target
-  const assignedMachine = task.machine ? resolveSSHTarget(task.machine) : undefined;
-
-  // Enrich with lessons from previous tasks on this project
-  const enrichedDesc = await enrichWithLessons(runtime, task.project, task.description);
-
-  const created = await taskService.createTask({
-    description: enrichedDesc,
-    project: task.project,
-    telegram_chat_id: telegramChatId,
-    telegram_user_id: telegramUserId,
-    assigned_machine: assignedMachine,
-  });
-
-  const shortId = created.id.substring(0, 8);
-  const title = generateTaskTitle(task.description);
-
-  // Create Telegram topic for the task
-  const topicsService = runtime.getService<TelegramTopicsService>('telegram-topics');
-  if (topicsService) {
-    topicsService.createTopicForTask(created).catch(err => {
-      runtime.logger.error(`${TAG} Topic creation failed for ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
-    });
-  }
-
-  // Check machine availability
-  let availNote = '';
-  try {
-    const machineReg = runtime.getService<MachineRegistryService>('machine-registry');
-    if (machineReg) {
-      const allMachines = await machineReg.getAllMachines();
-      const online = allMachines.filter(m => m.status === 'online');
-      if (online.length === 0) {
-        availNote = '\n\nNo machines currently online. Task will wait.';
-      } else {
-        availNote = `\nMachines: ${online.map(m => m.display_name || m.machine_id).join(', ')}`;
-      }
-    }
-  } catch { /* non-critical */ }
-
-  const queuedCount = await taskService.getQueuedCount();
-
-  const machineLabel = assignedMachine || 'auto-dispatch';
-
-  const output = [
-    'Task QUEUED (direct execution).',
-    '',
-    `ID: ${shortId} (${title})`,
-    `Project: ${task.project}`,
-    `Description: ${task.description}`,
-    `Machine: ${machineLabel}`,
-    `Queue: ${queuedCount}${availNote}`,
-  ].join('\n');
-
-  await sendDirect(botToken, telegramChatId, output, threadId);
-}
-
 /**
  * Register the slash command interceptor on the Telegraf bot instance.
  * Must be called BEFORE patchSendMessageForChatterSuppression() so we
@@ -395,24 +254,8 @@ export function registerSlashInterceptor(runtime: IAgentRuntime, bot: any): void
       const msgChatId = msg.chat?.id;
       const threadId = msg.message_thread_id as number | undefined;
 
-      // Priority 2: Direct Execution Mode — detect natural language task instructions
-      // Only from authorized users, not in session topics, not slash commands
+      // Non-slash messages pass through to ElizaOS (classifyMessageFull in telegram-commands handles NL tasks)
       if (!text.startsWith('/')) {
-        const isAuthorized = allowedUsers.length === 0
-          || (msg.from?.id && allowedUsers.includes(String(msg.from.id)));
-        if (isAuthorized && !(threadId && isSessionTopic(threadId))) {
-          try {
-            const directTask = await detectDirectTask(runtime, text);
-            if (directTask) {
-              runtime.logger.info(`${TAG} Direct task: "${text.substring(0, 60)}" → ${directTask.project}`);
-              await createAndNotifyTask(runtime, directTask, msgChatId || chatId, threadId, botToken, msg);
-              return;
-            }
-          } catch (err) {
-            runtime.logger.error(`${TAG} Direct task error: ${err instanceof Error ? err.message : String(err)}`);
-            return;
-          }
-        }
         return originalHandleUpdate(update, ...rest);
       }
 
