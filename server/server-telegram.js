@@ -895,7 +895,21 @@ app.get('/api/memory/search', async (req, res) => {
         const { query, limit = 5, project, category, branch } = req.query;
         if (!query) return res.status(400).json({ error: 'Query required' });
 
-        const memories = await searchMemories(query, project, parseInt(limit), branch);
+        const memories = await searchMemories(query, project, parseInt(limit), branch, category || null);
+        res.json({ query, count: memories.length, results: memories });
+    } catch (error) {
+        console.error('Error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// POST variant of search — hooks use POST with JSON body
+app.post('/api/memory/search', async (req, res) => {
+    try {
+        const { query, limit = 5, project, category, branch } = req.body;
+        if (!query) return res.status(400).json({ error: 'Query required' });
+
+        const memories = await searchMemories(query, project, parseInt(limit), branch, category || null);
         res.json({ query, count: memories.length, results: memories });
     } catch (error) {
         console.error('Error:', error.message);

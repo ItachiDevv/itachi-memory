@@ -344,7 +344,7 @@ describe('Adversarial routing edge cases', () => {
     // Has "cron" keyword but not "schedule|set up"
     expect(isCronRequest('create a cron that runs at midnight to clean temp files')).toBe(false);
     // This is a known gap — "create a cron" doesn't trigger isCronRequest
-    // The LLM should still route to MANAGE_AGENT_CRON based on "cron" in the text
+    // The LLM intent router handles this via CREATE_TASK with cron detection
   });
 
   it('"are there any cron jobs running?" should NOT create a task', () => {

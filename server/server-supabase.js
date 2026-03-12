@@ -98,10 +98,37 @@ app.post('/api/memory/code-change', async (req, res) => {
     }
 });
 
-// Semantic search (branch-aware)
+// Semantic search (branch-aware) — supports both GET (query params) and POST (JSON body)
 app.get('/api/memory/search', async (req, res) => {
     try {
         const { query, limit = 5, project, category, branch } = req.query;
+        if (!query) return res.status(400).json({ error: 'Query required' });
+
+        const queryEmbedding = await getEmbedding(query);
+
+        const params = {
+            query_embedding: queryEmbedding,
+            match_project: project || null,
+            match_category: category || null,
+            match_limit: parseInt(limit)
+        };
+        if (branch) params.match_branch = branch;
+
+        const { data, error } = await supabase.rpc('match_memories', params);
+
+        if (error) throw error;
+
+        res.json({ query, count: data.length, results: data });
+    } catch (error) {
+        console.error('Error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// POST variant of search — hooks use POST with JSON body
+app.post('/api/memory/search', async (req, res) => {
+    try {
+        const { query, limit = 5, project, category, branch } = req.body;
         if (!query) return res.status(400).json({ error: 'Query required' });
 
         const queryEmbedding = await getEmbedding(query);

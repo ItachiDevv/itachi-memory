@@ -9,6 +9,7 @@ import { GuardrailService } from './services/guardrail-service.js';
 import { telegramCommandsAction } from './actions/telegram-commands.js';
 import { topicReplyAction } from './actions/topic-reply.js';
 import { interactiveSessionAction } from './actions/interactive-session.js';
+import { createTaskAction } from './actions/create-task.js';
 import { topicInputRelayEvaluator } from './evaluators/topic-input-relay.js';
 import { activeTasksProvider } from './providers/active-tasks.js';
 import { reposProvider } from './providers/repos.js';
@@ -36,7 +37,7 @@ export { brainLoopWorker, registerBrainLoopTask } from './workers/brain-loop.js'
 export const itachiTasksPlugin: Plugin = {
   name: 'itachi-tasks',
   description: 'Task queue management, orchestrator integration, and completion notifications',
-  actions: [interactiveSessionAction, telegramCommandsAction, topicReplyAction],
+  actions: [interactiveSessionAction, telegramCommandsAction, topicReplyAction, createTaskAction],
   evaluators: [topicInputRelayEvaluator],
   providers: [commandSuppressorProvider, topicContextProvider, activeTasksProvider, reposProvider, machineStatusProvider, sshCapabilitiesProvider],
   services: [TaskService, TelegramTopicsService, MachineRegistryService, ReminderService, SSHService, TaskExecutorService, GuardrailService],

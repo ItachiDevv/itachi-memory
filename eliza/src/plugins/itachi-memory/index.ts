@@ -7,7 +7,9 @@ import { memoryStatsProvider } from './providers/memory-stats.js';
 import { conversationContextProvider } from './providers/conversation-context.js';
 import { factsContextProvider } from './providers/facts-context.js';
 import { brainStateProvider } from './providers/brain-state-provider.js';
+import { sessionBriefingProvider } from './providers/session-briefing.js';
 import { conversationMemoryEvaluator } from './evaluators/conversation-memory.js';
+import { codeIntelRoutes } from './routes/code-intel-routes.js';
 export { transcriptIndexerWorker, registerTranscriptIndexerTask } from './workers/transcript-indexer.js';
 // factExtractorEvaluator merged into conversationMemoryEvaluator (single LLM call)
 
@@ -16,6 +18,12 @@ export const itachiMemoryPlugin: Plugin = {
   description: 'Project memory storage, semantic search, and fact extraction for Itachi',
   actions: [storeMemoryAction],
   evaluators: [conversationMemoryEvaluator],
-  providers: [factsContextProvider, brainStateProvider, recentMemoriesProvider, memoryStatsProvider, conversationContextProvider],
+  providers: [factsContextProvider, brainStateProvider, sessionBriefingProvider, recentMemoriesProvider, memoryStatsProvider, conversationContextProvider],
   services: [MemoryService, CodeIntelService],
+  init: async (_, runtime) => {
+    for (const route of codeIntelRoutes) {
+      runtime.routes.push(route);
+    }
+    runtime.logger.info(`itachi-memory: registered ${codeIntelRoutes.length} code-intel routes`);
+  },
 };

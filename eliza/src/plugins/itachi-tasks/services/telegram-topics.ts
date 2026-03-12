@@ -559,8 +559,10 @@ export class TelegramTopicsService extends Service {
     const params: Record<string, unknown> = {
       chat_id: chatId || this.groupChatId,
       text,
-      reply_markup: { inline_keyboard: keyboard },
     };
+    if (keyboard.length > 0) {
+      params.reply_markup = { inline_keyboard: keyboard };
+    }
     if (topicId) params.message_thread_id = topicId;
 
     try {

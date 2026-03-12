@@ -140,18 +140,18 @@ describe('detectSelfReference', () => {
 });
 
 // ============================================================
-// Cron request detection — CREATE_TASK should yield to MANAGE_AGENT_CRON
+// Cron request detection — CREATE_TASK handles cron scheduling inline
 // Mirrors the isCronRequest regex from create-task.ts validate()
 // ============================================================
 
-describe('isCronRequest routing — CREATE_TASK yields to MANAGE_AGENT_CRON', () => {
+describe('isCronRequest routing — CREATE_TASK handles cron inline', () => {
   function isCronRequest(text: string): boolean {
     const lower = text.toLowerCase();
     return /\b(schedule|set up)\b/i.test(lower)
       && /\b(daily|weekly|hourly|every\s+\d|every\s+(morning|evening|hour|day|week|month)|at\s+\d{1,2}\s*(am|pm)|recurring|cron)\b/i.test(lower);
   }
 
-  // Should be recognized as cron (CREATE_TASK yields)
+  // Should be recognized as cron (CREATE_TASK creates recurring reminder)
   it('detects "Schedule a daily task at 9am UTC"', () => {
     expect(isCronRequest('Schedule a daily task at 9am UTC that checks disk space')).toBe(true);
   });
