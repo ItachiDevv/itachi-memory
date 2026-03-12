@@ -17,6 +17,7 @@ import { sshCapabilitiesProvider } from './providers/ssh-capabilities.js';
 import { commandSuppressorProvider } from './providers/command-suppressor.js';
 import { taskStreamRoutes } from './routes/task-stream.js';
 import { machineRoutes } from './routes/machine-routes.js';
+import { syncRoutes } from './routes/sync-routes.js';
 import { registerCallbackHandler } from './services/callback-handler.js';
 
 export { TelegramTopicsService } from './services/telegram-topics.js';
@@ -41,7 +42,10 @@ export const itachiTasksPlugin: Plugin = {
     for (const route of machineRoutes) {
       runtime.routes.push(route);
     }
-    runtime.logger.info(`itachi-tasks: registered ${taskStreamRoutes.length + machineRoutes.length} routes at top level`);
+    for (const route of syncRoutes) {
+      runtime.routes.push(route);
+    }
+    runtime.logger.info(`itachi-tasks: registered ${taskStreamRoutes.length + machineRoutes.length + syncRoutes.length} routes at top level`);
 
     // Register Telegram callback_query handler for inline button flows
     registerCallbackHandler(runtime).catch((err) => {

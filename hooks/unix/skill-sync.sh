@@ -4,6 +4,9 @@
 # Runs as a cron job daily at 3:00 AM
 # Silent — never blocks anything, logs to ~/.claude/.skill-sync.log
 
+# Ensure node is available in cron's minimal environment
+export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
 SYNC_API="${ITACHI_API_URL:-https://itachisbrainserver.online}/api/sync"
 ITACHI_KEY_FILE="$HOME/.itachi-key"
 CLAUDE_DIR="$HOME/.claude"
