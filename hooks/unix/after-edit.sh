@@ -80,6 +80,7 @@ case "$FILENAME" in
     *.test.*|*.spec.*|test_*|test-*) CATEGORY="test" ;;
     *.md|*.rst|*.txt|README*) CATEGORY="documentation" ;;
     package.json|requirements.txt|Cargo.toml|go.mod|pom.xml|Gemfile|*.csproj) CATEGORY="dependencies" ;;
+    tsconfig*.json|.eslintrc*|.prettierrc*|webpack.config.*|vite.config.*|jest.config.*|*.yaml|*.yml|*.toml|*.ini|*.cfg|Makefile|Dockerfile|docker-compose*) CATEGORY="config" ;;
 esac
 
 SUMMARY="Updated $FILENAME"
