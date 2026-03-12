@@ -206,12 +206,13 @@ export const githubDirectAction: Action = {
       }
 
       // Resolve repo
+      const ghRepos = repos as unknown as GitHubRepo[];
       const repo = repoRef
-        ? resolveRepoName(repoRef, repos)
-        : resolveRepoName(text, repos);
+        ? resolveRepoName(repoRef, ghRepos)
+        : resolveRepoName(text, ghRepos);
 
       if (!repo) {
-        const repoNames = repos.map((r: GitHubRepo) => r.name).join(', ');
+        const repoNames = ghRepos.map((r: GitHubRepo) => r.name).join(', ');
         if (callback) await callback({
           text: `Which repo? Available: ${repoNames || '(none)'}\n\nUsage: /prs <repo> or /gh prs <repo>`,
         });

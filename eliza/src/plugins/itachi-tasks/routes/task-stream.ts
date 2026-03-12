@@ -102,7 +102,7 @@ export const taskStreamRoutes: Route[] = [
           // Fallback: create now if somehow missing (with concurrency guard).
           const existingLock = topicCreationLocks.get(id);
           if (existingLock) {
-            topicId = await existingLock;
+            topicId = (await existingLock) ?? undefined;
             if (!topicId) {
               res.status(503).json({ error: 'Failed to create topic (concurrent)' });
               return;
@@ -113,7 +113,7 @@ export const taskStreamRoutes: Route[] = [
               return topicResult?.topicId ?? null;
             })();
             topicCreationLocks.set(id, createPromise);
-            topicId = await createPromise;
+            topicId = (await createPromise) ?? undefined;
             setTimeout(() => topicCreationLocks.delete(id), 10000);
             if (!topicId) {
               res.status(503).json({ error: 'Failed to create topic' });

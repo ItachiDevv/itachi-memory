@@ -264,7 +264,7 @@ export const coolifyControlAction: Action = {
 
   validate: async (runtime: IAgentRuntime, message: Memory, state?: State): Promise<boolean> => {
     // ── Guard: never process the bot's own messages ──
-    if (message.userId === runtime.agentId) return false;
+    if ((message as any).userId === runtime.agentId) return false;
 
     // Skip messages in active session/browsing topics — the topic-input-relay handles those
     const threadId = await getTopicThreadId(runtime, message);

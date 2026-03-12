@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tests for polling recovery backoff logic.
  * Run with: bun test src/plugins/itachi-tasks/__tests__/polling-recovery.test.ts

@@ -142,7 +142,7 @@ export const itachiCodexPlugin: Plugin = {
     }
   },
 
-  get models() {
+  get models(): Plugin['models'] {
     if (!codexEnabled) {
       return {};
     }
@@ -167,14 +167,15 @@ export const itachiCodexPlugin: Plugin = {
           throw err;
         }
       },
-      [ModelType.OBJECT_SMALL]: async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
+      [ModelType.OBJECT_SMALL]: (async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
         try {
-          return await handleText(runtime, 'OBJECT_SMALL', params as { prompt: string });
+          const raw = await handleText(runtime, 'OBJECT_SMALL', params as { prompt: string });
+          try { return JSON.parse(raw); } catch { return { text: raw } as Record<string, unknown>; }
         } catch (err) {
           logger.error(`[Codex] OBJECT_SMALL error: ${err instanceof Error ? err.message : String(err)}`);
           throw err;
         }
-      },
+      }) as any,
       [ModelType.TEXT_LARGE]: async (runtime: IAgentRuntime, params: Record<string, unknown>) => {
         try {
           return await handleText(runtime, 'TEXT_LARGE', params as { prompt: string });

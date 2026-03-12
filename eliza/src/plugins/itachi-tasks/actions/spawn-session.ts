@@ -77,7 +77,7 @@ export const spawnSessionAction: Action = {
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     // Never process the bot's own messages
-    if (message.userId === runtime.agentId) return false;
+    if ((message as any).userId === runtime.agentId) return false;
     const text = message.content?.text || '';
     const lower = text.toLowerCase();
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tests for session output parsing, stream-json mode, and related utilities.
  * Run with: bun test src/plugins/itachi-tasks/__tests__/session-output.test.ts

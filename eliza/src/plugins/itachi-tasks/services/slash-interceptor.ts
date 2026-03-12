@@ -136,7 +136,7 @@ async function handleStatus(
 function makeCollector(): { callback: HandlerCallback; getText: () => string } {
   let collected = '';
   return {
-    callback: async (response: { text: string }) => {
+    callback: async (response) => {
       collected += (collected ? '\n' : '') + response.text;
       return [];
     },

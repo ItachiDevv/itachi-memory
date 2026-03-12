@@ -1226,7 +1226,7 @@ async function handleBrainProposalCallback(
     return;
   }
 
-  const proposal = proposals[0];
+  const proposal = proposals[0] as Record<string, any>;
 
   if (action === 'a') {
     // Approve: create task from proposal

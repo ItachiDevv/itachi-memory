@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Unit tests for the isReadOnlyTask regex pattern from task-executor-service.ts.
  *
