@@ -6,17 +6,13 @@
     <string>com.itachi.session-watcher</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/node</string>
+        <string>/Users/itachisan/.nvm/versions/node/v24.13.1/bin/node</string>
         <string>/Users/itachisan/itachi/itachi-memory/tools/session-watcher.mjs</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>TELEGRAM_BOT_TOKEN</key>
-        <string>FILL_ME</string>
-        <key>TELEGRAM_GROUP_CHAT_ID</key>
-        <string>FILL_ME</string>
-        <key>BRAIN_API_URL</key>
-        <string>https://itachisbrainserver.online/api</string>
+        <key>HOME</key>
+        <string>/Users/itachisan</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
