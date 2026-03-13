@@ -402,6 +402,7 @@ export class TaskOrchestrator extends Service {
       '--verbose',
       '--max-turns', '100',
       '--output-format', 'stream-json',
+      '--permission-mode', 'bypassPermissions',
     ], {
       cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
