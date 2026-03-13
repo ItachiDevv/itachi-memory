@@ -388,33 +388,27 @@ export class TaskOrchestrator extends Service {
       retryContext,
     });
 
-    // Resolve working directory
-    const workingDir = await this.resolveWorkDir(task.project, repos);
+    // Resolve working directory on the host (default: /home/itachi)
+    const workingDir = '/home/itachi';
 
-    // Spawn Claude Code — pipe prompt via stdin (no --prompt-file in v2.1.x)
-    this.runtime.logger.info(`[orchestrator] Spawning Claude Code for ${shortId} in ${workingDir}`);
+    // Spawn Claude Code on the HOST via SSH (container is sandboxed, host is the real home)
+    this.runtime.logger.info(`[orchestrator] Spawning Claude Code via SSH for ${shortId} in ${workingDir}`);
     if (topicId && topicsService) {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
     }
 
-    const child = spawn('claude', [
-      '--print',
-      '--verbose',
-      '--max-turns', '100',
-      '--output-format', 'stream-json',
+    const child = spawn('ssh', [
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'UserKnownHostsFile=/dev/null',
+      '-o', 'LogLevel=ERROR',
+      '-i', '/root/.ssh/id_ed25519',
+      'root@100.84.73.84',
+      `cd ${workingDir} && claude --print --verbose --max-turns 100 --output-format stream-json`,
     ], {
-      cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PATH: `${process.env.PATH || ''}:/usr/bin:/usr/local/bin`,
-        TELEGRAM_BOT_TOKEN: String(this.runtime.getSetting('TELEGRAM_BOT_TOKEN') || ''),
-        SUPABASE_URL: String(this.runtime.getSetting('SUPABASE_URL') || ''),
-        SUPABASE_KEY: String(this.runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || ''),
-      },
     });
 
-    // Write prompt to stdin
+    // Write prompt via SSH stdin
     child.stdin?.write(prompt);
     child.stdin?.end();
 
