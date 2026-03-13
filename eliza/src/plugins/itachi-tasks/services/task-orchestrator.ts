@@ -402,7 +402,7 @@ export class TaskOrchestrator extends Service {
 
     const child = spawn('claude', [
       '--print',
-      '--dangerously-skip-permissions',
+      '--verbose',
       '--prompt-file', promptPath,
       '--max-turns', '100',
       '--output-format', 'stream-json',
@@ -417,6 +417,10 @@ export class TaskOrchestrator extends Service {
     });
 
     this.activeTask = { id: task.id, process: child };
+
+    child.on('error', (err) => {
+      this.runtime.logger.error(`[orchestrator] ${shortId} spawn error: ${err.message}`);
+    });
 
     // Collect output and stream to Telegram
     let fullOutput = '';
@@ -455,7 +459,9 @@ export class TaskOrchestrator extends Service {
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      fullOutput += chunk.toString();
+      const errText = chunk.toString();
+      fullOutput += errText;
+      this.runtime.logger.warn(`[orchestrator] ${shortId} stderr: ${errText.trim().substring(0, 200)}`);
     });
 
     // Timeout

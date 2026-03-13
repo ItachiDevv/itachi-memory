@@ -27,4 +27,23 @@ Host 100.*
 EOF
 chmod 600 /root/.ssh/config
 
+# Claude Code setup — credentials + permissive settings (runs as root in container)
+mkdir -p /root/.claude
+if [ -n "$CLAUDE_CREDENTIALS_B64" ]; then
+  echo "$CLAUDE_CREDENTIALS_B64" | base64 -d > /root/.claude/.credentials.json
+  chmod 600 /root/.claude/.credentials.json
+  echo "[entrypoint] Claude Code credentials loaded"
+fi
+
+# Allow all tools so Claude Code works without --dangerously-skip-permissions (blocked as root)
+cat > /root/.claude/settings.json << 'SETTINGS'
+{
+  "permissions": {
+    "allow": ["*"],
+    "deny": []
+  }
+}
+SETTINGS
+echo "[entrypoint] Claude Code settings configured"
+
 exec "$@"
