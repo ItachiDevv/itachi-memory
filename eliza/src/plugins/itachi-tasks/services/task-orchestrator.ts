@@ -397,19 +397,19 @@ export class TaskOrchestrator extends Service {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
     }
 
-    // Run as 'itachi' user (non-root) so bypassPermissions works
-    const child = spawn('su', [
-      '-', 'itachi', '-c',
-      `cd ${workingDir} && claude --print --verbose --max-turns 100 --output-format stream-json`,
+    // Spawn Claude Code directly (running as itachi user on bare metal)
+    const child = spawn('claude', [
+      '--print',
+      '--verbose',
+      '--max-turns', '100',
+      '--output-format', 'stream-json',
+      '--permission-mode', 'bypassPermissions',
     ], {
+      cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PATH: `${process.env.PATH || ''}:/usr/bin:/usr/local/bin`,
-      },
     });
 
-    // Write prompt to stdin (piped through su to claude)
+    // Write prompt to stdin
     child.stdin?.write(prompt);
     child.stdin?.end();
 
