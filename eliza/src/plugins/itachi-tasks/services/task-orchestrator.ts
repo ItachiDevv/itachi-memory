@@ -400,7 +400,7 @@ export class TaskOrchestrator extends Service {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
     }
 
-    const child = spawn('claude', [
+    const child = spawn('/usr/bin/claude', [
       '--print',
       '--verbose',
       '--prompt-file', promptPath,
@@ -410,6 +410,7 @@ export class TaskOrchestrator extends Service {
       cwd: workingDir,
       env: {
         ...process.env,
+        PATH: `${process.env.PATH || ''}:/usr/bin:/usr/local/bin`,
         TELEGRAM_BOT_TOKEN: String(this.runtime.getSetting('TELEGRAM_BOT_TOKEN') || ''),
         SUPABASE_URL: String(this.runtime.getSetting('SUPABASE_URL') || ''),
         SUPABASE_KEY: String(this.runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || ''),
