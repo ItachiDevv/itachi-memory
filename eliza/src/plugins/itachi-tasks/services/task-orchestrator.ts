@@ -1,6 +1,5 @@
 import { Service, ModelType, type IAgentRuntime } from '@elizaos/core';
 import { spawn, type ChildProcess } from 'child_process';
-import { writeFileSync, unlinkSync } from 'fs';
 import { TaskService, type ItachiTask } from './task-service.js';
 import { TelegramTopicsService } from './telegram-topics.js';
 import { SSHService } from './ssh-service.js';
@@ -477,9 +476,6 @@ export class TaskOrchestrator extends Service {
     clearTimeout(timeout);
     if (streamTimer) clearInterval(streamTimer);
     this.activeTask = null;
-
-    // Cleanup prompt file
-    try { unlinkSync(promptPath); } catch { /* best effort */ }
 
     // Parse report
     // Try plain text first (extracted from NDJSON), fall back to raw output
