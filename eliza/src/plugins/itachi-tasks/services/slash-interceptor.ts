@@ -24,8 +24,6 @@ import {
 } from '../actions/coolify-control.js';
 import { TaskService, generateTaskTitle } from './task-service.js';
 import { classifyMessageFull } from './task-orchestrator.js';
-import type { MemoryService } from '../../itachi-memory/services/memory-service.js';
-import { ModelType } from '@elizaos/core';
 
 const TAG = '[slash-interceptor]';
 
@@ -257,7 +255,7 @@ export function registerSlashInterceptor(runtime: IAgentRuntime, bot: any): void
       const msgChatId = msg.chat?.id;
       const threadId = msg.message_thread_id as number | undefined;
 
-      // Non-slash messages: classify BEFORE ElizaOS to prevent hallucinated REPLY
+      // Non-slash messages: only intercept tasks, let ElizaOS reason for everything else
       if (!text.startsWith('/')) {
         // Skip if in a session topic (relay handles those)
         if (threadId && isSessionTopic(threadId)) {
@@ -291,49 +289,11 @@ export function registerSlashInterceptor(runtime: IAgentRuntime, bot: any): void
                 `On it — task queued: "${text.substring(0, 80)}"\nTask ID: ${newTask.id.substring(0, 8)}`,
                 threadId,
               );
-              return; // Don't forward to ElizaOS
+              return; // Don't forward to ElizaOS — task created
             }
           }
 
-          if (classification === 'question') {
-            // Try memory-grounded answer
-            const memService = runtime.getService<MemoryService>('itachi-memory');
-            let answered = false;
-            if (memService) {
-              try {
-                const categories = ['general', 'project_rule', 'capability'];
-                const searchResults = await Promise.all(
-                  categories.map(cat => memService.searchMemories(text, undefined, 3, undefined, cat).catch(() => []))
-                );
-                const allMemories = searchResults.flat();
-                const seen = new Set<string>();
-                const unique = allMemories.filter(m => {
-                  if (seen.has(m.id)) return false;
-                  seen.add(m.id);
-                  return true;
-                });
-                const top = unique
-                  .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
-                  .slice(0, 5);
-
-                if (top.length > 0) {
-                  const context = top.map((m, i) => `[${i + 1}] (${m.category}) ${m.summary || m.content}`).join('\n');
-                  const answer = await runtime.useModel(ModelType.TEXT_SMALL, {
-                    prompt: `You are Itachi. Answer using ONLY the memory context below. If it doesn't contain enough info, say "I don't have that info." NEVER fabricate results.\n\nQuestion: ${text}\n\nContext:\n${context}\n\nAnswer concisely.`,
-                    temperature: 0.3,
-                  });
-                  await sendDirect(botToken, msgChatId || chatId, String(answer), threadId);
-                  answered = true;
-                }
-              } catch { /* fall through */ }
-            }
-            if (!answered) {
-              await sendDirect(botToken, msgChatId || chatId, `I don't have that info in my memory. Want me to check?`, threadId);
-            }
-            return; // Don't forward to ElizaOS
-          }
-
-          // conversation → pass through to ElizaOS for personality response
+          // question + conversation → pass through to ElizaOS for reasoning
           return originalHandleUpdate(update, ...rest);
         } catch (err) {
           runtime.logger.warn(`${TAG} NL classification error: ${err instanceof Error ? err.message : String(err)}`);
