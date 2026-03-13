@@ -400,7 +400,8 @@ export class TaskOrchestrator extends Service {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
     }
 
-    const child = spawn('/usr/bin/claude', [
+    const child = spawn('/usr/bin/node', [
+      '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js',
       '--print',
       '--verbose',
       '--prompt-file', promptPath,
