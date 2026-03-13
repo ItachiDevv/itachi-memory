@@ -246,7 +246,7 @@ export class TaskOrchestrator extends Service {
   static serviceType = 'task-orchestrator';
   capabilityDescription = 'Autonomous task execution via local Claude Code';
 
-  private activeTask: { id: string; process: ChildProcess } | null = null;
+  private activeTasks = new Map<string, ChildProcess>();
   private maxConcurrent = 1;
   private timeoutMs = 30 * 60 * 1000; // 30 minutes
   private pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -277,9 +277,10 @@ export class TaskOrchestrator extends Service {
 
   async stop(): Promise<void> {
     if (this.pollInterval) clearInterval(this.pollInterval);
-    if (this.activeTask?.process) {
-      try { this.activeTask.process.kill(); } catch { /* best effort */ }
+    for (const [id, proc] of this.activeTasks) {
+      try { proc.kill(); } catch { /* best effort */ }
     }
+    this.activeTasks.clear();
     this.runtime.logger.info('[orchestrator] Stopped');
   }
 
@@ -309,7 +310,7 @@ export class TaskOrchestrator extends Service {
   }
 
   private async pollForTasks(): Promise<void> {
-    if (this.activeTask) return; // Single task at a time
+    if (this.activeTasks.size >= this.maxConcurrent) return;
 
     const taskService = this.runtime.getService<TaskService>('itachi-tasks');
     if (!taskService) return;
@@ -412,7 +413,7 @@ export class TaskOrchestrator extends Service {
     child.stdin?.write(prompt);
     child.stdin?.end();
 
-    this.activeTask = { id: task.id, process: child };
+    this.activeTasks.set(task.id, child);
 
     child.on('error', (err) => {
       this.runtime.logger.error(`[orchestrator] ${shortId} spawn error: ${err.message}`);
@@ -475,7 +476,7 @@ export class TaskOrchestrator extends Service {
 
     clearTimeout(timeout);
     if (streamTimer) clearInterval(streamTimer);
-    this.activeTask = null;
+    this.activeTasks.delete(task.id);
 
     // Parse report
     // Try plain text first (extracted from NDJSON), fall back to raw output
