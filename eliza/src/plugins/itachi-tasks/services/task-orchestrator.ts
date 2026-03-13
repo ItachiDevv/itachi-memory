@@ -397,14 +397,11 @@ export class TaskOrchestrator extends Service {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
     }
 
-    const child = spawn('claude', [
-      '--print',
-      '--verbose',
-      '--max-turns', '100',
-      '--output-format', 'stream-json',
-      '--permission-mode', 'bypassPermissions',
+    // Run as 'itachi' user (non-root) so bypassPermissions works
+    const child = spawn('su', [
+      '-', 'itachi', '-c',
+      `cd ${workingDir} && claude --print --verbose --max-turns 100 --output-format stream-json`,
     ], {
-      cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -412,7 +409,7 @@ export class TaskOrchestrator extends Service {
       },
     });
 
-    // Write prompt to stdin
+    // Write prompt to stdin (piped through su to claude)
     child.stdin?.write(prompt);
     child.stdin?.end();
 

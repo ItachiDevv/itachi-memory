@@ -27,23 +27,42 @@ Host 100.*
 EOF
 chmod 600 /root/.ssh/config
 
-# Claude Code setup — credentials + permissive settings (runs as root in container)
-mkdir -p /root/.claude
+# Claude Code setup for itachi user (non-root so bypassPermissions works)
+mkdir -p /home/itachi/.claude /home/itachi/.ssh
 if [ -n "$CLAUDE_CREDENTIALS_B64" ]; then
-  echo "$CLAUDE_CREDENTIALS_B64" | base64 -d > /root/.claude/.credentials.json
-  chmod 600 /root/.claude/.credentials.json
-  echo "[entrypoint] Claude Code credentials loaded"
+  echo "$CLAUDE_CREDENTIALS_B64" | base64 -d > /home/itachi/.claude/.credentials.json
+  chmod 600 /home/itachi/.claude/.credentials.json
+  echo "[entrypoint] Claude Code credentials loaded for itachi user"
 fi
 
-# Allow all tools so Claude Code works without --dangerously-skip-permissions (blocked as root)
-cat > /root/.claude/settings.json << 'SETTINGS'
+# Copy SSH keys so itachi user can SSH to other machines
+if [ -f /root/.ssh/id_ed25519 ]; then
+  cp /root/.ssh/id_ed25519 /home/itachi/.ssh/id_ed25519
+  cp /root/.ssh/config /home/itachi/.ssh/config
+  chmod 700 /home/itachi/.ssh
+  chmod 600 /home/itachi/.ssh/id_ed25519 /home/itachi/.ssh/config
+fi
+
+# Full permissions — container is Claude's home
+cat > /home/itachi/.claude/settings.json << 'SETTINGS'
 {
   "permissions": {
-    "allow": ["*"],
-    "deny": []
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "WebFetch",
+      "Grep",
+      "Glob",
+      "NotebookEdit"
+    ]
   }
 }
 SETTINGS
-echo "[entrypoint] Claude Code settings configured"
+
+chown -R itachi:itachi /home/itachi
+echo "[entrypoint] Claude Code configured for itachi user"
 
 exec "$@"
