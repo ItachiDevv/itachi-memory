@@ -402,6 +402,7 @@ export class TaskOrchestrator extends Service {
 
     const child = spawn('claude', [
       '--print',
+      '--dangerously-skip-permissions',
       '--prompt-file', promptPath,
       '--max-turns', '100',
       '--output-format', 'stream-json',
