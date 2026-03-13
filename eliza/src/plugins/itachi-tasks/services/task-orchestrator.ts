@@ -388,27 +388,30 @@ export class TaskOrchestrator extends Service {
       retryContext,
     });
 
-    // Resolve working directory on the host (default: /home/itachi)
-    const workingDir = '/home/itachi';
+    // Resolve working directory
+    const workingDir = await this.resolveWorkDir(task.project, repos);
 
-    // Spawn Claude Code on the HOST via SSH (container is sandboxed, host is the real home)
-    this.runtime.logger.info(`[orchestrator] Spawning Claude Code via SSH for ${shortId} in ${workingDir}`);
+    // Spawn Claude Code locally (container is home)
+    this.runtime.logger.info(`[orchestrator] Spawning Claude Code for ${shortId} in ${workingDir}`);
     if (topicId && topicsService) {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
     }
 
-    const child = spawn('ssh', [
-      '-o', 'StrictHostKeyChecking=no',
-      '-o', 'UserKnownHostsFile=/dev/null',
-      '-o', 'LogLevel=ERROR',
-      '-i', '/root/.ssh/id_ed25519',
-      'root@100.84.73.84',
-      `cd ${workingDir} && claude --print --verbose --max-turns 100 --output-format stream-json`,
+    const child = spawn('claude', [
+      '--print',
+      '--verbose',
+      '--max-turns', '100',
+      '--output-format', 'stream-json',
     ], {
+      cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PATH: `${process.env.PATH || ''}:/usr/bin:/usr/local/bin`,
+      },
     });
 
-    // Write prompt via SSH stdin
+    // Write prompt to stdin
     child.stdin?.write(prompt);
     child.stdin?.end();
 
