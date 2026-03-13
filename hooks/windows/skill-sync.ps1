@@ -6,6 +6,16 @@
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+    # Source API keys for auth
+    $apiKeysFile = Join-Path $env:USERPROFILE ".itachi-api-keys"
+    if (Test-Path $apiKeysFile) {
+        Get-Content $apiKeysFile | ForEach-Object {
+            if ($_ -match '^([^#=]+)=(.*)$') {
+                [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), 'Process')
+            }
+        }
+    }
+
     $SYNC_API = if ($env:ITACHI_API_URL) { "$env:ITACHI_API_URL/api/sync" } else { "https://itachisbrainserver.online/api/sync" }
     $itachiKeyFile = Join-Path $env:USERPROFILE ".itachi-key"
     $claudeDir = Join-Path $env:USERPROFILE ".claude"

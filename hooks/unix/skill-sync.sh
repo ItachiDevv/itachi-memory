@@ -7,6 +7,11 @@
 # Ensure node is available in cron's minimal environment
 export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
+# Source API keys for auth
+if [ -f "$HOME/.itachi-api-keys" ]; then
+    set -a; source "$HOME/.itachi-api-keys"; set +a
+fi
+
 SYNC_API="${ITACHI_API_URL:-https://itachisbrainserver.online}/api/sync"
 ITACHI_KEY_FILE="$HOME/.itachi-key"
 CLAUDE_DIR="$HOME/.claude"

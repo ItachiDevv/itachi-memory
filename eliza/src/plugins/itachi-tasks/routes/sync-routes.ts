@@ -13,6 +13,28 @@ function getSupabase(runtime: IAgentRuntime): SupabaseClient {
   return _supabase;
 }
 
+function checkAuth(req: any, runtime: IAgentRuntime): boolean {
+  const apiKey = runtime.getSetting('ITACHI_API_KEY') as string;
+  if (!apiKey) return true; // no key configured = skip auth
+  const auth = req.headers?.authorization || req.headers?.Authorization || '';
+  const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  return token === apiKey;
+}
+
+function isString(val: unknown): val is string {
+  return typeof val === 'string';
+}
+
+function sanitizePath(filePath: string): string | null {
+  // Normalize backslashes
+  let p = filePath.replace(/\\/g, '/');
+  // Reject null bytes
+  if (p.includes('\0')) return null;
+  // Reject path traversal
+  if (p.includes('..')) return null;
+  return p;
+}
+
 export const syncRoutes: Route[] = [
   // POST /api/sync/push — push an encrypted file to Supabase
   {
@@ -22,18 +44,43 @@ export const syncRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
+
+        if (!checkAuth(req, rt)) {
+          res.status(401).json({ error: 'Unauthorized' });
+          return;
+        }
+
         const supabase = getSupabase(rt);
-        const body = req.body as Record<string, string> | null;
+        const body = req.body as Record<string, unknown> | null;
         if (!body || typeof body !== 'object') {
           res.status(400).json({ error: 'Request body must be JSON' });
           return;
         }
-        const { repo_name, encrypted_data, salt, content_hash, updated_by } = body;
-        // Normalize backslashes to forward slashes server-side
-        const file_path = body.file_path ? body.file_path.replace(/\\/g, '/') : '';
 
-        if (!repo_name || !file_path || !encrypted_data || !salt || !content_hash || !updated_by) {
+        const { repo_name, encrypted_data, salt, content_hash, updated_by } = body;
+        const raw_file_path = body.file_path;
+
+        // Type validation — all fields must be strings
+        if (!isString(repo_name) || !isString(raw_file_path) || !isString(encrypted_data) ||
+            !isString(salt) || !isString(content_hash) || !isString(updated_by)) {
+          res.status(400).json({ error: 'All fields must be strings' });
+          return;
+        }
+
+        if (!repo_name || !raw_file_path || !encrypted_data || !salt || !content_hash || !updated_by) {
           res.status(400).json({ error: 'Missing required fields: repo_name, file_path, encrypted_data, salt, content_hash, updated_by' });
+          return;
+        }
+
+        // Sanitize file_path
+        const file_path = sanitizePath(raw_file_path);
+        if (!file_path) {
+          res.status(400).json({ error: 'Invalid file_path: must not contain path traversal (..) or null bytes' });
+          return;
+        }
+
+        if (file_path.length > 500) {
+          res.status(400).json({ error: 'file_path exceeds maximum length of 500 characters' });
           return;
         }
 
@@ -66,6 +113,12 @@ export const syncRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
+
+        if (!checkAuth(req, rt)) {
+          res.status(401).json({ error: 'Unauthorized' });
+          return;
+        }
+
         const supabase = getSupabase(rt);
 
         // Extract repo and file_path from URL: /api/sync/pull/<repo>/<file_path>
@@ -81,6 +134,11 @@ export const syncRoutes: Route[] = [
         }
         const repo = decodeURIComponent(afterPrefix.substring(0, slashIdx));
         const filePath = decodeURIComponent(afterPrefix.substring(slashIdx + 1));
+
+        if (!filePath) {
+          res.status(400).json({ error: 'file_path is required' });
+          return;
+        }
 
         const { data, error } = await supabase
           .from('sync_files')
@@ -109,6 +167,12 @@ export const syncRoutes: Route[] = [
     handler: async (req, res, runtime) => {
       try {
         const rt = runtime as IAgentRuntime;
+
+        if (!checkAuth(req, rt)) {
+          res.status(401).json({ error: 'Unauthorized' });
+          return;
+        }
+
         const supabase = getSupabase(rt);
         const repo = req.params!.repo;
 
