@@ -19,6 +19,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Codex CLI for subscription-auth text generation
 RUN npm i -g @openai/codex
 
+# Claude Code CLI for autonomous task execution
+RUN npm i -g @anthropic-ai/claude-code
+
 # ===== Install deps (cache-friendly) =====
 COPY package.json bun.lock* ./
 COPY scripts/ scripts/
