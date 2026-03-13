@@ -23,7 +23,6 @@ import {
   handleSelfInspection,
 } from '../actions/coolify-control.js';
 import { TaskService, generateTaskTitle } from './task-service.js';
-import { classifyMessageFull } from './task-orchestrator.js';
 
 const TAG = '[slash-interceptor]';
 
@@ -255,7 +254,7 @@ export function registerSlashInterceptor(runtime: IAgentRuntime, bot: any): void
       const msgChatId = msg.chat?.id;
       const threadId = msg.message_thread_id as number | undefined;
 
-      // Non-slash messages: only intercept tasks, let ElizaOS reason for everything else
+      // Non-slash messages: pass through to ElizaOS for unified classification + response
       if (!text.startsWith('/')) {
         // Skip if in a session topic (relay handles those)
         if (threadId && isSessionTopic(threadId)) {
@@ -269,36 +268,10 @@ export function registerSlashInterceptor(runtime: IAgentRuntime, bot: any): void
           }
         }
 
-        try {
-          const classification = await classifyMessageFull(runtime, text);
-          runtime.logger.info(`${TAG} NL classification: "${text.substring(0, 50)}" → ${classification}`);
-
-          if (classification === 'task') {
-            const taskService = runtime.getService<TaskService>('itachi-tasks');
-            if (taskService) {
-              const userId = msg.from?.id || 0;
-              const newTask = await taskService.createTask({
-                description: text,
-                project: 'auto',
-                telegram_chat_id: msgChatId || chatId,
-                telegram_user_id: userId,
-              });
-              await sendDirect(
-                botToken,
-                msgChatId || chatId,
-                `On it — task queued: "${text.substring(0, 80)}"\nTask ID: ${newTask.id.substring(0, 8)}`,
-                threadId,
-              );
-              return; // Don't forward to ElizaOS — task created
-            }
-          }
-
-          // question + conversation → pass through to ElizaOS for reasoning
-          return originalHandleUpdate(update, ...rest);
-        } catch (err) {
-          runtime.logger.warn(`${TAG} NL classification error: ${err instanceof Error ? err.message : String(err)}`);
-          return originalHandleUpdate(update, ...rest);
-        }
+        // Let ElizaOS handle all non-slash messages.
+        // The conversation-memory evaluator will classify, log to chat_history,
+        // and create tasks if needed — all with full conversation context.
+        return originalHandleUpdate(update, ...rest);
       }
 
       // From here on: slash command handling (Priority 1)
