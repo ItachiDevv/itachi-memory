@@ -400,8 +400,7 @@ export class TaskOrchestrator extends Service {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
     }
 
-    const child = spawn('/usr/bin/node', [
-      '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+    const child = spawn('claude', [
       '--print',
       '--verbose',
       '--prompt-file', promptPath,
@@ -632,14 +631,18 @@ export class TaskOrchestrator extends Service {
   }
 
   private async resolveWorkDir(project: string, repos: string[]): Promise<string> {
-    const bases = ['/home/itachi', '/root', '/opt'];
+    const { statSync, mkdirSync } = await import('fs');
+    const bases = ['/home/itachi', '/root', '/app', '/opt'];
     for (const base of bases) {
       try {
-        const { statSync } = await import('fs');
         const dir = `${base}/${project}`;
         if (statSync(dir).isDirectory()) return dir;
       } catch { /* not found */ }
     }
-    return '/home/itachi';
+    // Fallback: use /root as working directory (always exists in Docker)
+    // Create it if somehow missing
+    const fallback = '/root';
+    try { mkdirSync(fallback, { recursive: true }); } catch { /* exists */ }
+    return fallback;
   }
 }
