@@ -106,7 +106,7 @@ function walkDir(dir, baseDir) {
         if (stat.isDirectory()) {
             results.push(...walkDir(fullPath, baseDir));
         } else if (stat.isFile()) {
-            const relativePath = path.relative(baseDir, fullPath).replace(/\\\\/g, '/');
+            const relativePath = path.relative(baseDir, fullPath).split(path.sep).join('/');
             results.push({ fullPath: fs.realpathSync(fullPath), relativePath });
         }
     }
