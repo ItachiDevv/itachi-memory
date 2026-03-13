@@ -23,7 +23,14 @@ export const syncRoutes: Route[] = [
       try {
         const rt = runtime as IAgentRuntime;
         const supabase = getSupabase(rt);
-        const { repo_name, file_path, encrypted_data, salt, content_hash, updated_by } = req.body as Record<string, string>;
+        const body = req.body as Record<string, string> | null;
+        if (!body || typeof body !== 'object') {
+          res.status(400).json({ error: 'Request body must be JSON' });
+          return;
+        }
+        const { repo_name, encrypted_data, salt, content_hash, updated_by } = body;
+        // Normalize backslashes to forward slashes server-side
+        const file_path = body.file_path ? body.file_path.replace(/\\/g, '/') : '';
 
         if (!repo_name || !file_path || !encrypted_data || !salt || !content_hash || !updated_by) {
           res.status(400).json({ error: 'Missing required fields: repo_name, file_path, encrypted_data, salt, content_hash, updated_by' });

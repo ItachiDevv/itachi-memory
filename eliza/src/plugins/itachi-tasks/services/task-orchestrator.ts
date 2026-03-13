@@ -186,7 +186,7 @@ export function classifyMessage(text: string): 'task' | 'question' | 'conversati
 
   // Known slash commands
   if (/^\/(help|brain|status|taskstatus|close)(\s|$)/.test(trimmed)) return 'command';
-  if (/^\/(ctrl\+|esc|interrupt|kill|stop|exit|enter|tab|yes|no)$/i.test(trimmed)) return 'command';
+  if (/^\/(ctrl\+\w|esc|interrupt|kill|stop|exit|enter|tab|yes|no)$/i.test(trimmed)) return 'command';
 
   // Explicit /task command
   if (trimmed.startsWith('/task ')) return 'task';
