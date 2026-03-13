@@ -635,9 +635,8 @@ export class TaskOrchestrator extends Service {
         if (statSync(dir).isDirectory()) return dir;
       } catch { /* not found */ }
     }
-    // Fallback: use /root as working directory (always exists in Docker)
-    // Create it if somehow missing
-    const fallback = '/root';
+    // Fallback: use /home/itachi (Claude runs as itachi user, can't access /root)
+    const fallback = '/home/itachi';
     try { mkdirSync(fallback, { recursive: true }); } catch { /* exists */ }
     return fallback;
   }
