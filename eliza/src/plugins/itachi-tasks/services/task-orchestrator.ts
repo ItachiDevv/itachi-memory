@@ -421,6 +421,7 @@ export class TaskOrchestrator extends Service {
 
     // Collect output and stream to Telegram
     let fullOutput = '';
+    let plainTextOutput = ''; // Extracted text for report parsing (fullOutput is raw NDJSON)
     const streamBuffer: string[] = [];
     let streamTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -448,6 +449,7 @@ export class TaskOrchestrator extends Service {
             for (const block of parsed.message.content) {
               if (block.type === 'text' && block.text) {
                 streamBuffer.push(block.text);
+                plainTextOutput += block.text + '\n';
               }
             }
           }
@@ -480,7 +482,8 @@ export class TaskOrchestrator extends Service {
     try { unlinkSync(promptPath); } catch { /* best effort */ }
 
     // Parse report
-    const report = parseReport(fullOutput);
+    // Try plain text first (extracted from NDJSON), fall back to raw output
+    const report = parseReport(plainTextOutput) || parseReport(fullOutput);
     this.runtime.logger.info(`[orchestrator] Task ${shortId} exited (code=${exitCode}), report=${report?.status || 'none'}`);
 
     // Handle outcome
