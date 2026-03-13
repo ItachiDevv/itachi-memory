@@ -12,8 +12,16 @@ describe('classifyMessage (unit, no LLM)', () => {
     expect(classifyMessage('/brain')).toBe('command');
   });
 
+  it('fast-classifies action verbs as task', () => {
+    expect(classifyMessage('set up a cron job to scrape hacker news')).toBe('task');
+    expect(classifyMessage('can you install chrome on linux')).toBe('task');
+    expect(classifyMessage('install google chrome')).toBe('task');
+    expect(classifyMessage('deploy the latest build')).toBe('task');
+    expect(classifyMessage('please check disk usage')).toBe('task');
+  });
+
   it('returns null for natural language (needs LLM)', () => {
-    expect(classifyMessage('set up a cron job to scrape hacker news')).toBeNull();
     expect(classifyMessage('hey itachi how are you')).toBeNull();
+    expect(classifyMessage('the deployment looks good')).toBeNull();
   });
 });

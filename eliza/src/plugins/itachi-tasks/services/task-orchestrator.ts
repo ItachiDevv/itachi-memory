@@ -191,6 +191,11 @@ export function classifyMessage(text: string): 'task' | 'question' | 'conversati
   // Explicit /task command
   if (trimmed.startsWith('/task ')) return 'task';
 
+  // Common action verbs — fast-path as task without LLM
+  const lower = trimmed.toLowerCase();
+  if (/^(can you|could you|please|go|pls)\b/i.test(lower)) return 'task';
+  if (/^(install|build|fix|deploy|set up|setup|create|update|delete|remove|add|run|check|restart|configure|clean|test|push|pull|merge|monitor|schedule|scrape|migrate|refactor|implement)\b/i.test(lower)) return 'task';
+
   // Needs LLM classification
   return null;
 }
@@ -207,10 +212,13 @@ export async function classifyMessageFull(
 
   try {
     const result = await runtime.useModel(ModelType.TEXT_SMALL, {
-      prompt: `Given this Telegram message from the user, classify it:
-- "task": the user wants something done (build, fix, deploy, set up, create, check, scrape, run, monitor, schedule, etc.)
-- "question": the user is asking about how something works, project status, architecture, etc.
-- "conversation": greeting, chat, feedback, sharing thoughts
+      prompt: `Classify this Telegram message. When in doubt, classify as "task".
+
+- "task": the user wants ANY action performed — install, build, fix, deploy, set up, create, check, update, delete, run, scrape, monitor, schedule, configure, add, remove, test, clean up, restart, etc. ANY request that requires doing something is a task, even if phrased as "can you..." or "could you..."
+- "question": the user is ONLY asking for information, not requesting action — "how does X work?", "what is the status of Y?", "why did Z happen?"
+- "conversation": pure social interaction — greetings, thanks, jokes, sharing thoughts with no implicit request
+
+If the message could be either a task or conversation, choose "task".
 
 Message: ${text}
 
