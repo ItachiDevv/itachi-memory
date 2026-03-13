@@ -388,13 +388,10 @@ export class TaskOrchestrator extends Service {
       retryContext,
     });
 
-    const promptPath = `/tmp/itachi-task-${task.id}.md`;
-    writeFileSync(promptPath, prompt, 'utf-8');
-
     // Resolve working directory
     const workingDir = await this.resolveWorkDir(task.project, repos);
 
-    // Spawn Claude Code
+    // Spawn Claude Code — pipe prompt via stdin (no --prompt-file in v2.1.x)
     this.runtime.logger.info(`[orchestrator] Spawning Claude Code for ${shortId} in ${workingDir}`);
     if (topicId && topicsService) {
       await topicsService.sendToTopic(topicId, `Starting task: ${task.description.substring(0, 100)}`);
@@ -403,11 +400,11 @@ export class TaskOrchestrator extends Service {
     const child = spawn('claude', [
       '--print',
       '--verbose',
-      '--prompt-file', promptPath,
       '--max-turns', '100',
       '--output-format', 'stream-json',
     ], {
       cwd: workingDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
         PATH: `${process.env.PATH || ''}:/usr/bin:/usr/local/bin`,
@@ -416,6 +413,10 @@ export class TaskOrchestrator extends Service {
         SUPABASE_KEY: String(this.runtime.getSetting('SUPABASE_SERVICE_ROLE_KEY') || ''),
       },
     });
+
+    // Write prompt to stdin
+    child.stdin?.write(prompt);
+    child.stdin?.end();
 
     this.activeTask = { id: task.id, process: child };
 
