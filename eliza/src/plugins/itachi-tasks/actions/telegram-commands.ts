@@ -226,14 +226,16 @@ export const telegramCommandsAction: Action = {
 
                 if (top.length > 0) {
                   const context = top.map((m, i) => `[${i + 1}] (${m.category}) ${m.summary || m.content}`).join('\n');
-                  const prompt = `You are Itachi, an AI assistant. Answer the following question using ONLY the provided memory context. If the context doesn't contain enough info, say so honestly.
+                  const prompt = `You are Itachi, an AI assistant. Answer the following question using ONLY the provided memory context. If the context doesn't contain enough info, say "I don't have that info" — NEVER make up an answer or guess.
+
+CRITICAL: If the question asks about whether something was done, installed, deployed, or completed, and the memory context doesn't explicitly confirm it, say you don't know and offer to check.
 
 Question: ${text}
 
 Memory context:
 ${context}
 
-Answer concisely.`;
+Answer concisely. Never fabricate execution results or status.`;
                   const answer = await runtime.useModel(ModelType.TEXT_SMALL, {
                     prompt,
                     temperature: 0.3,
@@ -245,10 +247,13 @@ Answer concisely.`;
                 runtime.logger.warn(`[telegram-commands] Memory-grounded question failed: ${err instanceof Error ? err.message : String(err)}`);
               }
             }
-            return { success: false };
+            // No memory context found — don't let ElizaOS hallucinate
+            if (callback) await callback({ text: `I don't have that info in my memory. Want me to check?` });
+            return { success: true };
           }
 
-          // conversation — fall through to ElizaOS
+          // conversation — claim it and respond simply, don't let ElizaOS hallucinate
+          if (callback) await callback({ text: '' });
           return { success: false };
         } catch (err) {
           runtime.logger.warn(`[telegram-commands] Classification failed: ${err instanceof Error ? err.message : String(err)}`);

@@ -196,6 +196,10 @@ export function classifyMessage(text: string): 'task' | 'question' | 'conversati
   if (/^(can you|could you|please|go|pls)\b/i.test(lower)) return 'task';
   if (/^(install|build|fix|deploy|set up|setup|create|update|delete|remove|add|run|check|restart|configure|clean|test|push|pull|merge|monitor|schedule|scrape|migrate|refactor|implement)\b/i.test(lower)) return 'task';
 
+  // Follow-up task patterns — "did you X", "have you X", "is X done/installed/working"
+  if (/^(did you|have you|did it|has it|is it|are you|were you)\b/i.test(lower)) return 'task';
+  if (/\b(installed|deployed|running|working|done|finished|completed|ready|set up|configured)\s*\??$/i.test(lower)) return 'task';
+
   // Needs LLM classification
   return null;
 }
@@ -214,11 +218,15 @@ export async function classifyMessageFull(
     const result = await runtime.useModel(ModelType.TEXT_SMALL, {
       prompt: `Classify this Telegram message. When in doubt, classify as "task".
 
-- "task": the user wants ANY action performed — install, build, fix, deploy, set up, create, check, update, delete, run, scrape, monitor, schedule, configure, add, remove, test, clean up, restart, etc. ANY request that requires doing something is a task, even if phrased as "can you..." or "could you..."
-- "question": the user is ONLY asking for information, not requesting action — "how does X work?", "what is the status of Y?", "why did Z happen?"
-- "conversation": pure social interaction — greetings, thanks, jokes, sharing thoughts with no implicit request
+- "task": the user wants ANY action performed OR verified — install, build, fix, deploy, set up, create, check, update, delete, run, scrape, monitor, schedule, configure, add, remove, test, clean up, restart, etc. ANY request that requires doing something is a task. This includes:
+  - Direct requests: "install chrome", "deploy the app"
+  - Polite requests: "can you...", "could you...", "please..."
+  - Follow-ups: "did you install X?", "is X working?", "have you done Y?" — these require VERIFICATION action
+  - Status checks that imply "go check": "is chrome installed?", "did it deploy?"
+- "question": the user is ONLY asking about concepts or information, NOT about whether a task was completed — "how does X work?", "what is a dockerfile?", "why do we use supabase?"
+- "conversation": pure social interaction — greetings, thanks, jokes, opinions with no implicit request
 
-If the message could be either a task or conversation, choose "task".
+If the message asks about whether something was done/installed/deployed/working, that is a "task" (verification needed), NOT a "question".
 
 Message: ${text}
 

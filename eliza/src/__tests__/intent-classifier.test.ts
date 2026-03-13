@@ -20,6 +20,16 @@ describe('classifyMessage (unit, no LLM)', () => {
     expect(classifyMessage('please check disk usage')).toBe('task');
   });
 
+  it('fast-classifies follow-up/status-check patterns as task', () => {
+    expect(classifyMessage('did you get chrome installed')).toBe('task');
+    expect(classifyMessage('did you install chrome')).toBe('task');
+    expect(classifyMessage('have you deployed the app')).toBe('task');
+    expect(classifyMessage('is it running?')).toBe('task');
+    expect(classifyMessage('is chrome installed?')).toBe('task');
+    expect(classifyMessage('are you done with that')).toBe('task');
+    expect(classifyMessage('is the server configured?')).toBe('task');
+  });
+
   it('returns null for natural language (needs LLM)', () => {
     expect(classifyMessage('hey itachi how are you')).toBeNull();
     expect(classifyMessage('the deployment looks good')).toBeNull();
