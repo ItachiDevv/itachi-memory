@@ -516,6 +516,11 @@ function step7_configureSettings() {
     args: ['index.js'],
     cwd: join(__dirname, 'mcp').replace(/\\/g, '/'),
   };
+  // Chrome DevTools MCP — auto-connects to running Chrome instances for debugging
+  settings.mcpServers['chrome-devtools'] = {
+    command: 'npx',
+    args: ['-y', 'chrome-devtools-mcp@latest', '--autoConnect', '--channel=beta'],
+  };
 
   // Claude Code settings
   settings.alwaysThinkingEnabled = true;
@@ -788,11 +793,72 @@ fi
 # Never let an API key override Max subscription auth — Claude CLI uses OAuth, not API billing
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 
-# SSH sessions: Claude Code handles OAuth token refresh internally via its own
-# HTTP client (which bypasses Cloudflare). Do NOT set CLAUDE_CODE_OAUTH_TOKEN
-# with a potentially expired token -- that overrides Claude internal auth and
-# causes it to fall back to API mode with Sonnet instead of Max with Opus.
-# The claude-auth file has the refresh token; Claude uses it automatically.
+# For SSH sessions: load OAuth token from .auth-creds, refreshing if expired
+# Local sessions use macOS Keychain automatically — do NOT set CLAUDE_CODE_OAUTH_TOKEN locally
+if [ -n "\$SSH_CONNECTION" ] && [ -z "\$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    CLAUDE_CODE_OAUTH_TOKEN=\$(python3 - << 'PYEOF'
+import json, time, os, sys
+try:
+    creds_file = os.path.expanduser('~/.claude/.auth-creds')
+    if not os.path.exists(creds_file):
+        sys.exit(1)
+    with open(creds_file) as f:
+        creds = json.load(f)
+    access_token = creds.get('accessToken', '')
+    expires_at = creds.get('expiresAt', 0)
+    refresh_token = creds.get('refreshToken', '')
+    # Use existing token if valid for more than 5 minutes
+    if access_token and expires_at > (time.time() * 1000 + 300000):
+        print(access_token)
+        sys.exit(0)
+    # Token expired — refresh it
+    if not refresh_token:
+        sys.exit(1)
+    import urllib.request, urllib.parse
+    data = urllib.parse.urlencode({
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token,
+        'client_id': '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+    }).encode()
+    req = urllib.request.Request(
+        'https://platform.claude.com/v1/oauth/token',
+        data=data,
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        method='POST'
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        result = json.loads(resp.read())
+    new_token = result.get('access_token', '')
+    new_expires = int(time.time() * 1000) + result.get('expires_in', 3600) * 1000
+    new_refresh = result.get('refresh_token', refresh_token)
+    creds.update({'accessToken': new_token, 'expiresAt': new_expires, 'refreshToken': new_refresh})
+    with open(creds_file, 'w') as f:
+        json.dump(creds, f)
+    os.chmod(creds_file, 0o600)
+    print(new_token)
+except Exception:
+    try:
+        with open(os.path.expanduser('~/.claude/.auth-token')) as f:
+            t = f.read().strip()
+        if t.startswith('sk-ant-'):
+            print(t)
+    except Exception:
+        pass
+PYEOF
+    )
+    if [ -n "\$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+        export CLAUDE_CODE_OAUTH_TOKEN
+        # Also export refresh token and scopes so Claude recognizes full OAuth/Max session
+        CLAUDE_CODE_OAUTH_REFRESH_TOKEN=\$(python3 -c "
+import json, os
+with open(os.path.expanduser('~/.claude/.auth-creds')) as f:
+    print(json.load(f).get('refreshToken', ''))
+" 2>/dev/null)
+        [ -n "\$CLAUDE_CODE_OAUTH_REFRESH_TOKEN" ] && export CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+        export CLAUDE_CODE_OAUTH_SCOPES="user:inference,user:mcp_servers,user:profile,user:sessions:claude_code"
+        export CLAUDE_CODE_OAUTH_CLIENT_ID="9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    fi
+fi
 
 # Shortcut flags
 DS_FLAGS="--dangerously-skip-permissions"
