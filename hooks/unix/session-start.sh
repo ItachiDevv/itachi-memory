@@ -427,9 +427,7 @@ try:
         with open(path, 'w') as f:
             json.dump(creds, f)
         os.chmod(path, 0o600)
-        # Also keep raw .auth-token for fallback
-        with open(os.path.expanduser('~/.claude/.auth-token'), 'w') as f:
-            f.write(access_token)
+        # NOTE: .auth-token creation REMOVED — stale tokens caused API billing on synced machines
 except Exception:
     pass
 " 2>/dev/null) &
